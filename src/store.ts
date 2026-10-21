@@ -113,16 +113,23 @@ export class Store {
         .map(([p]) => p),
     );
     for (const [p, r] of files) paths.set(p, r);
+    const failures = new Map<string, string>();
     let ok = 0,
       failed = 0,
       retired = 0;
     for (const [p, r] of [...paths].sort(([a], [b]) => a.localeCompare(b))) {
       try {
-        if (missing.has(p)) throw Error();
+        if (missing.has(p)) throw new ValidationError("原会话文件已移动或不再位于启用目录；旧快照保留");
         this.importFile(p, r);
         ok++;
-      } catch {
+      } catch (error) {
         failed++;
+        const code = (error as NodeJS.ErrnoException).code;
+        failures.set(p, error instanceof ValidationError ? error.message :
+          code === 'EACCES' || code === 'EPERM' ? '无权读取会话文件，请检查文件权限' :
+          code === 'ENOENT' ? '会话文件不存在或同步期间被移动' :
+          code?.startsWith('ERR_SQLITE') ? '写入本地统计数据库失败，请检查权限和磁盘空间' :
+          '无法读取或导入文件；请通过命令行导入检查此版本兼容性');
         this.db
           .prepare("UPDATE source SET last_error=? WHERE path=?")
           .run("最近同步失败；显示上次成功导入的快照", p);
@@ -147,6 +154,7 @@ export class Store {
         if (other && !uncovered) {
           this.db.prepare("DELETE FROM source WHERE id=?").run(old.id);
           retired++;
+          failures.delete(p);
         }
       }
     });
@@ -154,6 +162,7 @@ export class Store {
       updated: ok,
       failed: failed - retired,
       discovered: files.size,
+      failures: [...new Set(failures.values())].map(reason => ({reason, count: [...failures.values()].filter(value => value === reason).length})),
       relocated: retired,
       notices,
       note: "配置目录会发现新会话；关闭接入或更换目录不会删除既有统计",

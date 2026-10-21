@@ -633,3 +633,19 @@ test("opens a database produced by the previous runtime and deduplicates a newly
     0,
   );
 });
+
+test('first-time import failures report sanitized reasons without inventing an old snapshot', () => {
+  const {store, dirs, home} = setup();
+  const root = path.join(home,'.codex');
+  file(path.join(root,'sessions'), [meta('s1',{source:'unsupported-private-value'})]);
+  file(path.join(root,'sessions'), [{private:'secret prompt'}], 'invalid.jsonl');
+  dirs.save('codex',null,true);
+  const result=store.refresh(dirs);
+  assert.equal(result.failed,2);
+  assert.equal(result.failures.reduce((n,f)=>n+f.count,0),2);
+  assert.equal(result.updated,0);
+  assert.equal(store.sourceInfo().registered_files,0);
+  assert(!JSON.stringify(result.failures).includes('secret prompt'));
+  assert(!JSON.stringify(result.failures).includes('unsupported-private-value'));
+  assert(!JSON.stringify(result.failures).includes(home));
+});

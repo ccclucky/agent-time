@@ -427,8 +427,9 @@ async function refresh() {
     });
     await load();
     toast(
-      `成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个未更新（保留旧快照）` : ""}${r.notices?.length ? "；" + r.notices.join("；") : ""}`,
+      `成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个导入失败` : ""}${r.notices?.length ? "；" + r.notices.join("；") : ""}`,
     );
+    if (r.failed) open(`${head("部分记录未能导入", `已更新 ${r.updated} 个文件，失败 ${r.failed} 个。`)}<p class="sub">首次导入失败的文件不会生成统计；此前已成功导入的记录会保留旧快照。调整统计日期不会解决导入失败。</p><h3>失败原因</h3>${(r.failures || []).map(item => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || '<p>当前服务未提供详细原因，请更新并重启 AgentTime。</p>'}<p class="sub">可以将这些原因发给项目维护者，不需要发送问题、答复或完整会话文件。</p>`);
   } catch (e) {
     error(e.message);
   } finally {
