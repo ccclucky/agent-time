@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>AgentTime · 本地时间账本</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside>
+        <div class="brand">
+          <span class="brandmark" aria-hidden="true"></span>AgentTime
+        </div>
+        <nav id="nav" aria-label="主导航"></nav>
+        <div class="asidefoot">
+          <span class="dot"></span>本机存储 · 无遥测<br />首批适配 / Codex<br /><span
+            style="color: #7e8da8"
+            >v0.1 · Local-first</span
+          >
+        </div>
+      </aside>
+      <main class="workspace">
+        <header>
+          <div>
+            <h1 id="title">时间总览</h1>
+            <p class="sub" id="subtitle">你的本地 Agent 时间账本。</p>
+          </div>
+          <div class="toolbar">
+            <div class="seg" id="ranges" aria-label="日期范围"></div>
+            <button class="btn" data-action="dates">自选日期</button
+            ><button class="btn primary" data-action="refresh" id="refresh">
+              同步记录
+            </button>
+          </div>
+        </header>
+        <div class="demo">
+          <strong>本地数据</strong><span id="rangetext"></span
+          ><button class="textbtn" data-action="definitions">
+            这些时间怎么算？
+          </button>
+        </div>
+        <div id="error" role="alert"></div>
+        <div id="content"><div class="empty">正在读取本地统计记录…</div></div>
+        <footer class="footer">
+          <span>AgentTime · 只保存统计所需元数据</span
+          ><span id="updated"></span>
+        </footer>
+      </main>
+    </div>
+    <div id="layer"></div>
+    <div id="live" role="status" aria-live="polite"></div>
+  </body>
+</html>
