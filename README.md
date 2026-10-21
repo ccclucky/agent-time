@@ -8,29 +8,28 @@ AgentTime is a lightweight, local-first time ledger for AI coding agents. See re
 
 ## Run locally
 
-Requires Python 3.11+ with SQLite and system IANA timezone data. No third-party Python packages, frontend build, account, or API key are needed. Development validation currently runs on Linux / Python 3.12; other operating systems have not been exercised. If timezone data is missing, the app reports an invalid/unavailable timezone rather than guessing.
+Requires **Node.js 22.13+** (Node 24 LTS recommended) and npm. SQLite is provided by Node; there is no Python runtime or native-addon build requirement. Node 22 may print its built-in SQLite experimental warning. The browser interface uses native HTML/CSS/JavaScript and the backend uses TypeScript. An account or API key is not needed.
 
 From this checkout:
 
 ```sh
-# Start the browser interface; the command prints its local address.
-python -m agenttime serve
+npm ci
+npm run dev
 ```
-
 Open **配置与接入 (Configuration & sources)** in the interface. Codex defaults to `~/.codex`; enable **从此目录读取会话 (Read sessions from this directory)** and save to import its history. Change the directory or restore its default in the same page. No command-line import is needed for this workflow.
 
-The default listener is `127.0.0.1:8765`, accessible only on this machine. A custom port is available with `serve --port 8766`. `Ctrl+C` stops the server. There is no packaged installer yet; run commands from the repository root.
+The default listener is `127.0.0.1:8765`, accessible only on this machine. A custom port is available with `serve --port 8766`. `Ctrl+C` stops the server. The npm package has not been published. For a package-level trial, run `npm pack` and then, from any directory, `npx --package /absolute/path/agenttime-0.1.0.tgz agenttime`. Do not use a bare `npx agenttime` yet: the registry name has not been verified or claimed. The package is marked private to prevent accidental publication.
 
 By default, metadata is stored at `$XDG_DATA_HOME/agenttime/agenttime.sqlite3`, or `~/.local/share/agenttime/agenttime.sqlite3` when the variable is unset. To choose a different location, use the same `--db` path for every command:
 
 ```sh
-python -m agenttime --db /path/to/agenttime.sqlite3 import --agent codex /path/to/local/session.jsonl
-python -m agenttime --db /path/to/agenttime.sqlite3 serve
+npm run dev -- --db /path/to/agenttime.sqlite3 import --agent codex /path/to/local/session.jsonl
+npm run dev -- --db /path/to/agenttime.sqlite3 serve
 ```
 
 Import a file or a directory containing JSONL files. Repeating an import, including an identical copied file, does not double-count its events. An import with skipped files returns a nonzero exit code and reports the failures. Custom Codex directories can be saved in the configuration page, or supplied to the advanced CLI import. AgentTime never reads credential files or searches arbitrary device directories.
 
-The **Sync records** button discovers new JSONL files in enabled Codex data directories (`sessions` and `archived_sessions`) and updates existing snapshots. Directory settings persist in the same local database. Disabling a directory stops future reads from it; changing directories preserves previously imported statistics. Advanced CLI-imported files are still refreshed independently. Alternatively, run `python -m agenttime refresh`. Unreadable or changing files retain their previous snapshot, and failed refreshes remain visible. There is no background collector yet.
+The **Sync records** button discovers new JSONL files in enabled Codex data directories (`sessions` and `archived_sessions`) and updates existing snapshots. Directory settings persist in the same local database. Disabling a directory stops future reads from it; changing directories preserves previously imported statistics. Advanced CLI-imported files are still refreshed independently. Alternatively, run `npm run dev -- refresh`. Unreadable or changing files retain their previous snapshot, and failed refreshes remain visible. There is no background collector yet.
 
 ## What works today
 
@@ -136,13 +135,17 @@ The order and scope may change as integration research establishes what can be m
 
 ## Development and contributions
 
-The implementation uses the Python standard library, SQLite, and native HTML/CSS/JavaScript. From the repository root:
+The implementation uses TypeScript, Node’s built-in SQLite, a Temporal timezone library, and native HTML/CSS/JavaScript. Existing Python-version SQLite snapshots and directory preferences remain readable without conversion. From the repository root:
 
 ```sh
-python -m unittest discover -s tests -v
+npm ci
+npm run check
+npm test
+npm run build
+npm pack
 ```
 
-If Node is available, `node --check agenttime/web/app.js` checks frontend syntax. Functional browser QA has also been run using Playwright/Chromium against the actual local API with synthetic imported files. No production data is bundled; a new database starts empty. The separate [HTML prototype](prototypes/agenttime/README.md) contains labeled synthetic data and is not the runtime application.
+If Node is available, `node --check public/app.js` checks frontend syntax. Functional browser QA has also been run using Playwright/Chromium against the actual local API with synthetic imported files. No production data is bundled; a new database starts empty. The separate [HTML prototype](prototypes/agenttime/README.md) contains labeled synthetic data and is not the runtime application.
 
 Product planning is maintained in [user stories](docs/user-stories.zh-CN.md) and [local adapter research](docs/local-adapter-research.zh-CN.md). Planned features there are not all implemented in this slice.
 

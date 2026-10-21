@@ -43,7 +43,7 @@
 
 ## 首批 MVP 的工程选择
 
-Python 3.11+ 标准库 + SQLite + 本地 HTML/CSS/JavaScript。选择理由：只读解析 JSONL、可靠日期计算和本地存储无需服务依赖；无需构建前端即可安装运行。此为首批实现选择，替代此前“技术栈待定”，不表示桌面封装或未来适配器受此限制。
+Node.js 22.13+ / TypeScript + Node 内置 SQLite + 本地 HTML/CSS/JavaScript。使用 Temporal 库计算时区日期边界。开发用 npm run dev，构建后支持 npm pack 和本地 npx 包体验；尚未发布 npm。保持原 SQLite 数据格式，运行不再依赖 Python。此选择方便快速验证，不限制未来适配器。
 
 先完成：显式导入 Codex 文件/目录 → 严格元数据筛选 → SQLite 去重 → 本地网页汇总 → 会话 → 每轮事件。浏览器现在可以在“配置与接入”中保存工具根目录并启用 Codex；同步仅查找已配置的 sessions 和 archived_sessions 子目录，同时刷新 CLI 显式导入的来源。不能通过同步接口任意读取文件。纯工作、确认等待、Token 和费用不因缺少数据而记为零。不会自动写入任何 Agent 配置或注册 hooks。
 

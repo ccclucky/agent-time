@@ -1,0 +1,38 @@
+export const SOURCES = [
+  {
+    agent: "Codex",
+    status: "首批适配 · 只读导入",
+    supported: true,
+    note: "读取明确的开始与结束事件；等待确认或补充的时间无法单独恢复。",
+  },
+  {
+    agent: "Claude Code",
+    status: "已调研 · 尚未接入",
+    supported: false,
+    note: "需继续验证 hooks 完成与授权恢复语义。",
+  },
+  {
+    agent: "OpenCode",
+    status: "已调研 · 尚未接入",
+    supported: false,
+    note: "不同版本存储结构有差异，需独立适配导出格式。",
+  },
+  {
+    agent: "Pi",
+    status: "已调研 · 尚未接入",
+    supported: false,
+    note: "模型循环不是用户交互轮次，需验证完成边界。",
+  },
+  {
+    agent: "Oh-My-Pi",
+    status: "已调研 · 尚未接入",
+    supported: false,
+    note: "与 Pi 分别适配，需验证完成时间和分支归属。",
+  },
+  {
+    agent: "Antigravity",
+    status: "数据格式待验证",
+    supported: false,
+    note: "尚无经过验证的稳定本地导入格式。",
+  },
+];

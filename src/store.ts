@@ -1,0 +1,299 @@
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { parse, hash } from "./codex.js";
+import { SCHEMA } from "./schema.js";
+import { Directories } from "./directories.js";
+import { expand } from "./locations.js";
+import {
+  ValidationError,
+  type Event,
+  type Session,
+  type Status,
+} from "./types.js";
+interface Source {
+  id: string;
+  path: string;
+  session_id: string;
+  project: string;
+  client: string;
+  issues: string;
+  last_error: string | null;
+  config_root: string | null;
+  imported_at: string;
+}
+export class Store {
+  readonly path: string;
+  readonly db: DatabaseSync;
+  constructor(filename: string) {
+    this.path = path.resolve(expand(filename, os.homedir()));
+    mkdirSync(path.dirname(this.path), { recursive: true, mode: 0o700 });
+    this.db = new DatabaseSync(this.path);
+    this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;");
+    this.db.exec(SCHEMA);
+    const columns = this.db
+      .prepare("PRAGMA table_info(source)")
+      .all()
+      .map((r) => r.name);
+    for (const col of ["last_error", "config_root"])
+      if (!columns.includes(col))
+        this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
+    try {
+      chmodSync(this.path, 0o600);
+    } catch {}
+  }
+  close() {
+    this.db.close();
+  }
+  transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+  importFile(filename: string, configRoot: string | null = null) {
+    const p = realpathSync(expand(filename, os.homedir())),
+      before = statSync(p, { bigint: true });
+    if (p === this.path || !before.isFile() || path.extname(p) !== ".jsonl")
+      throw new ValidationError("请选择 Codex .jsonl 文件");
+    if (before.size > 512n * 1024n * 1024n)
+      throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
+    const data = parse(p),
+      after = statSync(p, { bigint: true });
+    if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
+      throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
+    const sid = hash(p),
+      m = data.session;
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO source(id,path,session_id,project,client,issues,config_root) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
+        )
+        .run(
+          sid,
+          p,
+          m.id,
+          m.project,
+          m.client,
+          JSON.stringify(data.issues),
+          configRoot,
+        );
+      this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
+      const put = this.db.prepare("INSERT INTO event VALUES(?,?,?,?,?,?)");
+      for (const e of data.events)
+        put.run(sid, e.key, e.turn_id, e.kind, e.at_ms, e.model);
+    });
+    return { events: data.events.length, issues: data.issues };
+  }
+  refresh(directories = new Directories(this)) {
+    const { files, notices } = directories.collect(),
+      configured = new Set(
+        directories
+          .list()
+          .filter((i) => i.enabled && i.supported && i.resolved_path)
+          .map((i) => i.resolved_path),
+      );
+    const saved = this.db
+      .prepare("SELECT path,config_root FROM source")
+      .all() as unknown as Pick<Source, "path" | "config_root">[];
+    const paths = new Map(
+      saved
+        .filter((s) => s.config_root === null || configured.has(s.config_root))
+        .map((s) => [s.path, s.config_root]),
+    );
+    const missing = new Set(
+      [...paths]
+        .filter(([p, r]) => r !== null && !files.has(p))
+        .map(([p]) => p),
+    );
+    for (const [p, r] of files) paths.set(p, r);
+    let ok = 0,
+      failed = 0,
+      retired = 0;
+    for (const [p, r] of [...paths].sort(([a], [b]) => a.localeCompare(b))) {
+      try {
+        if (missing.has(p)) throw Error();
+        this.importFile(p, r);
+        ok++;
+      } catch {
+        failed++;
+        this.db
+          .prepare("UPDATE source SET last_error=? WHERE path=?")
+          .run("最近同步失败；显示上次成功导入的快照", p);
+      }
+    }
+    this.transaction(() => {
+      for (const p of missing) {
+        const old = this.db
+          .prepare("SELECT id,session_id,config_root FROM source WHERE path=?")
+          .get(p) as unknown as Source | undefined;
+        if (!old) continue;
+        const other = this.db
+          .prepare(
+            "SELECT 1 FROM source WHERE id<>? AND session_id=? AND config_root=? AND last_error IS NULL LIMIT 1",
+          )
+          .get(old.id, old.session_id, old.config_root);
+        const uncovered = this.db
+          .prepare(
+            `SELECT 1 FROM event e WHERE e.source_id=? AND NOT EXISTS (SELECT 1 FROM event alt JOIN source s ON s.id=alt.source_id WHERE s.id<>? AND s.session_id=? AND s.config_root=? AND s.last_error IS NULL AND alt.key=e.key) LIMIT 1`,
+          )
+          .get(old.id, old.id, old.session_id, old.config_root);
+        if (other && !uncovered) {
+          this.db.prepare("DELETE FROM source WHERE id=?").run(old.id);
+          retired++;
+        }
+      }
+    });
+    return {
+      updated: ok,
+      failed: failed - retired,
+      discovered: files.size,
+      relocated: retired,
+      notices,
+      note: "配置目录会发现新会话；关闭接入或更换目录不会删除既有统计",
+    };
+  }
+  sessions(): Session[] {
+    const { sources, events } = this.transaction(() => ({
+      sources: this.db
+        .prepare("SELECT * FROM source ORDER BY id")
+        .all() as unknown as Source[],
+      events: this.db
+        .prepare(
+          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
+        )
+        .all() as unknown as (Event & { session_id: string })[],
+    }));
+    const sessions = new Map<string, Session>();
+    for (const s of sources) {
+      const item = sessions.get(s.session_id) ?? {
+        id: s.session_id,
+        agent: "Codex",
+        project: s.project,
+        issues: [],
+        turns: [],
+        imported_at: s.imported_at,
+      };
+      item.issues = [
+        ...new Set([
+          ...item.issues,
+          ...JSON.parse(s.issues),
+          ...(s.last_error ? [s.last_error] : []),
+        ]),
+      ].sort();
+      if (s.imported_at > item.imported_at) item.imported_at = s.imported_at;
+      sessions.set(s.session_id, item);
+    }
+    const seen = new Set<string>(),
+      grouped = new Map<
+        string,
+        { sid: string; tid: string; entries: Event[] }
+      >();
+    for (const e of events) {
+      if (seen.has(e.key)) continue;
+      seen.add(e.key);
+      const key = JSON.stringify([e.session_id, e.turn_id]),
+        g = grouped.get(key) ?? {
+          sid: e.session_id,
+          tid: e.turn_id,
+          entries: [],
+        };
+      g.entries.push(e);
+      grouped.set(key, g);
+    }
+    for (const { sid, tid, entries } of grouped.values()) {
+      const starts = [
+        ...new Set(
+          entries.filter((e) => e.kind === "start").map((e) => e.at_ms),
+        ),
+      ].sort((a, b) => a - b);
+      const endings = [
+        ...new Map(
+          entries
+            .filter((e) => ["complete", "abort", "fail"].includes(e.kind))
+            .map((e) => [`${e.at_ms}:${e.kind}`, e]),
+        ).values(),
+      ];
+      const start = starts.length === 1 ? starts[0] : null,
+        end = endings.length === 1 ? endings[0].at_ms : null,
+        endKind = endings.length === 1 ? endings[0].kind : null;
+      let status: Status =
+          endKind === "complete"
+            ? "completed"
+            : endKind === "abort"
+              ? "aborted"
+              : endKind === "fail"
+                ? "failed"
+                : "open",
+        reason: string | null = null;
+      if (starts.length > 1 || endings.length > 1) {
+        status = "invalid";
+        reason = "同一轮存在冲突的起止事件，未计入耗时";
+      } else if (start === null) {
+        status = "incomplete";
+        reason = "缺少执行开始事件";
+      } else if (end !== null && end < start) {
+        status = "invalid";
+        reason = "结束时间早于开始时间，未计入耗时";
+      } else if (end === null)
+        reason = "尚无结束事件；可能进行中，也可能记录中断，不推测当前状态";
+      sessions
+        .get(sid)!
+        .turns.push({
+          id: tid,
+          start_ms: start,
+          end_ms: end,
+          elapsed_ms:
+            ["completed", "aborted", "failed"].includes(status) &&
+            start !== null &&
+            end !== null
+              ? end - start
+              : null,
+          status,
+          reason,
+          models: [
+            ...new Set(
+              entries.map((e) => e.model).filter((m): m is string => !!m),
+            ),
+          ].sort(),
+          events: entries,
+          work_ms: null,
+          human_ms: null,
+          response_gap_ms: null,
+        });
+    }
+    for (const s of sessions.values())
+      s.turns.sort(
+        (a, b) =>
+          (a.start_ms ?? a.end_ms ?? 0) - (b.start_ms ?? b.end_ms ?? 0) ||
+          a.id.localeCompare(b.id),
+      );
+    return [...sessions.values()];
+  }
+  sourceInfo() {
+    const sources = this.db
+      .prepare("SELECT * FROM source ORDER BY imported_at DESC")
+      .all() as unknown as Source[];
+    return {
+      registered_files: sources.length,
+      last_imported_at_utc: sources[0]?.imported_at ?? null,
+      failed_sources: sources.filter((s) => s.last_error).length,
+      imports: sources.map((s) => ({
+        session_id: s.session_id,
+        project: s.project,
+        imported_at_utc: s.imported_at,
+        issues: [
+          ...JSON.parse(s.issues),
+          ...(s.last_error ? [s.last_error] : []),
+        ],
+      })),
+      privacy: "仅本机存储统计元数据，不保存问题、答复、工具参数或凭据。",
+    };
+  }
+}
