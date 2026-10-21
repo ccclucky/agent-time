@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { parse, hash } from "./codex.js";
+import { parseClaude } from "./claude.js";
 import { SCHEMA } from "./schema.js";
 import { Directories } from "./directories.js";
 import { expand } from "./locations.js";
@@ -13,6 +14,7 @@ import {
   type Status,
 } from "./types.js";
 interface Source {
+  agent: string;
   id: string;
   path: string;
   session_id: string;
@@ -36,6 +38,10 @@ export class Store {
       .prepare("PRAGMA table_info(source)")
       .all()
       .map((r) => r.name);
+    if (!columns.includes("agent"))
+      this.db.exec(
+        "ALTER TABLE source ADD COLUMN agent TEXT NOT NULL DEFAULT 'Codex'",
+      );
     for (const col of ["last_error", "config_root"])
       if (!columns.includes(col))
         this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
@@ -57,14 +63,18 @@ export class Store {
       throw e;
     }
   }
-  importFile(filename: string, configRoot: string | null = null) {
+  importFile(
+    filename: string,
+    configRoot: string | null = null,
+    adapter: "codex" | "claude" = "codex",
+  ) {
     const p = realpathSync(expand(filename, os.homedir())),
       before = statSync(p, { bigint: true });
     if (p === this.path || !before.isFile() || path.extname(p) !== ".jsonl")
-      throw new ValidationError("请选择 Codex .jsonl 文件");
+      throw new ValidationError("请选择支持的 Agent .jsonl 会话文件");
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
-    const data = parse(p),
+    const data = adapter === "claude" ? parseClaude(p) : parse(p),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -73,7 +83,7 @@ export class Store {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO source(id,path,session_id,project,client,issues,config_root) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
+          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
         )
         .run(
           sid,
@@ -83,6 +93,7 @@ export class Store {
           m.client,
           JSON.stringify(data.issues),
           configRoot,
+          m.agent,
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
       const put = this.db.prepare("INSERT INTO event VALUES(?,?,?,?,?,?)");
@@ -92,7 +103,7 @@ export class Store {
     return { events: data.events.length, issues: data.issues };
   }
   refresh(directories = new Directories(this)) {
-    const { files, notices } = directories.collect(),
+    const { files, agents, notices } = directories.collect(),
       configured = new Set(
         directories
           .list()
@@ -100,8 +111,8 @@ export class Store {
           .map((i) => i.resolved_path),
       );
     const saved = this.db
-      .prepare("SELECT path,config_root FROM source")
-      .all() as unknown as Pick<Source, "path" | "config_root">[];
+      .prepare("SELECT path,config_root,agent FROM source")
+      .all() as unknown as Pick<Source, "path" | "config_root" | "agent">[];
     const paths = new Map(
       saved
         .filter((s) => s.config_root === null || configured.has(s.config_root))
@@ -119,17 +130,34 @@ export class Store {
       retired = 0;
     for (const [p, r] of [...paths].sort(([a], [b]) => a.localeCompare(b))) {
       try {
-        if (missing.has(p)) throw new ValidationError("原会话文件已移动或不再位于启用目录；旧快照保留");
-        this.importFile(p, r);
+        if (missing.has(p))
+          throw new ValidationError(
+            "原会话文件已移动或不再位于启用目录；旧快照保留",
+          );
+        this.importFile(
+          p,
+          r,
+          agents.get(p) ??
+            (saved.find((s) => s.path === p)?.agent === "Claude Code"
+              ? "claude"
+              : "codex"),
+        );
         ok++;
       } catch (error) {
         failed++;
         const code = (error as NodeJS.ErrnoException).code;
-        failures.set(p, error instanceof ValidationError ? error.message :
-          code === 'EACCES' || code === 'EPERM' ? '无权读取会话文件，请检查文件权限' :
-          code === 'ENOENT' ? '会话文件不存在或同步期间被移动' :
-          code?.startsWith('ERR_SQLITE') ? '写入本地统计数据库失败，请检查权限和磁盘空间' :
-          '无法读取或导入文件；请通过命令行导入检查此版本兼容性');
+        failures.set(
+          p,
+          error instanceof ValidationError
+            ? error.message
+            : code === "EACCES" || code === "EPERM"
+              ? "无权读取会话文件，请检查文件权限"
+              : code === "ENOENT"
+                ? "会话文件不存在或同步期间被移动"
+                : code?.startsWith("ERR_SQLITE")
+                  ? "写入本地统计数据库失败，请检查权限和磁盘空间"
+                  : "无法读取或导入文件；请通过命令行导入检查此版本兼容性",
+        );
         this.db
           .prepare("UPDATE source SET last_error=? WHERE path=?")
           .run("最近同步失败；显示上次成功导入的快照", p);
@@ -162,7 +190,11 @@ export class Store {
       updated: ok,
       failed: failed - retired,
       discovered: files.size,
-      failures: [...new Set(failures.values())].map(reason => ({reason, count: [...failures.values()].filter(value => value === reason).length})),
+      failures: [...new Set(failures.values())].map((reason) => ({
+        reason,
+        count: [...failures.values()].filter((value) => value === reason)
+          .length,
+      })),
       relocated: retired,
       notices,
       note: "配置目录会发现新会话；关闭接入或更换目录不会删除既有统计",
@@ -183,7 +215,7 @@ export class Store {
     for (const s of sources) {
       const item = sessions.get(s.session_id) ?? {
         id: s.session_id,
-        agent: "Codex",
+        agent: s.agent,
         project: s.project,
         issues: [],
         turns: [],
@@ -252,30 +284,28 @@ export class Store {
         reason = "结束时间早于开始时间，未计入耗时";
       } else if (end === null)
         reason = "尚无结束事件；可能进行中，也可能记录中断，不推测当前状态";
-      sessions
-        .get(sid)!
-        .turns.push({
-          id: tid,
-          start_ms: start,
-          end_ms: end,
-          elapsed_ms:
-            ["completed", "aborted", "failed"].includes(status) &&
-            start !== null &&
-            end !== null
-              ? end - start
-              : null,
-          status,
-          reason,
-          models: [
-            ...new Set(
-              entries.map((e) => e.model).filter((m): m is string => !!m),
-            ),
-          ].sort(),
-          events: entries,
-          work_ms: null,
-          human_ms: null,
-          response_gap_ms: null,
-        });
+      sessions.get(sid)!.turns.push({
+        id: tid,
+        start_ms: start,
+        end_ms: end,
+        elapsed_ms:
+          ["completed", "aborted", "failed"].includes(status) &&
+          start !== null &&
+          end !== null
+            ? end - start
+            : null,
+        status,
+        reason,
+        models: [
+          ...new Set(
+            entries.map((e) => e.model).filter((m): m is string => !!m),
+          ),
+        ].sort(),
+        events: entries,
+        work_ms: null,
+        human_ms: null,
+        response_gap_ms: null,
+      });
     }
     for (const s of sessions.values())
       s.turns.sort(

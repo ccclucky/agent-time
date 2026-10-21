@@ -4,7 +4,7 @@ AI Agent Time & Efficiency Analytics.
 
 AgentTime is a lightweight, local-first time ledger for AI coding agents. See recorded time costs, inspect overlapping execution, and follow a total down to individual sessions and timestamped events.
 
-**Status: early MVP.** The first working adapter imports selected local Codex rollout JSONL files into a local SQLite database and serves a browser interface. It measures recorded processing intervals, not pure agent work: approval waits cannot be reconstructed reliably from these history files. Other integrations remain planned. Compatibility has been checked against pinned upstream source and synthetic fixtures; validation with users’ local installations is still needed.
+**Status: early MVP.** The working adapters import selected local Codex rollout and Claude Code transcript JSONL files into a local SQLite database and serve a browser interface. It measures recorded processing intervals, not pure agent work: approval waits cannot be reconstructed reliably from these history files. Claude Code reports user-message-to-explicit-end **record timestamp spans**, which are a different basis from Codex execution boundaries. Other integrations remain planned. Compatibility has been checked against pinned upstream source and synthetic fixtures; validation with users’ local installations is still needed.
 
 ## Run locally
 
@@ -16,7 +16,7 @@ From this checkout:
 npm ci
 npm run dev
 ```
-Open **配置与接入 (Configuration & sources)** in the interface. Codex defaults to `~/.codex`; enable **从此目录读取会话 (Read sessions from this directory)** and save to import its history. Change the directory or restore its default in the same page. No command-line import is needed for this workflow.
+Open **配置与接入 (Configuration & sources)** in the interface. Codex defaults to `~/.codex`; Claude Code defaults to `~/.claude` (transcripts under `projects`). For either tool, enable **从此目录读取会话 (Read sessions from this directory)** and save to import its history. Change the directory or restore its default in the same page. No command-line import is needed for this workflow.
 
 The default listener is `127.0.0.1:8765`, accessible only on this machine. A custom port is available with `serve --port 8766`. `Ctrl+C` stops the server. The npm package has not been published. For a package-level trial, run `npm pack` and then, from any directory, `npx --package /absolute/path/agenttime-0.1.0.tgz agenttime`. Do not use a bare `npx agenttime` yet: the registry name has not been verified or claimed. The package is marked private to prevent accidental publication.
 
@@ -29,7 +29,7 @@ npm run dev -- --db /path/to/agenttime.sqlite3 serve
 
 Import a file or a directory containing JSONL files. Repeating an import, including an identical copied file, does not double-count its events. An import with skipped files returns a nonzero exit code and reports the failures. Custom Codex directories can be saved in the configuration page, or supplied to the advanced CLI import. AgentTime never reads credential files or searches arbitrary device directories.
 
-The **Sync records** button discovers new JSONL files in enabled Codex data directories (`sessions` and `archived_sessions`) and updates existing snapshots. Directory settings persist in the same local database. Disabling a directory stops future reads from it; changing directories preserves previously imported statistics. Advanced CLI-imported files are still refreshed independently. Alternatively, run `npm run dev -- refresh`. Unreadable or changing files retain their previous snapshot, and failed refreshes remain visible. There is no background collector yet.
+The **Sync records** button discovers new JSONL files in enabled Codex data directories (`sessions` and `archived_sessions`) and Claude Code `projects` and updates existing snapshots. Directory settings persist in the same local database. Disabling a directory stops future reads from it; changing directories preserves previously imported statistics. Advanced CLI-imported files are still refreshed independently. Alternatively, run `npm run dev -- refresh`. Unreadable or changing files retain their previous snapshot, and failed refreshes remain visible. There is no background collector yet.
 
 ## What works today
 
@@ -37,16 +37,18 @@ The **Sync records** button discovers new JSONL files in enabled Codex data dire
 - Recorded processing time, overlapping interval deduplication, and a breakdown of measurable, incomplete, failed, and interrupted rounds.
 - Clickable totals → contributing sessions → individual execution boundaries.
 - Session search, sorting, model-context grouping, and CSV export of the selected period.
-- Read-only Codex imports and transactional local persistence of allowlisted metadata.
+- Read-only Codex and Claude Code imports and transactional local persistence of allowlisted metadata.
 - Clear unavailable states for pure work time, confirmation waits, user response intervals, tokens, and costs.
 
 Codex processing time uses timestamps on execution-start and completion/abort events. These are **not** exact user-submission timestamps. Failed and interrupted executions with valid endpoints contribute to recorded time costs and are labeled separately. Open or conflicting intervals never become fabricated completed durations. Cross-date intervals contribute only their overlap with the selected dates; full round durations remain available in details.
 
 Only recognized CLI, VS Code, and exec provenance is accepted. Explicit remote/cloud origins, unknown sources, child agents, forked/inherited histories, paginated histories, and rollbacks are not supported by this first adapter and are rejected rather than flattened. Local file placement alone cannot prove physical execution location; import only records from your own local agent use.
 
-The configuration page pre-fills defaults for Codex, Claude Code, Oh-My-Pi, Pi, and OpenCode. Antigravity’s default session location remains unverified. Only Codex can currently be enabled; other tools may have their directory preferences saved without claiming ingestion support. Default locations are verified against each tool’s own source, not inferred from example names or configuration folders. Oh-My-Pi uses its agent/profile/XDG data rules; unresolvable overrides stay unfilled. See [directory configuration](docs/directories.zh-CN.md) for pinned primary sources, actual session locations, and the cc-switch UI reference.
+The configuration page pre-fills defaults for Codex, Claude Code, Oh-My-Pi, Pi, and OpenCode. Antigravity’s default session location remains unverified. Codex and Claude Code can currently be enabled; other tools may have their directory preferences saved without claiming ingestion support. Default locations are verified against each tool’s own source, not inferred from example names or configuration folders. Oh-My-Pi uses its agent/profile/XDG data rules; unresolvable overrides stay unfilled. See [directory configuration](docs/directories.zh-CN.md) for pinned primary sources, actual session locations, and the cc-switch UI reference.
 
 Source bodies are read in memory to parse JSONL, but prompts, replies, tool inputs/outputs, credentials, and instruction content are not saved or served. Stored metadata includes IDs, project basename, model-context labels, timestamps, and import diagnostics. The local source registry retains selected file paths for refresh; individual registered file paths are not returned by the web API. The configuration page intentionally displays the user-selected data root and its resolved local path. Nothing is uploaded, and the application makes no outbound requests. It does not install hooks or edit agent configuration.
+
+Claude Code imports exclude `subagents` directories, legacy `agent-*.jsonl` files, sidechain/team records, mixed session IDs, and detected competing user branches. Tool-result messages, injected metadata and compact summaries do not start user rounds. An assistant with explicit `end_turn` / `stop_sequence`, or a `system` `turn_duration` record, supplies an observed end timestamp; `durationMs` is not used to invent a start. A last assistant message, missing stop reason, or a tool-use completion alone never proves the interaction finished. Missing ends remain unmeasured. These transcript timestamps describe recording, not precise model execution or user-visible reply completion. Do not compare their durations directly with Codex execution timing. No hooks or agent configuration changes are needed. Use `npm run dev -- import --agent claude /selected/session.jsonl` for explicit imports.
 
 ## Why AgentTime?
 
@@ -101,7 +103,7 @@ Agent and model comparisons will need context about task complexity and measurem
 
 | Agent | Status |
 | --- | --- |
-| Claude Code | Hooks researched; adapter not yet implemented |
+| Claude Code | Read-only main transcript import; user-message-to-explicit-end record spans; waits remain unknown |
 | Codex | Initial read-only JSONL adapter; processing boundaries only, with the limitations above |
 | OpenCode | Researched; adapter not yet implemented |
 | Pi | Researched; adapter not yet implemented |

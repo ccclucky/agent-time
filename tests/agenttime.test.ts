@@ -634,18 +634,242 @@ test("opens a database produced by the previous runtime and deduplicates a newly
   );
 });
 
-test('first-time import failures report sanitized reasons without inventing an old snapshot', () => {
-  const {store, dirs, home} = setup();
-  const root = path.join(home,'.codex');
-  file(path.join(root,'sessions'), [meta('s1',{source:'unsupported-private-value'})]);
-  file(path.join(root,'sessions'), [{private:'secret prompt'}], 'invalid.jsonl');
-  dirs.save('codex',null,true);
-  const result=store.refresh(dirs);
-  assert.equal(result.failed,2);
-  assert.equal(result.failures.reduce((n,f)=>n+f.count,0),2);
-  assert.equal(result.updated,0);
-  assert.equal(store.sourceInfo().registered_files,0);
-  assert(!JSON.stringify(result.failures).includes('secret prompt'));
-  assert(!JSON.stringify(result.failures).includes('unsupported-private-value'));
+test("first-time import failures report sanitized reasons without inventing an old snapshot", () => {
+  const { store, dirs, home } = setup();
+  const root = path.join(home, ".codex");
+  file(path.join(root, "sessions"), [
+    meta("s1", { source: "unsupported-private-value" }),
+  ]);
+  file(
+    path.join(root, "sessions"),
+    [{ private: "secret prompt" }],
+    "invalid.jsonl",
+  );
+  dirs.save("codex", null, true);
+  const result = store.refresh(dirs);
+  assert.equal(result.failed, 2);
+  assert.equal(
+    result.failures.reduce((n, f) => n + f.count, 0),
+    2,
+  );
+  assert.equal(result.updated, 0);
+  assert.equal(store.sourceInfo().registered_files, 0);
+  assert(!JSON.stringify(result.failures).includes("secret prompt"));
+  assert(
+    !JSON.stringify(result.failures).includes("unsupported-private-value"),
+  );
   assert(!JSON.stringify(result.failures).includes(home));
+});
+
+const claudeRow = (
+  type: string,
+  uuid: string,
+  minute: number,
+  extra: Record<string, unknown> = {},
+) => ({
+  type,
+  uuid,
+  sessionId: "claude-session",
+  timestamp: `2026-10-21T00:${String(minute).padStart(2, "0")}:00Z`,
+  cwd: "C:\\work\\claude-project",
+  parentUuid: null,
+  ...extra,
+});
+const claudeRows = () => [
+  claudeRow("user", "user-1", 0, {
+    message: { role: "user", content: "PRIVATE PROMPT" },
+  }),
+  claudeRow("assistant", "assistant-tool", 1, {
+    parentUuid: "user-1",
+    message: {
+      role: "assistant",
+      model: "claude-model",
+      stop_reason: "tool_use",
+      content: [{ type: "tool_use", input: { secret: "PRIVATE INPUT" } }],
+    },
+  }),
+  claudeRow("user", "tool-result", 2, {
+    parentUuid: "assistant-tool",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", content: "PRIVATE RESULT" }],
+    },
+  }),
+  claudeRow("assistant", "assistant-end", 10, {
+    parentUuid: "tool-result",
+    message: {
+      role: "assistant",
+      model: "claude-model",
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "PRIVATE REPLY" }],
+    },
+  }),
+];
+test("Claude directory enablement discovers main transcripts, with privacy and truthful timing", () => {
+  const { store, dirs, home } = setup();
+  const p = file(
+    path.join(home, ".claude", "projects", "project"),
+    claudeRows(),
+  );
+  const before = readFileSync(p);
+  dirs.save("claude", null, true);
+  const r = store.refresh(dirs);
+  assert.equal(r.updated, 1);
+  assert.equal(r.failed, 0);
+  const sessions = store.sessions();
+  assert.equal(sessions[0].agent, "Claude Code");
+  assert.equal(sessions[0].project, "claude-project");
+  assert.equal(sessions[0].turns.length, 1);
+  assert.equal(summary(store).processing_ms, 600000);
+  assert.equal(sessions[0].turns[0].work_ms, null);
+  assert.match(sessions[0].issues.join(" "), /不是精确执行耗时/);
+  assert.deepEqual(readFileSync(p), before);
+  assert(!readFileSync(store.path).includes(Buffer.from("PRIVATE")));
+});
+test("Claude tool results, metadata and compact summaries are not new submissions", () => {
+  const { store, dir } = setup();
+  store.importFile(
+    file(dir, [
+      ...claudeRows().slice(0, 3),
+      claudeRow("user", "meta", 3, {
+        isMeta: true,
+        message: { content: "injected" },
+      }),
+      claudeRow("user", "compact", 4, {
+        isCompactSummary: true,
+        message: { content: "summary" },
+      }),
+      claudeRows()[3],
+    ]),
+    null,
+    "claude",
+  );
+  assert.equal(summary(store).turns, 1);
+  assert.equal(summary(store).processing_ms, 600000);
+});
+test("Claude missing completion stays unknown; last assistant and tool_use never invent an end", () => {
+  const { store, dir } = setup();
+  store.importFile(file(dir, claudeRows().slice(0, 3)), null, "claude");
+  assert.equal(summary(store).processing_ms, null);
+  assert.equal(store.sessions()[0].turns[0].status, "open");
+});
+test("Claude explicit turn-duration boundary uses recorded timestamp, not derived start", () => {
+  const { store, dir } = setup();
+  store.importFile(
+    file(dir, [
+      ...claudeRows().slice(0, 3),
+      claudeRow("system", "duration-1", 12, {
+        subtype: "turn_duration",
+        durationMs: 1000,
+      }),
+    ]),
+    null,
+    "claude",
+  );
+  assert.equal(summary(store).processing_ms, 12 * 60000);
+  assert.equal(store.sessions()[0].turns.length, 1);
+});
+test("Claude stop followed by duration marker does not duplicate completion", () => {
+  const { store, dir } = setup();
+  store.importFile(
+    file(dir, [
+      ...claudeRows(),
+      claudeRow("system", "duration-1", 12, {
+        subtype: "turn_duration",
+        durationMs: 1000,
+      }),
+    ]),
+    null,
+    "claude",
+  );
+  assert.equal(store.sessions()[0].turns[0].status, "completed");
+  assert.equal(summary(store).processing_ms, 600000);
+});
+test("Claude copied files deduplicate while Codex identities remain separate", () => {
+  const { store, dir } = setup();
+  const p = file(dir, claudeRows(), "claude.jsonl"),
+    copy = path.join(dir, "copy.jsonl");
+  copyFileSync(p, copy);
+  store.importFile(p, null, "claude");
+  store.importFile(copy, null, "claude");
+  store.importFile(
+    file(
+      dir,
+      [
+        meta("claude-session"),
+        event("task_started", 0),
+        event("task_complete", 10),
+      ],
+      "codex.jsonl",
+    ),
+  );
+  assert.equal(store.sessions().length, 2);
+  assert.equal(summary(store).processing_ms, 1200000);
+  assert.equal(
+    report(store.sessions(), "2026-10-21", "2026-10-21", "UTC", "Claude Code")
+      .summary.processing_ms,
+    600000,
+  );
+});
+test("Claude manual imports retain adapter identity on refresh", () => {
+  const { store, dir, dirs } = setup();
+  const p = file(dir, claudeRows());
+  store.importFile(p, null, "claude");
+  assert.equal(store.refresh(dirs).updated, 1);
+  assert.equal(store.sessions()[0].agent, "Claude Code");
+  assert.equal(summary(store).processing_ms, 600000);
+});
+test("Claude scanner excludes subagent files and folders", () => {
+  const { store, home, dirs } = setup();
+  const project = path.join(home, ".claude", "projects", "project");
+  file(project, claudeRows(), "main.jsonl");
+  file(path.join(project, "main", "subagents"), claudeRows(), "agent-a.jsonl");
+  file(project, claudeRows(), "agent-legacy.jsonl");
+  dirs.save("claude", null, true);
+  assert.equal(store.refresh(dirs).discovered, 1);
+});
+test("Claude subagents, mixed sessions and competing human branches reject whole snapshots", () => {
+  const { store, dir } = setup();
+  for (const rows of [
+    [
+      ...claudeRows(),
+      claudeRow("assistant", "side", 20, { isSidechain: true }),
+    ],
+    [...claudeRows(), claudeRow("user", "mixed", 20, { sessionId: "other" })],
+    [
+      ...claudeRows(),
+      claudeRow("user", "branch-a", 20, {
+        parentUuid: "assistant-end",
+        message: { content: "a" },
+      }),
+      claudeRow("user", "branch-b", 21, {
+        parentUuid: "assistant-end",
+        message: { content: "b" },
+      }),
+    ],
+  ])
+    assert.throws(() => store.importFile(file(dir, rows), null, "claude"));
+  assert.equal(store.sessions().length, 0);
+});
+test("Claude multiple rounds and model switches preserve each model without duplicating time", () => {
+  const { store, dir } = setup();
+  store.importFile(
+    file(dir, [
+      ...claudeRows(),
+      claudeRow("user", "user-2", 20, {
+        parentUuid: "assistant-end",
+        message: { content: "next" },
+      }),
+      claudeRow("assistant", "end-2", 25, {
+        parentUuid: "user-2",
+        message: { model: "model-2", stop_reason: "stop_sequence" },
+      }),
+    ]),
+    null,
+    "claude",
+  );
+  const turns = store.sessions()[0].turns;
+  assert.equal(turns.length, 2);
+  assert.deepEqual(turns[1].models, ["model-2"]);
+  assert.equal(summary(store).processing_ms, 15 * 60000);
 });

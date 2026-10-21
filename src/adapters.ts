@@ -7,9 +7,9 @@ export const SOURCES = [
   },
   {
     agent: "Claude Code",
-    status: "已调研 · 尚未接入",
-    supported: false,
-    note: "需继续验证 hooks 完成与授权恢复语义。",
+    status: "只读导入 · 消息记录跨度",
+    supported: true,
+    note: "读取 projects 中的主会话；有明确结束标记时统计消息记录跨度，不能拆分授权等待。",
   },
   {
     agent: "OpenCode",

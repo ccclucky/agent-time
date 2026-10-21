@@ -27,7 +27,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagenttime [serve] [--port 8765] [--db PATH]\nagenttime import --agent codex FILE_OR_DIRECTORY [--db PATH]\nagenttime refresh [--db PATH]\n\n默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagenttime [serve] [--port 8765] [--db PATH]\nagenttime import --agent codex|claude FILE_OR_DIRECTORY [--db PATH]\nagenttime refresh [--db PATH]\n\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
@@ -43,9 +43,12 @@ async function main() {
     throw new ValidationError("端口应在 0–65535 之间");
   if (
     command === "import" &&
-    (values.agent !== "codex" || positionals.length !== 2)
+    (!["codex", "claude"].includes(values.agent ?? "") ||
+      positionals.length !== 2)
   )
-    throw new ValidationError("使用 import --agent codex FILE_OR_DIRECTORY");
+    throw new ValidationError(
+      "使用 import --agent codex|claude FILE_OR_DIRECTORY",
+    );
   if (command !== "import" && positionals.length > 1)
     throw new ValidationError("参数过多；使用 --help 查看用法");
   const store = new Store(values.db ?? defaultDb());
@@ -101,7 +104,11 @@ async function main() {
       warnings = 0;
     for (const p of paths.sort()) {
       try {
-        const result = store.importFile(p);
+        const result = store.importFile(
+          p,
+          null,
+          values.agent as "codex" | "claude",
+        );
         good++;
         warnings += result.issues.length;
         for (const issue of result.issues) console.error("记录提示：" + issue);

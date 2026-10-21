@@ -48,7 +48,7 @@ export function timestamp(value: unknown): number {
     throw new ValidationError("invalid timestamp");
   }
 }
-function* lines(path: string): Generator<Buffer> {
+export function* lines(path: string): Generator<Buffer> {
   const fd = openSync(path, "r"),
     chunk = Buffer.alloc(64 * 1024);
   let pending = Buffer.alloc(0);

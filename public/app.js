@@ -159,11 +159,11 @@ function render() {
   if ($("#search")) $("#search").value = state.query;
 }
 function noData() {
-  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
+  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex 或 Claude Code 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
 function stats() {
   const s = state.report.summary;
-  return `<div class="stats"><div class="stat"><button class="metricbutton" data-metric="processing"><label>已记录的处理耗时</label><div class="number">${fmt(s.processing_ms)}</div><small>各轮执行开始到结束的时间相加 ↗</small></button></div><div class="stat"><button class="metricbutton" data-metric="union"><label>有任务在处理的时长</label><div class="number">${fmt(s.processing_union_ms)}</div><small>同时运行的时间仅计一次 ↗</small></button></div><div class="stat"><button class="metricbutton" data-metric="coverage"><label>已测量 / 已记录轮次</label><div class="number">${s.measured_turns} / ${s.turns}</div><small>未结束或异常记录单列 ↗</small></button></div><div class="stat"><button class="metricbutton" data-page="sessions"><label>会话数</label><div class="number">${s.sessions}</div><small>查看全部贡献会话 ↗</small></button></div></div>`;
+  return `<div class="stats"><div class="stat"><button class="metricbutton" data-metric="processing"><label>已记录的处理耗时</label><div class="number">${fmt(s.processing_ms)}</div><small>各轮可测量记录区间的时间相加 ↗</small></button></div><div class="stat"><button class="metricbutton" data-metric="union"><label>有任务在处理的时长</label><div class="number">${fmt(s.processing_union_ms)}</div><small>同时运行的时间仅计一次 ↗</small></button></div><div class="stat"><button class="metricbutton" data-metric="coverage"><label>已测量 / 已记录轮次</label><div class="number">${s.measured_turns} / ${s.turns}</div><small>未结束或异常记录单列 ↗</small></button></div><div class="stat"><button class="metricbutton" data-page="sessions"><label>会话数</label><div class="number">${s.sessions}</div><small>查看全部贡献会话 ↗</small></button></div></div>`;
 }
 function overview() {
   const s = state.report.summary;
@@ -242,7 +242,8 @@ function directoryCards() {
 }
 function sources() {
   return `<div class="notice">${h(state.sources.privacy)} 预填位置根据工具上游规则与当前启动环境推导，只检测目录是否存在，不读取其中内容。勾选“从此目录读取会话”并保存后，才会同步已支持的工具。更换目录或关闭接入不会删除已导入数据。</div>${directoryCards()}<section class="panel"><div class="panelhead"><h2>本地同步</h2><span class="mutedpill">已登记 ${state.sources.registered_files} 个文件</span></div><div style="padding:0 20px 22px"><p class="sub">右上角“同步记录”会重新发现已启用目录中的新会话，并更新历史快照。仅扫描指定的会话子目录，不读取凭据或工具配置，也不把问题、答复内容保存到数据库。</p><p class="sourcecap">上次成功导入：${h(state.sources.last_imported_at_utc || "尚未导入")}${state.sources.last_imported_at_utc ? " UTC" : ""}</p><details><summary class="textbtn">高级：通过命令行导入指定文件或目录</summary><pre class="sourcecode"># 在仓库目录中运行
-npm run dev -- import --agent codex /path/to/local/session.jsonl</pre><p class="sub">命令行显式导入的文件也会在同步时更新。停止该目录接入不会删除这些手动导入的来源。</p></details></div></section>${state.sources.imports.length ? `<section class="panel"><div class="panelhead"><h2>已登记的会话来源</h2></div><div class="tablewrap"><table><thead><tr><th>项目 / 会话</th><th>上次导入（UTC）</th><th>导入提示</th></tr></thead><tbody>${state.sources.imports.map((x) => `<tr><td>${h(x.project)}<br><span class="muted">${h(x.session_id.slice(0, 16))}</span></td><td>${h(x.imported_at_utc)}</td><td>${x.issues.length ? x.issues.map(h).join("<br>") : "可验证记录已导入；工作与等待拆分仍未知"}</td></tr>`).join("")}</tbody></table></div></section>` : ""}<p class="sub">目录设计参考 cc-switch 的默认位置、自定义覆盖和恢复默认模式。这里只管理 AgentTime 的读取位置，不修改其他工具的配置。默认路径取自各工具上游源码，cc-switch 仅作为交互参考。无法确定的位置留空；其他进程的环境与启动参数无法自动得知，可手动修改。</p>`;
+npm run dev -- import --agent codex /path/to/local/session.jsonl
+# Claude Code 使用 --agent claude</pre><p class="sub">命令行显式导入的文件也会在同步时更新。停止该目录接入不会删除这些手动导入的来源。</p></details></div></section>${state.sources.imports.length ? `<section class="panel"><div class="panelhead"><h2>已登记的会话来源</h2></div><div class="tablewrap"><table><thead><tr><th>项目 / 会话</th><th>上次导入（UTC）</th><th>导入提示</th></tr></thead><tbody>${state.sources.imports.map((x) => `<tr><td>${h(x.project)}<br><span class="muted">${h(x.session_id.slice(0, 16))}</span></td><td>${h(x.imported_at_utc)}</td><td>${x.issues.length ? x.issues.map(h).join("<br>") : "可验证记录已导入；工作与等待拆分仍未知"}</td></tr>`).join("")}</tbody></table></div></section>` : ""}<p class="sub">目录设计参考 cc-switch 的默认位置、自定义覆盖和恢复默认模式。这里只管理 AgentTime 的读取位置，不修改其他工具的配置。默认路径取自各工具上游源码，cc-switch 仅作为交互参考。无法确定的位置留空；其他进程的环境与启动参数无法自动得知，可手动修改。</p>`;
 }
 async function saveDirectory(agent) {
   if (state.saving.has(agent) || state.busy) return;
@@ -314,13 +315,13 @@ function details(id) {
   const s = state.report.sessions.find((s) => s.id === id);
   if (!s) return;
   open(
-    `${head(s.project, `${s.agent} · ${s.id}`)}<p class="detailsummary">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>${s.issues.map((x) => `<div class="notice">${h(x)}</div>`).join("")}<div class="detailstats"><div><small>本期已记录处理耗时</small><strong>${fmt(s.measured_turns ? s.period_ms : null)}</strong></div><div><small>已测量 / 当前轮次</small><strong>${s.measured_turns} / ${s.turns.length}</strong></div><div><small>工作与等待拆分</small><strong>未知</strong></div></div><h3>每轮执行的起止记录</h3><p class="sub">这里的一轮按 Codex 执行记录识别。开始事件不一定等于你点击提交的时刻，不能据此计算真实的用户响应间隔。</p>${s.turns.map((t, i) => `<article class="turn"><div class="turnhead"><b>第 ${i + 1} 轮</b><span class="tag ${t.elapsed_ms === null ? "warn" : ""}">${statuses[t.status]}</span></div><p class="sub">${h(t.models.join(" / ") || "模型上下文未知")}</p><div class="turnvalues"><span>完整处理耗时：${fmt(t.elapsed_ms)}</span><span>本期计入：${fmt(t.period_ms)}</span></div>${t.reason ? `<p class="notice">${h(t.reason)}</p>` : ""}<ul class="eventlist">${t.events.map((e) => `<li><time>${h(stamp(e.at_ms))}</time>${{ start: "开始执行", complete: "执行完成", abort: "执行中止", fail: "执行失败", model: "记录模型上下文" }[e.kind]}</li>`).join("")}</ul></article>`).join("")}<p class="sub sectionspace">这些是记录中的时间事实，不代表你实际操作或等待的时长。不展示问题和答复内容。</p>`,
+    `${head(s.project, `${s.agent} · ${s.id}`)}<p class="detailsummary">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>${s.issues.map((x) => `<div class="notice">${h(x)}</div>`).join("")}<div class="detailstats"><div><small>本期已记录处理耗时</small><strong>${fmt(s.measured_turns ? s.period_ms : null)}</strong></div><div><small>已测量 / 当前轮次</small><strong>${s.measured_turns} / ${s.turns.length}</strong></div><div><small>工作与等待拆分</small><strong>未知</strong></div></div><h3>每轮执行的起止记录</h3><p class="sub">Codex 使用执行起止记录；Claude Code 使用用户消息至明确结束记录的跨度。消息落盘时间不等于精确执行边界，不能直接比较两种工具的执行效率。</p>${s.turns.map((t, i) => `<article class="turn"><div class="turnhead"><b>第 ${i + 1} 轮</b><span class="tag ${t.elapsed_ms === null ? "warn" : ""}">${statuses[t.status]}</span></div><p class="sub">${h(t.models.join(" / ") || "模型上下文未知")}</p><div class="turnvalues"><span>完整处理耗时：${fmt(t.elapsed_ms)}</span><span>本期计入：${fmt(t.period_ms)}</span></div>${t.reason ? `<p class="notice">${h(t.reason)}</p>` : ""}<ul class="eventlist">${t.events.map((e) => `<li><time>${h(stamp(e.at_ms))}</time>${{ start: s.agent === "Claude Code" ? "用户消息记录" : "开始执行", complete: s.agent === "Claude Code" ? "明确结束记录" : "执行完成", abort: "执行中止", fail: "执行失败", model: "记录模型上下文" }[e.kind]}</li>`).join("")}</ul></article>`).join("")}<p class="sub sectionspace">这些是记录中的时间事实，不代表你实际操作或等待的时长。不展示问题和答复内容。</p>`,
     true,
   );
 }
 function definitions() {
   open(
-    `${head("这些时间怎么算？")}<dl><dt>会话与一轮交互</dt><dd>会话是同一对话中的一组交互；一轮交互通常从你提交一次问题或指令，到 Agent 完成答复。工具调用和确认属于同一轮。首批 Codex 使用可验证的执行起止记录，未声称精确记录用户提交时刻。</dd><dt>已记录的处理耗时</dt><dd>把每轮开始执行到完成、失败或中止的时间相加。可能包含等待你确认或补充的时间；不能全部当成纯工作。</dd><dt>有任务在处理的时长</dt><dd>多个任务同时运行的一段时间只计一次。例如 A 在 10:00–10:30 运行，B 在 10:15–10:45 运行：累计 60 分钟，不重复计时为 45 分钟。此项仍可能包含等待确认的时间。</dd><dt>为什么工作和等待显示未知？</dt><dd>Codex 历史文件默认不保存完整审批等待事件。缺少记录不等于没有等待，因此不推算、不填零。</dd><dt>时间范围与未完成记录</dt><dd>时区取自浏览器。跨天轮次按与所选日期重叠的部分计入，右侧日期包含当天。没有结束或起点冲突的轮次不计入已测量耗时。</dd><dt>汇总是否等于全部真实使用？</dt><dd>不等于。只涵盖已选择导入、可支持、具有有效起止记录的本地数据。记录外的活动和未知来源不包含在内。</dd></dl>`,
+    `${head("这些时间怎么算？")}<dl><dt>会话与一轮交互</dt><dd>会话是同一对话中的一组交互；一轮交互通常从你提交一次问题或指令，到 Agent 完成答复。工具调用和确认属于同一轮。Codex 使用执行起止记录；Claude Code 使用用户消息与明确结束标记的记录时间，缺少结束标记时不计时。</dd><dt>已记录的处理耗时</dt><dd>把每轮开始执行到完成、失败或中止的时间相加。可能包含等待你确认或补充的时间；不能全部当成纯工作。</dd><dt>有任务在处理的时长</dt><dd>多个任务同时运行的一段时间只计一次。例如 A 在 10:00–10:30 运行，B 在 10:15–10:45 运行：累计 60 分钟，不重复计时为 45 分钟。此项仍可能包含等待确认的时间。</dd><dt>为什么工作和等待显示未知？</dt><dd>当前导入适配器不能从历史文件可靠恢复完整审批等待事件。缺少记录不等于没有等待，因此不推算、不填零。</dd><dt>时间范围与未完成记录</dt><dd>时区取自浏览器。跨天轮次按与所选日期重叠的部分计入，右侧日期包含当天。没有结束或起点冲突的轮次不计入已测量耗时。</dd><dt>汇总是否等于全部真实使用？</dt><dd>不等于。只涵盖已选择导入、可支持、具有有效起止记录的本地数据。记录外的活动和未知来源不包含在内。</dd></dl>`,
   );
 }
 function metric(kind) {
@@ -361,7 +362,7 @@ function intervalChart() {
   const lo = Math.min(...turns.map((x) => x.t.start_ms)),
     hi = Math.max(...turns.map((x) => x.t.end_ms)),
     span = Math.max(hi - lo, 1);
-  return `<div class="panel"><div class="panelhead"><h2>完整执行区间（前 12 轮）</h2></div><div class="recordchart"><div class="chartaxis"><span>${h(stamp(lo))}</span><span>${h(stamp(hi))}</span></div>${turns.map(({ s, t }) => `<div class="lane"><label>${h(s.project)}</label><div class="track"><button class="bar" style="left:${((t.start_ms - lo) / span) * 100}%;width:${Math.max(((t.end_ms - t.start_ms) / span) * 100, 0.5)}%;max-width:${((hi - t.start_ms) / span) * 100}%" data-session="${h(s.id)}" aria-label="查看 ${h(s.project)} 对应会话"></button></div></div>`).join("")}</div><p class="rangefoot">图中为完整轮次起止，仅帮助观察重叠。上方本期总额由全部符合范围的区间精确计算，不受图中数量限制。</p></div>`;
+  return `<div class="panel"><div class="panelhead"><h2>完整记录区间（前 12 轮）</h2></div><div class="recordchart"><div class="chartaxis"><span>${h(stamp(lo))}</span><span>${h(stamp(hi))}</span></div>${turns.map(({ s, t }) => `<div class="lane"><label>${h(s.project)}</label><div class="track"><button class="bar" style="left:${((t.start_ms - lo) / span) * 100}%;width:${Math.max(((t.end_ms - t.start_ms) / span) * 100, 0.5)}%;max-width:${((hi - t.start_ms) / span) * 100}%" data-session="${h(s.id)}" aria-label="查看 ${h(s.project)} 对应会话"></button></div></div>`).join("")}</div><p class="rangefoot">图中为完整轮次起止，仅帮助观察重叠。上方本期总额由全部符合范围的区间精确计算，不受图中数量限制。</p></div>`;
 }
 function toast(message) {
   $("#live").innerHTML = `<div class="toast">${h(message)}</div>`;
@@ -395,7 +396,7 @@ function exportCSV() {
       state.start,
       state.end,
       timezone,
-      "Codex execution start to complete/abort; pauses unknown",
+      state.report.basis,
     ]),
   ];
   const cell = (v) => {
@@ -429,7 +430,10 @@ async function refresh() {
     toast(
       `成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个导入失败` : ""}${r.notices?.length ? "；" + r.notices.join("；") : ""}`,
     );
-    if (r.failed) open(`${head("部分记录未能导入", `已更新 ${r.updated} 个文件，失败 ${r.failed} 个。`)}<p class="sub">首次导入失败的文件不会生成统计；此前已成功导入的记录会保留旧快照。调整统计日期不会解决导入失败。</p><h3>失败原因</h3>${(r.failures || []).map(item => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || '<p>当前服务未提供详细原因，请更新并重启 AgentTime。</p>'}<p class="sub">可以将这些原因发给项目维护者，不需要发送问题、答复或完整会话文件。</p>`);
+    if (r.failed)
+      open(
+        `${head("部分记录未能导入", `已更新 ${r.updated} 个文件，失败 ${r.failed} 个。`)}<p class="sub">首次导入失败的文件不会生成统计；此前已成功导入的记录会保留旧快照。调整统计日期不会解决导入失败。</p><h3>失败原因</h3>${(r.failures || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>当前服务未提供详细原因，请更新并重启 AgentTime。</p>"}<p class="sub">可以将这些原因发给项目维护者，不需要发送问题、答复或完整会话文件。</p>`,
+      );
   } catch (e) {
     error(e.message);
   } finally {

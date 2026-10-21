@@ -48,3 +48,11 @@ Node.js 22.13+ / TypeScript + Node 内置 SQLite + 本地 HTML/CSS/JavaScript。
 先完成：显式导入 Codex 文件/目录 → 严格元数据筛选 → SQLite 去重 → 本地网页汇总 → 会话 → 每轮事件。浏览器现在可以在“配置与接入”中保存工具根目录并启用 Codex；同步仅查找已配置的 sessions 和 archived_sessions 子目录，同时刷新 CLI 显式导入的来源。不能通过同步接口任意读取文件。纯工作、确认等待、Token 和费用不因缺少数据而记为零。不会自动写入任何 Agent 配置或注册 hooks。
 
 暂缓：其他五种适配器、后台常驻采集、分支与子 Agent 归属、Token/费用、跨模型精确拆分、打包安装器。先验证真实边界和安全本地闭环，再扩大支持面。
+
+## Claude Code 只读导入增量
+
+现支持 `~/.claude/projects`（或 CLAUDE_CONFIG_DIR / 用户覆盖位置）主会话 JSONL。结构依据官方 SDK `dd27b703647a4f8989ab656f00c85f98090a60fd` 的 [sessions.py](https://github.com/anthropics/claude-agent-sdk-python/blob/dd27b703647a4f8989ab656f00c85f98090a60fd/src/claude_agent_sdk/_internal/sessions.py) 与 [test_sessions.py](https://github.com/anthropics/claude-agent-sdk-python/blob/dd27b703647a4f8989ab656f00c85f98090a60fd/tests/test_sessions.py)。GitHub API 目录查询受代理拒绝，原始源码读取成功。
+
+计时口径是用户消息记录到明确结束记录的时间跨度，不声称精确执行或答复完成时间。仅 `end_turn` / `stop_sequence` 或 `system/turn_duration` 的明确结束标记形成区间；不以最后一条助手消息推断完成，不以 durationMs 反推开始时间。授权等待不可拆分。旧版本缺少明确结束记录时仍可导入会话，但耗时保持未知；合成格式测试通过，尚需用户本机版本验证。
+
+工具返回、注入元信息和压缩摘要不是用户新一轮。子 Agent 文件夹及旧式 agent- 文件不会扫描；sidechain/team、混合 sessionId 和检测到的用户分支拒绝导入，尚不实现完整分支重建。现阶段 Codex 与 Claude 的计时依据不同，界面明确披露，不能直接解释为模型效率排名。数据库增加 agent 字段，旧数据默认仍为 Codex，Claude 会话使用独立 ID 命名空间以免相同 ID 串线。

@@ -109,7 +109,7 @@ export function report(
       statuses: counts,
     },
     basis:
-      "Codex 执行开始事件到完成或中止事件；不是精确用户提交到最终答复的完整耗时。审批等待无法独立拆分。",
+      "Codex：执行开始至结束记录；Claude Code：用户消息至明确结束记录的时间跨度。两种记录口径不同，均不能拆分授权等待，也不是精确的纯工作时间。",
     sessions: included,
   };
 }

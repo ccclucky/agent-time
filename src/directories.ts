@@ -92,7 +92,7 @@ export class Directories {
       source,
       enabled: !!saved?.enabled,
       status,
-      supported: a === "codex",
+      supported: a === "codex" || a === "claude",
       history_subdirectories: RULES[a].logs,
       location_note: inferred.note,
       evidence_url: inferred.evidence_url,
@@ -113,7 +113,7 @@ export class Directories {
       typeof enabled !== "boolean"
     )
       throw new ValidationError("请选择有效工具和接入状态");
-    if (enabled && agent !== "codex")
+    if (enabled && !["codex", "claude"].includes(agent))
       throw new ValidationError(
         "此工具适配器尚未实现，只能保存目录，不能启用接入",
       );
@@ -137,6 +137,7 @@ export class Directories {
   collect() {
     const files = new Map<string, string>(),
       notices: string[] = [];
+    const agents = new Map<string, "codex" | "claude">();
     for (const item of this.list()) {
       if (!item.enabled || !item.supported) continue;
       if (item.status !== "directory") {
@@ -151,8 +152,9 @@ export class Directories {
         )) {
           if (entry.isSymbolicLink()) continue;
           const p = path.join(dir, entry.name);
-          if (entry.isDirectory()) walk(p);
-          else if (entry.isFile() && p.endsWith(".jsonl")) {
+          if (entry.isDirectory()) {
+            if (item.agent !== "claude" || entry.name !== "subagents") walk(p);
+          } else if (entry.isFile() && p.endsWith(".jsonl")) {
             const real = realpathSync(p),
               rel = path.relative(root, real);
             if (
@@ -163,7 +165,13 @@ export class Directories {
               notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
               continue;
             }
+            if (
+              item.agent === "claude" &&
+              path.basename(real).startsWith("agent-")
+            )
+              continue;
             files.set(real, root);
+            agents.set(real, item.agent as "codex" | "claude");
             count++;
             if (files.size > 5000)
               throw new ValidationError(
@@ -191,6 +199,6 @@ export class Directories {
         notices.push(`${item.name} 部分会话目录无法读取；已有记录保留旧快照`);
       }
     }
-    return { files, notices: [...new Set(notices)] };
+    return { files, agents, notices: [...new Set(notices)] };
   }
 }
