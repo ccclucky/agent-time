@@ -59,7 +59,7 @@ jobs:
         id: pack
         run: |
           npm pack
-          TARBALL=$(ls -1 agenttime-*.tgz | tail -n 1)
+          TARBALL=$(ls -1 *.tgz | tail -n 1)
           echo "Generated tarball: $TARBALL"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           node scripts/package-smoke.mjs "$TARBALL"
@@ -68,10 +68,6 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "Token length: ${#NODE_AUTH_TOKEN}"
-          echo "Token prefix: ${NODE_AUTH_TOKEN:0:4}"
-          echo -n "Direct registry curl HTTP code: "
-          curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $NODE_AUTH_TOKEN" https://registry.npmjs.org/-/whoami
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
           npm publish --access public --provenance
 
@@ -82,5 +78,5 @@ jobs:
           npm init -y
           # Verify execution via npm exec / npx from npmjs (with fallback to local tarball in dry-run/timing windows)
           echo "Testing agenttime command execution..."
-          npx --yes "agenttime@${{ steps.release_version.outputs.version }}" --help || \
+          npx --yes "@ccclucky/agent-time@${{ steps.release_version.outputs.version }}" --help || \
           npx --yes --package "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}" -- agenttime --help

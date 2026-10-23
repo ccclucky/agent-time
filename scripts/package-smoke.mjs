@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-const archive = path.resolve(process.argv[2] ?? "agenttime-0.1.0.tgz");
+const archive = path.resolve(
+  process.argv[2] ?? "ccclucky-agent-time-0.1.0.tgz",
+);
 const dir = mkdtempSync(path.join(tmpdir(), "agenttime-package-"));
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const env = { ...process.env, npm_config_cache: path.join(dir, "cache") };
