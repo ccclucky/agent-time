@@ -3,6 +3,12 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.0, leave empty to use package.json)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -37,12 +43,17 @@ jobs:
       - name: Align package.json version with release tag
         id: release_version
         run: |
-          TAG_NAME="${{ github.event.release.tag_name }}"
-          # Strip leading 'v' if present (e.g. v0.2.0 -> 0.2.0)
-          VERSION="${TAG_NAME#v}"
-          echo "Target publish version: $VERSION"
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          TAG_NAME="${{ github.event.release.tag_name || inputs.version }}"
+          if [ -n "$TAG_NAME" ]; then
+            VERSION="${TAG_NAME#v}"
+            echo "Target publish version: $VERSION"
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            echo "Using package.json version: $VERSION"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build package & pre-publish smoke test
         id: pack
