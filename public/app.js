@@ -367,6 +367,14 @@ function timeline() {
   allTurns.sort((a, b) => (a.turn.start_ms || 0) - (b.turn.start_ms || 0));
 
   const totalTurns = allTurns.length;
+
+  if (!state.zoomInitialized && totalTurns > 25) {
+    const initialVisible = Math.min(25, totalTurns);
+    const pctSpan = Math.min(100, Math.max(8, Math.round((initialVisible / totalTurns) * 100)));
+    state.zoomStartPct = Math.max(0, 100 - pctSpan);
+    state.zoomEndPct = 100;
+    state.zoomInitialized = true;
+  }
   const startIdx = Math.floor((state.zoomStartPct / 100) * totalTurns);
   const endIdx = Math.min(totalTurns, Math.ceil((state.zoomEndPct / 100) * totalTurns) || totalTurns);
   const visibleTurns = allTurns.slice(startIdx, Math.max(startIdx + 1, endIdx));
@@ -720,7 +728,7 @@ function table(rows) {
                 <td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td>
                 <td style="color:var(--fg-muted); font-family:var(--font-mono);">${h(stamp(lastAt))}</td>
                 <td>
-                  <button class="btn" data-session="${h(s.id)}" aria-label="查看会话全部轮次">全轮次 →</button>
+                  <button class="btn" data-session="${h(s.id)}" aria-label="下钻会话明细">下钻明细 →</button>
                 </td>
               </tr>
             `;

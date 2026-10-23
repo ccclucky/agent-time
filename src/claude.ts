@@ -22,7 +22,9 @@ export function parseClaude(path: string) {
     project = "未知项目",
     current: string | null = null,
     lastTurnId: string | null = null,
-    excluded = false;
+    excluded = false,
+    sessionTitle: string | null = null,
+    firstPrompt: string | null = null;
   const events: Event[] = [],
     issues = new Set<string>(),
     seen = new Set<string>();
@@ -113,7 +115,37 @@ export function parseClaude(path: string) {
         continue;
       }
 
+      if (r.type === "custom-title" && typeof r.title === "string" && r.title.trim() && r.title !== "undefined") {
+        sessionTitle = r.title.trim();
+        continue;
+      }
       if (r.type === "user") {
+        if (!firstPrompt && !r.isMeta && !r.isCompactSummary) {
+          let t = "";
+          if (typeof content === "string") t = content;
+          else if (Array.isArray(content)) {
+            t = content.filter((b: any) => b && typeof b === "object" && b.type === "text").map((b: any) => b.text).join(" ");
+          }
+          if (t && !t.startsWith("<local-command-caveat>")) {
+            const argsMatch = t.match(/<command-args>([\s\S]*?)<\/command-args>/);
+            let candidate = "";
+            if (argsMatch && argsMatch[1].trim()) {
+              candidate = argsMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+            }
+            if (!candidate) {
+              candidate = t.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+            }
+            if (
+              candidate &&
+              !/^\/?(clear|model|compact|init|help|cost|doctor)(\s+|$)/i.test(candidate) &&
+              !candidate.startsWith("Set model to") &&
+              !candidate.startsWith("Compacted") &&
+              candidate.length >= 3
+            ) {
+              firstPrompt = candidate.slice(0, 60);
+            }
+          }
+        }
         const isToolResult =
           r.toolUseResult ||
           (Array.isArray(content) &&
@@ -216,6 +248,7 @@ export function parseClaude(path: string) {
       id: "claude/" + sid,
       agent: "Claude Code",
       project,
+      title: sessionTitle || firstPrompt || null,
       client: "claude",
     },
     events: [...unique.values()],

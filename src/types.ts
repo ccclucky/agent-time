@@ -75,6 +75,7 @@ export interface Session {
   id: string;
   agent: string;
   project: string;
+  title?: string | null;
   issues: string[];
   turns: Turn[];
   imported_at: string;
