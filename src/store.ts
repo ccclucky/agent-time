@@ -202,9 +202,18 @@ export class Store {
     adapter: "codex" | "claude" = "codex",
   ) {
     const p = realpathSync(expand(filename, os.homedir())),
-      before = statSync(p, { bigint: true });
-    if (p === this.path || !before.isFile() || path.extname(p) !== ".jsonl")
-      throw new ValidationError("请选择支持的 Agent .jsonl 会话文件");
+      before = statSync(p, { bigint: true }),
+      ext = path.extname(p);
+    if (
+      p === this.path ||
+      !before.isFile() ||
+      !(adapter === "codex" ? ext === ".jsonl" || ext === ".zst" : ext === ".jsonl")
+    )
+      throw new ValidationError(
+        adapter === "codex"
+          ? "请选择支持的 Agent .jsonl 或 .jsonl.zst 会话文件"
+          : "请选择支持的 Agent .jsonl 会话文件",
+      );
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
     const data = adapter === "claude" ? parseClaude(p) : parse(p),

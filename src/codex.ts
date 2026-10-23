@@ -1,8 +1,9 @@
 import { Temporal } from "@js-temporal/polyfill";
-import { openSync, readSync, closeSync } from "node:fs";
+import { openSync, readSync, closeSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { TextDecoder } from "node:util";
+import zlib from "node:zlib";
 import { ValidationError, type Event, type Kind } from "./types.js";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 // Match the previous Python JSON serialization so existing snapshots deduplicate.
@@ -72,6 +73,38 @@ export function* lines(path: string): Generator<Buffer> {
     closeSync(fd);
   }
 }
+export function* linesZst(path: string): Generator<Buffer> {
+  if (typeof zlib.zstdDecompressSync !== "function")
+    throw new ValidationError(
+      "此 Node 版本不支持 zstd；请升级到 Node 22.15+（或 23.8+）后再导入 .jsonl.zst 会话",
+    );
+  let buf: Buffer;
+  try {
+    buf = zlib.zstdDecompressSync(readFileSync(path));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (
+      typeof code === "string" &&
+      (code.startsWith("ERR_ZSTD") || code.startsWith("ZSTD_error"))
+    )
+      throw new ValidationError("zstd 解压失败；文件可能已损坏，未导入");
+    throw e;
+  }
+  let start = 0;
+  for (;;) {
+    const i = buf.indexOf(10, start);
+    if (i < 0) break;
+    if (i + 1 - start > 16 * 1024 * 1024)
+      throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+    yield buf.subarray(start, i + 1);
+    start = i + 1;
+  }
+  if (start < buf.length) {
+    if (buf.length - start > 16 * 1024 * 1024)
+      throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+    yield buf.subarray(start);
+  }
+}
 export function parse(path: string) {
   let meta: {
       id: string;
@@ -82,7 +115,7 @@ export function parse(path: string) {
     excluded = false;
   const events: Omit<Event, "key">[] = [],
     issues = new Set<string>();
-  for (const line of lines(path)) {
+  for (const line of path.endsWith(".zst") ? linesZst(path) : lines(path)) {
     if (!line.toString().trim()) continue;
     try {
       const row = JSON.parse(
@@ -101,7 +134,9 @@ export function parse(path: string) {
           p.parent_thread_id ||
           p.history_base ||
           p.subagent_history_start_ordinal ||
-          ![undefined, null, "legacy"].includes(p.history_mode) ||
+          ![undefined, null, "legacy", "paginated"].includes(
+            p.history_mode,
+          ) ||
           ![undefined, null, "user"].includes(p.thread_source)
         )
           excluded = true;

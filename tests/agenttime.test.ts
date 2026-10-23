@@ -204,7 +204,7 @@ for (const extra of [
   { forked_from_id: "x" },
   { parent_thread_id: "x" },
   { history_base: 1 },
-  { history_mode: "paginated" },
+  { history_mode: "unsupported-private-value" },
   { thread_source: "subagent" },
   { subagent_history_start_ordinal: 1 },
 ])

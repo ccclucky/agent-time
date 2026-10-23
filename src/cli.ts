@@ -27,7 +27,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令）\n默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，claude 支持 .jsonl）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
@@ -87,7 +87,11 @@ async function main() {
         if (e.isSymbolicLink()) continue;
         const p = path.join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (e.isFile() && p.endsWith(".jsonl")) {
+        else if (
+          e.isFile() &&
+          (p.endsWith(".jsonl") ||
+            (values.agent === "codex" && p.endsWith(".jsonl.zst")))
+        ) {
           paths.push(p);
           if (paths.length > 5000)
             throw new ValidationError(
@@ -98,7 +102,8 @@ async function main() {
     };
     if (statSync(selected).isFile()) paths.push(selected);
     else walk(selected);
-    if (!paths.length) throw new ValidationError("指定目录没有 .jsonl 文件");
+    if (!paths.length)
+      throw new ValidationError("指定目录没有 .jsonl 或 .jsonl.zst 文件");
     let good = 0,
       failed = 0,
       warnings = 0;

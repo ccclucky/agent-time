@@ -154,7 +154,11 @@ export class Directories {
           const p = path.join(dir, entry.name);
           if (entry.isDirectory()) {
             if (item.agent !== "claude" || entry.name !== "subagents") walk(p);
-          } else if (entry.isFile() && p.endsWith(".jsonl")) {
+          } else if (
+            entry.isFile() &&
+            (p.endsWith(".jsonl") ||
+              (item.agent === "codex" && p.endsWith(".jsonl.zst")))
+          ) {
             const real = realpathSync(p),
               rel = path.relative(root, real);
             if (
