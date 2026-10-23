@@ -150,6 +150,34 @@ function claudeFixtureRows() {
         content: [{ type: "text", text: "完成" }],
       },
     }),
+    // 未完结第三轮：用户提问 + 模型发起工具调用后戛然而止（无 tool_result、
+    // 无 end_turn）→ open 轮次（无结束记录），用于验证总账回填与诚实原因行
+    row("user", "u3", 10, {
+      parentUuid: "a3",
+      message: { role: "user", content: [{ type: "text", text: "再顺手把平板端也修一下" }] },
+    }),
+    row("assistant", "a4", 9, {
+      parentUuid: "u3",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-5",
+        stop_reason: "tool_use",
+        content: [
+          { type: "thinking", thinking: "平板端可能是同一处断点。" },
+          { type: "tool_use", id: "toolu-2", name: "Bash", input: {} },
+        ],
+      },
+    }),
+    // 工具结果落盘（可配对出逐次调用时长），但之后再无 end_turn → 该轮仍为 open
+    row("user", "tr2", 8, {
+      parentUuid: "a4",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu-2", content: "ok" },
+        ],
+      },
+    }),
   ];
 }
 
@@ -561,6 +589,132 @@ async function main() {
     );
     check("sessions table rows carry agent badges", tableBadges > 0, `rows=${tableBadges}`);
 
+    // 10b. Feedback round 3 Fix 1: 工具接入列徽标不得自成边框盒、不得撑破行。
+    //     bbox 审计：每个 agent-cell 内容必须完整落在行框内，且同一行内
+    //     所有 td 的上/下边缘对齐（行边框端到端平直）。
+    const tableAudit = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll(".tablewrap tbody tr")];
+      const shot = (r) => r.getBoundingClientRect();
+      let outOfRow = 0;
+      let misaligned = 0;
+      let checked = 0;
+      for (const tr of rows) {
+        const row = shot(tr);
+        const cell = tr.querySelector(".agent-cell");
+        if (!cell) continue;
+        checked += 1;
+        const c = shot(cell);
+        // td 自身的框就是行框的一部分 —— 旧病灶是 display:flex 让 td 变成
+        // 匿名单元格里的一块，徽标盒高出行、行边框断裂
+        if (c.top < row.top - 0.5 || c.bottom > row.bottom + 0.5) outOfRow += 1;
+        const mark = tr.querySelector(".agent-mark");
+        if (mark) {
+          const m = shot(mark);
+          if (m.top < row.top - 0.5 || m.bottom > row.bottom + 0.5) outOfRow += 1;
+        }
+        const tops = [...tr.querySelectorAll("td")].map((td) => shot(td).top);
+        const bottoms = [...tr.querySelectorAll("td")].map((td) => shot(td).bottom);
+        if (Math.max(...tops) - Math.min(...tops) > 1 || Math.max(...bottoms) - Math.min(...bottoms) > 1) {
+          misaligned += 1;
+        }
+      }
+      return { rows: rows.length, checked, outOfRow, misaligned };
+    });
+    check(
+      "sessions table: agent badges stay inside row bounds and row edges stay straight",
+      tableAudit.checked > 0 && tableAudit.outOfRow === 0 && tableAudit.misaligned === 0,
+      `rows=${tableAudit.rows} checked=${tableAudit.checked} outOfRow=${tableAudit.outOfRow} misaligned=${tableAudit.misaligned}`,
+    );
+    if (process.env.SHOTS_DIR) {
+      await page.screenshot({ path: `${process.env.SHOTS_DIR}/02-sessions-table.png` });
+    }
+
+    // 10c. Feedback round 3 Fix 3: 首页维度聚合统计模块（聚合而非过滤）。
+    await page.evaluate(() => {
+      document.querySelector('[data-page="overview"]')?.click();
+    });
+    await page.waitForTimeout(250);
+    const agg = await page.evaluate(() => {
+      const grid = document.querySelector(".agg-grid");
+      if (!grid) return null;
+      const boxes = [...grid.querySelectorAll(".s1-box")];
+      const sharesOf = (box) =>
+        [...box.querySelectorAll(".agg-share-fill")].map((f) =>
+          parseFloat(f.style.width),
+        );
+      const agentBox = boxes[0];
+      const projectBox = boxes[1];
+      const toolBox = boxes[2];
+      const agentShares = sharesOf(agentBox);
+      const projectShares = sharesOf(projectBox);
+      return {
+        boxes: boxes.length,
+        agentRows: agentBox.querySelectorAll(".agg-row").length,
+        projectRows: projectBox.querySelectorAll(".agg-row").length,
+        toolRows: toolBox.querySelectorAll(".agg-row").length,
+        agentSharesSum: agentShares.reduce((s, x) => s + x, 0),
+        agentShares,
+        agentSharesEveryGT2: agentShares.every((x) => x >= 2),
+        projectSharesSum: projectShares.reduce((s, x) => s + x, 0),
+        basisLine: toolBox.querySelector(".agg-basis")?.textContent?.trim() || "",
+        tail: projectBox.querySelector(".agg-tail")?.textContent?.trim() || "",
+        marks: agentBox.querySelectorAll(".agent-mark").length,
+      };
+    });
+    check(
+      "aggregation module renders three groupings",
+      !!agg && agg.boxes === 3 && agg.agentRows > 0 && agg.projectRows > 0 && agg.toolRows > 0,
+      agg ? `boxes=${agg.boxes} agent=${agg.agentRows} project=${agg.projectRows} tool=${agg.toolRows}` : "no .agg-grid",
+    );
+    check(
+      "aggregation agent shares sum ≈100% (linear, ≥2% visible floor)",
+      !!agg && Math.abs(agg.agentSharesSum - 100) <= 5 && agg.agentSharesEveryGT2,
+      agg ? `sum=${agg.agentSharesSum.toFixed(1)}% widths=[${(agg.agentShares || []).map((x) => (Math.round(x * 10) / 10).toFixed(1)).join(", ")}]` : "no data",
+    );
+    check(
+      "aggregation tool box states its evidence basis and project box its tail",
+      !!agg && agg.basisLine.includes("已测量 breakdown") && (agg.projectRows < 5 || agg.tail.includes("个项目")),
+      agg ? `basis="${agg.basisLine.slice(0, 30)}" tail="${agg.tail}"` : "no data",
+    );
+    check(
+      "aggregation agent rows carry harness badges",
+      !!agg && agg.marks === agg.agentRows,
+      agg ? `marks=${agg.marks}` : "no data",
+    );
+
+    // 10d. Feedback round 3 Fix 4: 徽标内嵌真实标志（OpenAI mark / Pi 像素标）。
+    const badgeMarks = await page.evaluate(() => {
+      const piBadges = document.querySelectorAll('.agent-mark-pi > svg').length;
+      const piPixelSvgs = document.querySelectorAll('.agent-mark-pi svg[viewBox="0 0 4 4"]').length;
+      return {
+        openai: document.querySelectorAll('.agent-mark-codex path[d^="M22.2819 9.8211"]').length,
+        piBadges,
+        piPixelSvgs,
+        piRects: document.querySelectorAll('.agent-mark-pi svg[viewBox="0 0 4 4"] rect').length,
+        crisp: piPixelSvgs,
+        fakeMono: [...document.querySelectorAll(".agent-mark text")].length,
+      };
+    });
+    check(
+      "Codex badge embeds the official OpenAI mark path",
+      badgeMarks.openai > 0,
+      `openai paths=${badgeMarks.openai}`,
+    );
+    check(
+      "Pi badge embeds the new 4x4 pixel mark (10 rects per badge, crispEdges, no text glyph)",
+      badgeMarks.piBadges > 0 &&
+        badgeMarks.piPixelSvgs === badgeMarks.piBadges &&
+        badgeMarks.piRects === badgeMarks.piBadges * 10 &&
+        badgeMarks.fakeMono === 0,
+      `badges=${badgeMarks.piBadges} pixelSvgs=${badgeMarks.piPixelSvgs} rects=${badgeMarks.piRects} text=${badgeMarks.fakeMono}`,
+    );
+    if (process.env.SHOTS_DIR) {
+      await page.screenshot({ path: `${process.env.SHOTS_DIR}/01-homepage.png`, fullPage: true });
+      await page.locator(".agg-grid").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(200);
+      await page.locator(".agg-grid").screenshot({ path: `${process.env.SHOTS_DIR}/05-aggregation.png` });
+    }
+
     // 11. Codex drawer: real prompt from response_item rows, ZDR thinking copy,
     //     friendly exec label + detail line from arguments JSON.
     const report = await (await fetch(`${base}/api/report?start=${new Date(Date.now() - 86400000).toISOString().slice(0, 10)}&end=${new Date().toISOString().slice(0, 10)}&timezone=UTC`)).json();
@@ -607,6 +761,84 @@ async function main() {
         detailBadges.nav === 1 && detailBadges.capsules > 0,
         `nav=${detailBadges.nav} capsules=${detailBadges.capsules}`,
       );
+      await page.evaluate(() => document.querySelector("[data-action='back-overview']")?.click());
+      await page.waitForTimeout(200);
+    }
+
+    // 11b. Feedback round 3 Fix 2: 抽屉总账 —— 已完结轮显示真实数字；
+    //      未完结（open）轮回填可推导数据 + 诚实原因行。
+    const claudeSession = (report.sessions || []).find((s) => s.agent === "Claude Code");
+    check("seeded Claude session has an open turn", !!claudeSession && claudeSession.turns.some((t) => t.status === "open" || t.end_ms == null),
+      claudeSession ? `turns=${claudeSession.turns.length}` : "missing");
+    if (claudeSession) {
+      await page.goto(`${base}/#session/${encodeURIComponent(claudeSession.id)}`, {
+        waitUntil: "networkidle",
+      });
+      const readRollup = () =>
+        page.evaluate(() => {
+          const card = (title) => {
+            const boxes = [...document.querySelectorAll(".drawer-kpi-box")];
+            const box = boxes.find((b) => b.querySelector(".drawer-kpi-title")?.textContent?.includes(title));
+            if (!box) return null;
+            return {
+              val: box.querySelector(".drawer-kpi-val")?.textContent?.trim(),
+              sub: box.querySelector(".drawer-kpi-sub")?.textContent?.trim(),
+            };
+          };
+          return {
+            api: card("模型推理耗时"),
+            tools: card("工具执行耗时"),
+            wait: card("等待人审阅"),
+            wall: card("单轮壁钟时长"),
+          };
+        });
+
+      // 已完结轮（第 1 轮）：breakdown 一手数字，无回填后缀、无原因行
+      await page.locator(".turn-capsule").first().click();
+      await page.waitForTimeout(500);
+      const doneRollup = await readRollup();
+      check(
+        "completed turn shows REAL model/tool/review/wall numbers",
+        !!doneRollup &&
+          doneRollup.api.val !== "—" &&
+          doneRollup.tools.val !== "—" &&
+          doneRollup.wait.val !== "—" &&
+          doneRollup.wall.val !== "—",
+        `api=${doneRollup?.api.val} tools=${doneRollup?.tools.val} wait=${doneRollup?.wait.val} wall=${doneRollup?.wall.val}`,
+      );
+      check(
+        "completed turn tools card keeps the 一手 breakdown basis (no backfill suffix)",
+        !!doneRollup && !(doneRollup.tools.sub || "").includes("逐次调用累计"),
+        `tools sub="${doneRollup?.tools.sub}"`,
+      );
+      if (process.env.SHOTS_DIR) {
+        await page.screenshot({ path: `${process.env.SHOTS_DIR}/04-drawer-completed-turn.png` });
+      }
+
+      // 未完结轮（最后一轮）：工具总账从逐次调用回填，API/Review Wait 给出原因行
+      await page.locator(".turn-capsule").last().click();
+      await page.waitForTimeout(500);
+      const openRollup = await readRollup();
+      check(
+        "open turn backfills Tools total from per-call durations",
+        !!openRollup && openRollup.tools.val !== "—" && (openRollup.tools.sub || "").includes("逐次调用累计") && (openRollup.tools.sub || "").includes("项工具执行"),
+        `tools=${openRollup?.tools.val} sub="${openRollup?.tools.sub}"`,
+      );
+      check(
+        "open turn shows the honest no-end-record reason under API and Review Wait dashes",
+        !!openRollup &&
+          openRollup.api.sub?.includes("该轮未正常结束") &&
+          openRollup.wait.sub?.includes("该轮未正常结束"),
+        `api sub="${openRollup?.api.sub}" wait sub="${openRollup?.wait.sub}"`,
+      );
+      check(
+        "open turn wall time backfills from first start (running span) and work rate stays —",
+        !!openRollup && openRollup.wall.val !== "—" && openRollup.wall.sub?.includes("有效工作率: —"),
+        `wall=${openRollup?.wall.val} sub="${openRollup?.wall.sub}"`,
+      );
+      if (process.env.SHOTS_DIR) {
+        await page.screenshot({ path: `${process.env.SHOTS_DIR}/03-drawer-open-turn.png` });
+      }
       await page.evaluate(() => document.querySelector("[data-action='back-overview']")?.click());
       await page.waitForTimeout(200);
     }
