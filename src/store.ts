@@ -561,22 +561,25 @@ export class Store {
       let work_ms: number | null = null;
       let review_wait_ms: number | null = null;
       let breakdown: Turn["breakdown"] = null;
-
-      if (elapsed !== null && start !== null && end !== null && sessionObj.agent === "Claude Code") {
-        const timing = calculateClaudeTiming(entries, start, end, elapsed);
+      const applyTiming = (
+        timing:
+          | ReturnType<typeof calculateClaudeTiming>
+          | ReturnType<typeof calculatePiTiming>,
+      ) => {
         work_ms = timing.work_ms;
         review_wait_ms = timing.review_wait_ms;
         breakdown = timing.breakdown;
+      };
+
+      if (elapsed !== null && start !== null && end !== null && sessionObj.agent === "Claude Code") {
+        applyTiming(calculateClaudeTiming(entries, start, end, elapsed));
       } else if (
         elapsed !== null &&
         start !== null &&
         end !== null &&
         sessionObj.agent === "Pi"
       ) {
-        const timing = calculatePiTiming(entries, start, end, elapsed);
-        work_ms = timing.work_ms;
-        review_wait_ms = timing.review_wait_ms;
-        breakdown = timing.breakdown;
+        applyTiming(calculatePiTiming(entries, start, end, elapsed));
       }
 
       const turnSubagents = groupSubagents(entries);
