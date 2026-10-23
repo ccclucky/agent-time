@@ -2,14 +2,17 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parse, hash, readSessionIndex } from "./codex.js";
+import { parse, hash, readSessionIndex, type IndexedThread } from "./codex.js";
 import { parseClaude } from "./claude.js";
 import { SCHEMA } from "./schema.js";
-import { Directories } from "./directories.js";
+import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
 import { unionMs } from "./metrics.js";
 import {
+  addUsage,
+  mapUsage,
   ValidationError,
+  zeroUsage,
   type Event,
   type Session,
   type Status,
@@ -18,6 +21,20 @@ import {
   type Turn,
   type TurnBreakdown,
 } from "./types.js";
+
+// session_index.jsonl is read once per config root per refresh/import call:
+// repeated imports under the same root (799 files locally) reuse one parsed
+// Map instead of re-reading the index for every file.
+type SessionIndexCache = Map<string, Map<string, IndexedThread>>;
+function sessionIndex(
+  configRoot: string,
+  cache: SessionIndexCache,
+): Map<string, IndexedThread> {
+  const key = path.resolve(configRoot);
+  let index = cache.get(key);
+  if (!index) cache.set(key, (index = readSessionIndex(key)));
+  return index;
+}
 
 interface Source {
   agent: string;
@@ -204,19 +221,19 @@ export class Store {
       throw e;
     }
   }
-  importFile(
+  async importFile(
     filename: string,
     configRoot: string | null = null,
     adapter: "codex" | "claude" = "codex",
-  ) {
+    indexCache: SessionIndexCache = new Map(),
+  ): Promise<{
+    events: number;
+    issues: string[];
+    external_import_only: boolean;
+  }> {
     const p = realpathSync(expand(filename, os.homedir())),
-      before = statSync(p, { bigint: true }),
-      ext = path.extname(p);
-    if (
-      p === this.path ||
-      !before.isFile() ||
-      !(adapter === "codex" ? ext === ".jsonl" || ext === ".zst" : ext === ".jsonl")
-    )
+      before = statSync(p, { bigint: true });
+    if (p === this.path || !before.isFile() || !isSessionFile(adapter, p))
       throw new ValidationError(
         adapter === "codex"
           ? "请选择支持的 Agent .jsonl 或 .jsonl.zst 会话文件"
@@ -224,7 +241,9 @@ export class Store {
       );
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
-    const codex = adapter === "codex" ? parse(p) : null,
+    // The file-change guard spans the awaited parse: stat before and after, so
+    // a file rewritten mid-import is rejected instead of half-ingested.
+    const codex = adapter === "codex" ? await parse(p) : null,
       data = codex ?? parseClaude(p),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
@@ -233,9 +252,14 @@ export class Store {
       m = data.session;
     // session_index.jsonl lives under the config root the file was discovered
     // in (CODEX_HOME-aware); CLI imports without a config root stay untitled.
+    // The topic is recomputed on every import, so an entry dropped from the
+    // index clears the stored topic rather than leaving a stale one.
     const topic =
       adapter === "codex" && configRoot
-        ? (readSessionIndex(configRoot).get(m.id)?.name ?? "").slice(0, 100) || null
+        ? (sessionIndex(configRoot, indexCache).get(m.id)?.name ?? "").slice(
+            0,
+            100,
+          ) || null
         : null;
     const tokens = codex ? codex.tokens : [];
     this.transaction(() => {
@@ -254,43 +278,47 @@ export class Store {
           topic,
           m.agent,
         );
-    this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
-    this.db.prepare("DELETE FROM token_usage WHERE source_id=?").run(sid);
-    const put = this.db.prepare(
-      "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
-    );
-    for (const e of data.events)
-      put.run(
-        sid,
-        e.key,
-        e.turn_id,
-        e.kind,
-        e.at_ms,
-        e.model,
-        e.agent_id ?? null,
-        e.tool_id ?? null,
-          e.tool_name ?? null,
+      this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
+      this.db.prepare("DELETE FROM token_usage WHERE source_id=?").run(sid);
+      const put = this.db.prepare(
+        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
       );
-    if (tokens.length) {
-      const putTokens = this.db.prepare(
-        "INSERT INTO token_usage(source_id,turn_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens) VALUES(?,?,?,?,?,?,?,?)",
-      );
-      for (const t of tokens)
-        putTokens.run(
+      for (const e of data.events)
+        put.run(
           sid,
-          t.turn_id,
-          t.input_tokens,
-          t.cached_input_tokens,
-          t.cache_write_input_tokens,
-          t.output_tokens,
-          t.reasoning_output_tokens,
-          t.total_tokens,
+          e.key,
+          e.turn_id,
+          e.kind,
+          e.at_ms,
+          e.model,
+          e.agent_id ?? null,
+          e.tool_id ?? null,
+          e.tool_name ?? null,
         );
-    }
+      if (tokens.length) {
+        const putTokens = this.db.prepare(
+          "INSERT INTO token_usage(source_id,turn_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens) VALUES(?,?,?,?,?,?,?,?)",
+        );
+        for (const t of tokens)
+          putTokens.run(
+            sid,
+            t.turn_id,
+            t.input_tokens,
+            t.cached_input_tokens,
+            t.cache_write_input_tokens,
+            t.output_tokens,
+            t.reasoning_output_tokens,
+            t.total_tokens,
+          );
+      }
     });
-    return { events: data.events.length, issues: data.issues };
+    return {
+      events: data.events.length,
+      issues: data.issues,
+      external_import_only: codex?.external_import_only ?? false,
+    };
   }
-  refresh(directories = new Directories(this)) {
+  async refresh(directories = new Directories(this)) {
     const { files, agents, notices } = directories.collect(),
       configured = new Set(
         directories
@@ -313,6 +341,9 @@ export class Store {
     );
     for (const [p, r] of files) paths.set(p, r);
     const failures = new Map<string, string>();
+    // One shared index cache for the whole refresh: every config root's
+    // session_index.jsonl is read and parsed at most once below.
+    const indexCache: SessionIndexCache = new Map();
     let ok = 0,
       failed = 0,
       retired = 0;
@@ -322,13 +353,14 @@ export class Store {
           throw new ValidationError(
             "原会话文件已移动或不再位于启用目录；旧快照保留",
           );
-        this.importFile(
+        await this.importFile(
           p,
           r,
           agents.get(p) ??
             (saved.find((s) => s.path === p)?.agent === "Claude Code"
               ? "claude"
               : "codex"),
+          indexCache,
         );
         ok++;
       } catch (error) {
@@ -404,21 +436,17 @@ export class Store {
         )
         .all() as unknown as (TokenUsage & { session_id: string; turn_id: string })[],
     }));
+    // Session ids and turn ids cannot contain NUL, so this pair key is
+    // collision-free and cheaper than JSON.stringify.
+    const pairKey = (a: string, b: string) => a + "\u0000" + b;
     // The same session may be registered from two paths (e.g. .jsonl and
     // .jsonl.zst); keep the widest snapshot per session/turn.
     const turnTokens = new Map<string, TokenUsage>();
     for (const r of tokenRows) {
-      const key = JSON.stringify([r.session_id, r.turn_id]);
+      const key = pairKey(r.session_id, r.turn_id);
       const prev = turnTokens.get(key);
       if (!prev || r.total_tokens > prev.total_tokens)
-        turnTokens.set(key, {
-          input_tokens: r.input_tokens,
-          cached_input_tokens: r.cached_input_tokens,
-          cache_write_input_tokens: r.cache_write_input_tokens,
-          output_tokens: r.output_tokens,
-          reasoning_output_tokens: r.reasoning_output_tokens,
-          total_tokens: r.total_tokens,
-        });
+        turnTokens.set(key, mapUsage(r, (v) => v));
     }
     const sessions = new Map<string, Session>();
     for (const s of sources) {
@@ -450,7 +478,7 @@ export class Store {
     for (const e of events) {
       if (seen.has(e.key)) continue;
       seen.add(e.key);
-      const key = JSON.stringify([e.session_id, e.turn_id]),
+      const key = pairKey(e.session_id, e.turn_id),
         g = grouped.get(key) ?? {
           sid: e.session_id,
           tid: e.turn_id,
@@ -560,7 +588,7 @@ export class Store {
         response_gap_ms: null,
         subagents: turnSubagents.length ? turnSubagents : undefined,
         breakdown,
-        tokens: turnTokens.get(JSON.stringify([sid, tid])) ?? null,
+        tokens: turnTokens.get(pairKey(sid, tid)) ?? null,
       });
     }
     for (const s of sessions.values()) {
@@ -589,29 +617,7 @@ export class Store {
 
       const tokened = s.turns.filter((t) => t.tokens);
       s.tokens = tokened.length
-        ? tokened.reduce<TokenUsage>(
-          (acc, t) => {
-            const u = t.tokens!;
-            return {
-              input_tokens: acc.input_tokens + u.input_tokens,
-              cached_input_tokens: acc.cached_input_tokens + u.cached_input_tokens,
-              cache_write_input_tokens:
-                acc.cache_write_input_tokens + u.cache_write_input_tokens,
-              output_tokens: acc.output_tokens + u.output_tokens,
-              reasoning_output_tokens:
-                acc.reasoning_output_tokens + u.reasoning_output_tokens,
-              total_tokens: acc.total_tokens + u.total_tokens,
-            };
-          },
-          {
-            input_tokens: 0,
-            cached_input_tokens: 0,
-            cache_write_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_output_tokens: 0,
-            total_tokens: 0,
-          },
-        )
+        ? tokened.reduce((acc, t) => addUsage(acc, t.tokens!), zeroUsage())
         : null;
 
       const sessionSubagents = groupSubagents(

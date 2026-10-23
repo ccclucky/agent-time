@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { Store } from "../src/store.js";
-import { parse } from "../src/codex.js";
+import { parse, ExcludedSessionError } from "../src/codex.js";
+import { ValidationError } from "../src/types.js";
 import { report } from "../src/metrics.js";
 
 const resources: { dir: string; store: Store }[] = [];
@@ -90,12 +91,12 @@ function file(dir: string, rows: unknown[], name = "a.jsonl") {
   writeFileSync(p, rows.map((x) => JSON.stringify(x)).join("\n") + "\n");
   return p;
 }
-const kindsOf = (p: ReturnType<typeof parse>) =>
+const kindsOf = (p: Awaited<ReturnType<typeof parse>>) =>
   p.events.map((e) => [e.kind, e.turn_id, e.at_ms]);
 
-test("turn boundaries map to start/complete/fail/abort with row timestamps", () => {
+test("turn boundaries map to start/complete/fail/abort with row timestamps", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       msg("task_started", 0, "t1"),
@@ -113,9 +114,9 @@ test("turn boundaries map to start/complete/fail/abort with row timestamps", () 
   ]);
 });
 
-test("response_item tool calls pair by call_id and attribute to the nearest task_started", () => {
+test("response_item tool calls pair by call_id and attribute to the nearest task_started", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       resp("function_call", 0, { call_id: "call_9", name: "shell_command" }, 30),
@@ -152,9 +153,9 @@ test("response_item tool calls pair by call_id and attribute to the nearest task
   assert(result.issues.includes("部分事件没有可关联的交互 ID，未猜测归属"));
 });
 
-test("only the first turn_context of a turn emits a model event", () => {
+test("only the first turn_context of a turn emits a model event", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       msg("task_started", 0, "t1"),
@@ -176,9 +177,9 @@ test("only the first turn_context of a turn emits a model event", () => {
   );
 });
 
-test("task_complete is calibrated to the last non-UserMessage item_completed anchor", () => {
+test("task_complete is calibrated to the last non-UserMessage item_completed anchor", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       msg("task_started", 0, "t1"),
@@ -194,9 +195,9 @@ test("task_complete is calibrated to the last non-UserMessage item_completed anc
   ]);
 });
 
-test("turns without item_completed fall back to the task_complete row timestamp", () => {
+test("turns without item_completed fall back to the task_complete row timestamp", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [meta(), msg("task_started", 0, "t1"), msg("task_complete", 10, "t1")]),
   );
   assert.deepEqual(kindsOf(result), [
@@ -205,9 +206,9 @@ test("turns without item_completed fall back to the task_complete row timestamp"
   ]);
 });
 
-test("anchors outside the turn window never stretch or flip the completion", () => {
+test("anchors outside the turn window never stretch or flip the completion", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       msg("task_started", 0, "t1"),
@@ -219,9 +220,9 @@ test("anchors outside the turn window never stretch or flip the completion", () 
   assert.equal(complete.at_ms, at(10));
 });
 
-test("external-import turns keep no timing events and add an issues note", () => {
+test("external-import turns keep no timing events and add an issues note", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       msg("task_started", 0, "external-import-turn-1"),
@@ -236,21 +237,61 @@ test("external-import turns keep no timing events and add an issues note", () =>
     ["complete", "t2", at(31)],
   ]);
   assert(result.issues.includes("外部导入轮次时间戳为导入时刻，不参与计时"));
+  // A real turn remains, so this is not an external-import-only session.
+  assert.equal(result.external_import_only, false);
 });
 
-test("codex parse reports the three-state basis issue", () => {
+test("external-import-only sessions flag external_import_only instead of text matching", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
+    file(dir, [
+      meta(),
+      msg("task_started", 0, "external-import-turn-1"),
+      msg("task_complete", 1, "external-import-turn-1"),
+    ]),
+  );
+  assert.equal(result.events.length, 0);
+  assert.equal(result.external_import_only, true);
+});
+
+test("by-design exclusions throw ExcludedSessionError (a ValidationError subclass)", async () => {
+  const { dir } = setup();
+  const subagentFile = file(dir, [
+    { ...meta("s2"), payload: { ...meta("s2").payload, parent_thread_id: "p" } },
+    msg("task_started", 0, "t1"),
+  ]);
+  await assert.rejects(() => parse(subagentFile), ExcludedSessionError);
+  await assert.rejects(() => parse(subagentFile), ValidationError);
+  await assert.rejects(
+    () =>
+      parse(
+        file(dir, [
+          meta(),
+          msg("task_started", 0, "t1"),
+          {
+            type: "event_msg",
+            timestamp: ts(0),
+            payload: { type: "thread_rolled_back" },
+          },
+        ]),
+      ),
+    ExcludedSessionError,
+  );
+});
+
+test("codex parse reports the three-state basis issue", async () => {
+  const { dir } = setup();
+  const result = await parse(
     file(dir, [meta(), msg("task_started", 0, "t1"), msg("task_complete", 1, "t1")]),
   );
   assert(
-    result.issues.some((i) => /三态切分/.test(i) && /等待人工未单独计量/.test(i)),
+    result.issues.some((i) => /三态切分/.test(i) && /等待人审阅未单独计量/.test(i)),
   );
 });
 
-test("codex sessions compute work, review wait, standby and tool breakdown", () => {
+test("codex sessions compute work, review wait, standby and tool breakdown", async () => {
   const { dir, store } = setup();
-  store.importFile(
+  await store.importFile(
     file(dir, [
       meta(),
       // Turn 1: 00:00 -> agent done 00:06 (task_complete row lazily written 00:15)
@@ -386,18 +427,19 @@ function findRealSamples(limit = 5, scanCap = 60) {
   return picked;
 }
 
-realTest("real multi-turn .jsonl.zst samples produce non-null three-state timing", () => {
+realTest("real multi-turn .jsonl.zst samples produce non-null three-state timing", async () => {
   const samples = findRealSamples();
   assert.ok(samples.length >= 1, "no suitable real samples found");
   const { dir, store } = setup();
-  const imported = samples.filter((p) => {
+  const imported: string[] = [];
+  for (const p of samples) {
     try {
-      store.importFile(p);
-      return true;
+      await store.importFile(p);
+      imported.push(p);
     } catch {
-      return false;
+      // keep scanning
     }
-  });
+  }
   assert.ok(imported.length >= 1);
   const sessions = store.sessions().filter((s) => s.agent === "Codex");
   assert.ok(sessions.length >= 1);

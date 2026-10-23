@@ -38,6 +38,42 @@ export interface TokenUsage {
   reasoning_output_tokens: number;
   total_tokens: number;
 }
+export type UsageField = keyof TokenUsage;
+export const TOKEN_FIELDS = [
+  "input_tokens",
+  "cached_input_tokens",
+  "cache_write_input_tokens",
+  "output_tokens",
+  "reasoning_output_tokens",
+  "total_tokens",
+] as const satisfies readonly UsageField[];
+export const zeroUsage = (): TokenUsage => ({
+  input_tokens: 0,
+  cached_input_tokens: 0,
+  cache_write_input_tokens: 0,
+  output_tokens: 0,
+  reasoning_output_tokens: 0,
+  total_tokens: 0,
+});
+// Named-field usage helpers: field arithmetic (diff, sum, copy) goes through
+// mapUsage so consumers never repeat the six-field ladder by hand.
+export function mapUsage(
+  usage: TokenUsage,
+  fn: (value: number, field: UsageField) => number,
+): TokenUsage {
+  // Build from TOKEN_FIELDS only: callers may pass wider rows (token_usage
+  // joins carry session_id/turn_id), and the result must stay a pure
+  // TokenUsage so extra columns never leak into API payloads.
+  const out = {} as Record<UsageField, number>;
+  for (const f of TOKEN_FIELDS) out[f] = fn(usage[f], f);
+  return out;
+}
+export const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage =>
+  mapUsage(a, (v, f) => v + b[f]);
+export const diffUsage = (
+  end: TokenUsage,
+  start: TokenUsage | null,
+): TokenUsage => mapUsage(end, (v, f) => Math.max(0, v - (start?.[f] ?? 0)));
 
 export interface SubagentSummary {
   agent_id: string;

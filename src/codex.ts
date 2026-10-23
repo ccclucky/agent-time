@@ -1,10 +1,22 @@
 import { Temporal } from "@js-temporal/polyfill";
-import { openSync, readSync, closeSync, readFileSync } from "node:fs";
+import {
+  openSync,
+  readSync,
+  closeSync,
+  readFileSync,
+  createReadStream,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { join, posix } from "node:path";
 import { TextDecoder } from "node:util";
 import zlib from "node:zlib";
-import { ValidationError, type Event, type Kind, type TokenUsage } from "./types.js";
+import {
+  ValidationError,
+  diffUsage,
+  type Event,
+  type Kind,
+  type TokenUsage,
+} from "./types.js";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 // Match the previous Python JSON serialization so existing snapshots deduplicate.
 export function legacyJSON(value: unknown): string {
@@ -37,22 +49,20 @@ const EXTERNAL_IMPORT_TURN = "external-import-turn-";
 // share the same last_token_usage (measured 2,994 repeated pairs locally), so
 // a turn's usage is the diff between its final snapshot and the previous
 // turn's final snapshot — never a sum of last_token_usage.
-const TOKEN_FIELDS = [
-  "input_tokens",
-  "cached_input_tokens",
-  "cache_write_input_tokens",
-  "output_tokens",
-  "reasoning_output_tokens",
-  "total_tokens",
-] as const;
-type TokenSnapshot = readonly number[];
+type TokenSnapshot = TokenUsage;
 const tokenSnapshot = (v: unknown): TokenSnapshot | null => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
-  return TOKEN_FIELDS.map((f) => {
-    const x = r[f];
-    return typeof x === "number" && Number.isFinite(x) ? x : 0;
-  });
+  const num = (x: unknown) =>
+    typeof x === "number" && Number.isFinite(x) ? x : 0;
+  return {
+    input_tokens: num(r.input_tokens),
+    cached_input_tokens: num(r.cached_input_tokens),
+    cache_write_input_tokens: num(r.cache_write_input_tokens),
+    output_tokens: num(r.output_tokens),
+    reasoning_output_tokens: num(r.reasoning_output_tokens),
+    total_tokens: num(r.total_tokens),
+  };
 };
 const validId = (v: unknown): v is string =>
   typeof v === "string" && ID.test(v);
@@ -74,38 +84,100 @@ export function timestamp(value: unknown): number {
     throw new ValidationError("invalid timestamp");
   }
 }
+const LINE_CAP = 16 * 1024 * 1024;
+// Cumulative decompressed ceiling: the 512 MiB cap applies to the compressed
+// file, so a zip-bomb-ish input could otherwise stream out multi-GiB payloads.
+export const DECOMPRESSED_CAP = 2 * 1024 * 1024 * 1024;
+// One chunk→line splitter shared by the sync plain-file reader and the
+// streaming zstd reader, so the 16 MiB single-record guard exists only here.
+// The pending queue holds newline-free carry-over buffers; a line contained in
+// a single chunk is returned as a zero-copy view, and only lines spanning
+// chunk boundaries are copied. (Concatenating on every chunk instead measurably
+// balloons peak RSS ~6x on a 38 MiB payload due to allocator behavior, so the
+// queue design is deliberate.)
+class LineSplitter {
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
+  push(chunk: Buffer): Buffer[] {
+    const out: Buffer[] = [];
+    let from = 0;
+    for (;;) {
+      const i = chunk.indexOf(10, from);
+      if (i < 0) break;
+      const lineEnd = i + 1;
+      if (this.pendingBytes + (lineEnd - from) > LINE_CAP)
+        throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+      out.push(
+        this.pending.length === 0 && from === 0
+          ? chunk.subarray(0, lineEnd)
+          : Buffer.concat([...this.pending, chunk.subarray(from, lineEnd)]),
+      );
+      this.pending = [];
+      this.pendingBytes = 0;
+      from = lineEnd;
+    }
+    if (from < chunk.length) {
+      this.pending.push(chunk.subarray(from));
+      this.pendingBytes += chunk.length - from;
+      if (this.pendingBytes > LINE_CAP)
+        throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+    }
+    return out;
+  }
+  flush(): Buffer | null {
+    if (!this.pending.length) return null;
+    const tail = Buffer.concat(this.pending);
+    this.pending = [];
+    this.pendingBytes = 0;
+    return tail;
+  }
+}
 export function* lines(path: string): Generator<Buffer> {
   const fd = openSync(path, "r"),
-    chunk = Buffer.alloc(64 * 1024);
-  let pending = Buffer.alloc(0);
+    chunk = Buffer.alloc(64 * 1024),
+    splitter = new LineSplitter();
   try {
     for (;;) {
       const n = readSync(fd, chunk, 0, chunk.length, null);
       if (!n) break;
-      pending = Buffer.concat([pending, chunk.subarray(0, n)]);
-      let i;
-      while ((i = pending.indexOf(10)) >= 0) {
-        if (i + 1 > 16 * 1024 * 1024)
-          throw new ValidationError("单条记录超过 16 MiB；文件未导入");
-        yield pending.subarray(0, i + 1);
-        pending = pending.subarray(i + 1);
-      }
-      if (pending.length > 16 * 1024 * 1024)
-        throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+      yield* splitter.push(chunk.subarray(0, n));
     }
-    if (pending.length) yield pending;
+    const tail = splitter.flush();
+    if (tail) yield tail;
   } finally {
     closeSync(fd);
   }
 }
-export function* linesZst(path: string): Generator<Buffer> {
-  if (typeof zlib.zstdDecompressSync !== "function")
+// Streaming zstd decode (zlib.createZstdDecompress): the decompressed payload
+// is never materialized whole, so a highly compressible file under the 512 MiB
+// compressed cap cannot balloon RSS. Lines and strict UTF-8 decoding behave
+// exactly like the plain .jsonl path.
+export async function* linesZst(
+  path: string,
+  maxDecompressedBytes: number = DECOMPRESSED_CAP,
+): AsyncGenerator<Buffer> {
+  if (typeof zlib.createZstdDecompress !== "function")
     throw new ValidationError(
       "此 Node 版本不支持 zstd；请升级到 Node 22.15+（或 23.8+）后再导入 .jsonl.zst 会话",
     );
-  let buf: Buffer;
+  const source = createReadStream(path),
+    out = source.pipe(zlib.createZstdDecompress()),
+    splitter = new LineSplitter();
+  // createReadStream opens lazily; surface its errors (ENOENT/EACCES/…) through
+  // the piped stream so the async iteration below rejects instead of hanging.
+  source.on("error", (e) =>
+    out.destroy(out.readableEnded ? undefined : e),
+  );
+  let total = 0;
   try {
-    buf = zlib.zstdDecompressSync(readFileSync(path));
+    for await (const chunk of out as AsyncIterable<Buffer>) {
+      total += chunk.length;
+      if (total > maxDecompressedBytes)
+        throw new ValidationError(
+          "解压后数据超过 2 GiB 上限；文件可能异常膨胀，未导入",
+        );
+      yield* splitter.push(chunk);
+    }
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (
@@ -114,21 +186,12 @@ export function* linesZst(path: string): Generator<Buffer> {
     )
       throw new ValidationError("zstd 解压失败；文件可能已损坏，未导入");
     throw e;
+  } finally {
+    out.destroy();
+    source.destroy();
   }
-  let start = 0;
-  for (;;) {
-    const i = buf.indexOf(10, start);
-    if (i < 0) break;
-    if (i + 1 - start > 16 * 1024 * 1024)
-      throw new ValidationError("单条记录超过 16 MiB；文件未导入");
-    yield buf.subarray(start, i + 1);
-    start = i + 1;
-  }
-  if (start < buf.length) {
-    if (buf.length - start > 16 * 1024 * 1024)
-      throw new ValidationError("单条记录超过 16 MiB；文件未导入");
-    yield buf.subarray(start);
-  }
+  const tail = splitter.flush();
+  if (tail) yield tail;
 }
 export interface IndexedThread {
   name: string;
@@ -171,7 +234,18 @@ export function readSessionIndex(
         updated_at_ms = null;
       }
     }
-    map.set(id, { name: thread_name, updated_at_ms });
+    // Newest-wins on duplicate ids: the index may repeat a thread id across
+    // lines, and updated_at (the thread's last rename/naming time) selects the
+    // freshest entry. It is a duplicate tie-breaker, not a staleness cutoff —
+    // an older line never drops the topic of a still-known thread.
+    const prev = map.get(id),
+      entry = { name: thread_name, updated_at_ms };
+    if (
+      !prev ||
+      (updated_at_ms ?? Number.NEGATIVE_INFINITY) >=
+        (prev.updated_at_ms ?? Number.NEGATIVE_INFINITY)
+    )
+      map.set(id, entry);
   }
   return map;
 }
@@ -181,9 +255,18 @@ export interface ParseResult {
   events: Event[];
   tokens: ({ turn_id: string } & TokenUsage)[];
   issues: string[];
+  // Stable discriminator (never the Chinese issue text): every timing-bearing
+  // turn was an external-agent import, so zero events is the designed outcome.
+  external_import_only: boolean;
 }
 
-export function parse(path: string): ParseResult {
+// Stable machine discriminator for by-design exclusions (unknown/remote
+// provenance, subagents, forked/inherited histories, rollbacks). Gates match
+// this subclass instead of re-matching the human-readable message, which
+// stays free to change.
+export class ExcludedSessionError extends ValidationError {}
+
+export async function parse(path: string): Promise<ParseResult> {
   let meta: {
       id: string;
       agent: string;
@@ -220,7 +303,11 @@ export function parse(path: string): ParseResult {
       ...(tool_name ? { tool_name } : {}),
     });
   };
-  for (const line of path.endsWith(".zst") ? linesZst(path) : lines(path)) {
+  // for-await drives both sources uniformly: the async streaming zstd reader
+  // and the sync plain-.jsonl reader (sync generators are async-iterable).
+  for await (const line of path.endsWith(".zst")
+    ? linesZst(path)
+    : lines(path)) {
     if (!line.toString().trim()) continue;
     try {
       const row = JSON.parse(
@@ -379,11 +466,11 @@ export function parse(path: string): ParseResult {
   }
   if (!meta) throw new ValidationError("未找到有效 Codex 会话元数据");
   if (excluded)
-    throw new ValidationError(
+    throw new ExcludedSessionError(
       "来源未知、远程、子 Agent、分支继承或回滚记录暂不支持；未导入",
     );
   issues.add(
-    "Codex：基于 task_started/task_complete、工具调用配对与 item_completed 锚点的三态切分；本地语料无审批事件，等待人工未单独计量",
+    "Codex：基于 task_started/task_complete、工具调用配对与 item_completed 锚点的三态切分；本地语料无审批事件，等待人审阅未单独计量",
   );
   if (externalSeen)
     issues.add("外部导入轮次时间戳为导入时刻，不参与计时");
@@ -392,17 +479,10 @@ export function parse(path: string): ParseResult {
     const key = hash(legacyJSON([meta.id, e]));
     unique.set(key, { ...e, key });
   }
-  // Field order mirrors TOKEN_FIELDS: input, cached, cache_write, output,
-  // reasoning, total.
   const tokens = [...turnTokens.entries()].map(
     ([turn_id, { start, end }]): { turn_id: string } & TokenUsage => ({
       turn_id,
-      input_tokens: Math.max(0, end[0] - (start?.[0] ?? 0)),
-      cached_input_tokens: Math.max(0, end[1] - (start?.[1] ?? 0)),
-      cache_write_input_tokens: Math.max(0, end[2] - (start?.[2] ?? 0)),
-      output_tokens: Math.max(0, end[3] - (start?.[3] ?? 0)),
-      reasoning_output_tokens: Math.max(0, end[4] - (start?.[4] ?? 0)),
-      total_tokens: Math.max(0, end[5] - (start?.[5] ?? 0)),
+      ...diffUsage(end, start),
     }),
   );
   return {
@@ -410,5 +490,6 @@ export function parse(path: string): ParseResult {
     events: [...unique.values()],
     tokens,
     issues: [...issues].sort(),
+    external_import_only: externalSeen && unique.size === 0,
   };
 }

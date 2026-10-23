@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "../src/store.js";
 import { Directories } from "../src/directories.js";
-import { parse } from "../src/codex.js";
+import { parse, linesZst, DECOMPRESSED_CAP } from "../src/codex.js";
 import { ValidationError } from "../src/types.js";
 import { report } from "../src/metrics.js";
 const hasZstd =
@@ -70,27 +70,27 @@ function zstFile(dir: string, rows: unknown[], name = "a.jsonl.zst") {
 }
 const summary = (s: Store) =>
   report(s.sessions(), "2026-10-21", "2026-10-21", "UTC").summary;
-test("plain .jsonl sessions with paginated history_mode import", () => {
+test("plain .jsonl sessions with paginated history_mode import", async () => {
   const { dir, store } = setup();
-  store.importFile(file(dir, [meta("p1"), event("task_started", 0), event("task_complete", 10)]));
+  await store.importFile(file(dir, [meta("p1"), event("task_started", 0), event("task_complete", 10)]));
   assert.equal(store.sessions().length, 1);
   assert.equal(summary(store).processing_ms, 600000);
 });
-zst("parse reads .jsonl.zst identically to the uncompressed original", () => {
+zst("parse reads .jsonl.zst identically to the uncompressed original", async () => {
   const { dir } = setup();
-  const expected = parse(file(dir, rows(), "plain.jsonl"));
-  const result = parse(zstFile(dir, rows(), "rollout-2026-06-13T09-30-00-01.jsonl.zst"));
+  const expected = await parse(file(dir, rows(), "plain.jsonl"));
+  const result = await parse(zstFile(dir, rows(), "rollout-2026-06-13T09-30-00-01.jsonl.zst"));
   assert.deepEqual(result, expected);
   assert.equal(result.session.id, "s1");
   assert.equal(result.events.length, 2);
 });
-zst("importFile stores .jsonl.zst events idempotently", () => {
+zst("importFile stores .jsonl.zst events idempotently", async () => {
   const { dir, store } = setup(),
     p = zstFile(dir, rows());
-  const { events, issues } = store.importFile(p);
+  const { events, issues } = await store.importFile(p);
   assert.equal(events, 2);
   assert.ok(issues.some((i: string) => /三态切分/.test(i)));
-  store.importFile(p);
+  await store.importFile(p);
   assert.equal(store.sessions().length, 1);
   assert.equal(summary(store).processing_ms, 600000);
   assert.equal(
@@ -98,7 +98,7 @@ zst("importFile stores .jsonl.zst events idempotently", () => {
     2,
   );
 });
-zst("collect discovers nested .jsonl.zst for codex only, claude stays .jsonl", () => {
+zst("collect discovers nested .jsonl.zst for codex only, claude stays .jsonl", async () => {
   const { store, dirs, home } = setup();
   const zstP = zstFile(
     path.join(home, ".codex", "sessions", "2026", "06", "13"),
@@ -121,28 +121,59 @@ zst("collect discovers nested .jsonl.zst for codex only, claude stays .jsonl", (
   assert(files.has(realpathSync(zstP)));
   assert(files.has(realpathSync(jsonlP)));
   assert(!files.has(realpathSync(claudeZst)));
-  assert.equal(store.refresh(dirs).updated, 2);
+  assert.equal((await store.refresh(dirs)).updated, 2);
   assert.equal(store.sessions().length, 2);
   assert.equal(summary(store).processing_ms, 900000);
 });
-zst("claude adapter rejects .zst files", () => {
+zst("claude adapter rejects .zst files", async () => {
   const { dir, store } = setup(),
     p = zstFile(dir, rows());
-  assert.throws(() => store.importFile(p, null, "claude"), ValidationError);
+  await assert.rejects(() => store.importFile(p, null, "claude"), ValidationError);
   assert.equal(store.sessions().length, 0);
 });
-zst("corrupt zstd data reports a validation error without importing", () => {
+zst("codex importFile rejects a bare .zst file that is not .jsonl.zst", async () => {
+  const { dir, store } = setup(),
+    p = zstFile(dir, rows(), "plain.zst");
+  await assert.rejects(() => store.importFile(p), ValidationError);
+  assert.equal(store.sessions().length, 0);
+});
+zst("corrupt zstd data reports a validation error without importing", async () => {
   const { dir, store } = setup(),
     p = path.join(dir, "broken.jsonl.zst");
   writeFileSync(p, Buffer.from("garbage-not-zstd"));
-  assert.throws(() => store.importFile(p), ValidationError);
+  await assert.rejects(() => store.importFile(p), ValidationError);
   assert.equal(store.sessions().length, 0);
 });
-zst("decompressed records still respect the 16 MiB single-line cap", () => {
+zst("streaming decode enforces the cumulative decompressed-size cap", async () => {
+  const { dir } = setup();
+  const payload = [
+    meta(),
+    event("task_started", 0, "t1"),
+    event("task_complete", 10, "t1"),
+  ];
+  const p = zstFile(dir, payload);
+  const text = payload.map((x) => JSON.stringify(x)).join("\n") + "\n";
+  const size = Buffer.byteLength(text);
+  // Exact decompressed size: allowed, and the streamed lines reassemble the
+  // original payload byte for byte.
+  const got: Buffer[] = [];
+  for await (const line of linesZst(p, size)) got.push(line);
+  assert.equal(Buffer.concat(got).toString(), text);
+  // One byte under the payload: the cumulative cap rejects mid-stream.
+  await assert.rejects(
+    async () => {
+      for await (const _ of linesZst(p, size - 1));
+    },
+    ValidationError,
+  );
+  // The production ceiling is 2 GiB of decompressed output.
+  assert.equal(DECOMPRESSED_CAP, 2 * 1024 * 1024 * 1024);
+});
+zst("decompressed records still respect the 16 MiB single-line cap", async () => {
   const { dir } = setup(),
     p = zstFile(dir, [
       meta(),
       event("task_started", 0, "t1", { pad: "x".repeat(17 * 1024 * 1024) }),
     ]);
-  assert.throws(() => parse(p), ValidationError);
+  await assert.rejects(() => parse(p), ValidationError);
 });

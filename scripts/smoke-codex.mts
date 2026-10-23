@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 // Full-corpus silent smoke for the Codex adapter (spec #5 acceptance gate).
 // Batch-imports every local .jsonl.zst session through the REAL parse/import
-// path into a throwaway database and classifies the outcome. Any unexpected
-// parse failure exits non-zero; empty stubs and by-design exclusions are
-// reported but do not fail the run.
+// path into a throwaway database and classifies the outcome. Classification
+// uses stable discriminators (ExcludedSessionError subclass + the
+// external_import_only flag), never Chinese message substrings, so the
+// human-readable copy stays free to change. Any unexpected parse failure
+// exits non-zero; empty stubs and by-design exclusions are reported but do
+// not fail the run.
 import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 import { Store } from "../src/store.js";
-import { ValidationError } from "../src/types.js";
-
-const EXCLUDED_MARKER = "暂不支持；未导入";
-const EXTERNAL_MARKER = "外部导入轮次时间戳为导入时刻，不参与计时";
+import { ExcludedSessionError } from "../src/codex.js";
 
 export function collectCodexFiles(root: string): string[] {
   const files: string[] = [];
@@ -49,7 +49,7 @@ export interface SmokeSummary {
   failures: { file: string; reason: string }[];
 }
 
-export function runSmoke(codexHome: string): SmokeSummary {
+export async function runSmoke(codexHome: string): Promise<SmokeSummary> {
   const summary: SmokeSummary = {
     root: codexHome,
     total: 0,
@@ -65,18 +65,17 @@ export function runSmoke(codexHome: string): SmokeSummary {
     for (const p of collectCodexFiles(codexHome)) {
       summary.total++;
       try {
-        const result = store.importFile(p, codexHome);
+        const result = await store.importFile(p, codexHome);
         if (result.events > 0) summary.imported++;
-        else if (result.issues.some((i) => i.includes(EXTERNAL_MARKER)))
+        else if (result.external_import_only)
           summary.external_import_only++;
         else summary.empty_stubs++;
       } catch (e) {
-        if (e instanceof ValidationError && e.message.includes(EXCLUDED_MARKER))
-          summary.excluded_by_design++;
+        if (e instanceof ExcludedSessionError) summary.excluded_by_design++;
         else
           summary.failures.push({
             file: path.basename(p),
-            reason: e instanceof ValidationError ? e.message : String(e),
+            reason: e instanceof Error ? e.message : String(e),
           });
       }
     }
@@ -105,7 +104,7 @@ if (isMain()) {
     console.error(`Codex 数据目录不存在：${root}`);
     process.exit(2);
   }
-  const summary = runSmoke(root);
+  const summary = await runSmoke(root);
   console.log(JSON.stringify(summary, null, 2));
   process.exitCode = summary.failures.length ? 1 : 0;
 }

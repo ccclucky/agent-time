@@ -83,7 +83,7 @@ function sessionIndex(configRoot: string, entries: unknown[]) {
 
 // ---------------------------------------------------------------- slice A: index
 
-test("readSessionIndex parses named threads with odd fractional updated_at digits", () => {
+test("readSessionIndex parses named threads with odd fractional updated_at digits", async () => {
   const { dir } = setup();
   sessionIndex(dir, [
     {
@@ -109,7 +109,7 @@ test("readSessionIndex parses named threads with odd fractional updated_at digit
   );
 });
 
-test("readSessionIndex degrades to an empty map on missing index, null root or bad lines", () => {
+test("readSessionIndex degrades to an empty map on missing index, null root or bad lines", async () => {
   const { dir } = setup();
   assert.equal(readSessionIndex(path.join(dir, "absent")).size, 0);
   assert.equal(readSessionIndex(null).size, 0);
@@ -126,14 +126,14 @@ test("readSessionIndex degrades to an empty map on missing index, null root or b
   assert.equal(map.get("x3")?.updated_at_ms, null);
 });
 
-test("importFile enriches the topic from the session index under the config root", () => {
+test("importFile enriches the topic from the session index under the config root", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [
     { id: "s1", thread_name: "修复构建脚手架", updated_at: "2026-05-01T08:00:00.5Z" },
   ]);
   const p = file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]);
-  store.importFile(p, configRoot);
+  await store.importFile(p, configRoot);
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].topic, "修复构建脚手架");
@@ -141,15 +141,15 @@ test("importFile enriches the topic from the session index under the config root
   assert.equal(rep.sessions[0].topic, "修复构建脚手架");
 });
 
-test("unnamed sessions and missing indexes import fine without a topic", () => {
+test("unnamed sessions and missing indexes import fine without a topic", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "other", thread_name: "别的线程", updated_at: "2026-05-01T08:00:00Z" }]);
-  store.importFile(
+  await store.importFile(
     file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")], "named.jsonl"),
     configRoot,
   );
-  store.importFile(
+  await store.importFile(
     file(dir, [meta("s2"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")], "noindex.jsonl"),
     path.join(dir, "empty-root"),
   );
@@ -160,25 +160,58 @@ test("unnamed sessions and missing indexes import fine without a topic", () => {
   );
 });
 
-test("a stale topic is cleared when a later import no longer finds the thread", () => {
+test("a stale topic is cleared when a later import no longer finds the thread", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   const indexPath = sessionIndex(configRoot, [
     { id: "s1", thread_name: "旧主题", updated_at: "2026-05-01T08:00:00Z" },
   ]);
   const p = file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]);
-  store.importFile(p, configRoot);
+  await store.importFile(p, configRoot);
   assert.equal(store.sessions()[0].topic, "旧主题");
   unlinkSync(indexPath);
-  store.importFile(p, configRoot);
+  await store.importFile(p, configRoot);
   assert.equal(store.sessions()[0].topic, null);
 });
 
-test("topics longer than 100 characters are truncated like project names", () => {
+test("duplicate index ids resolve newest-wins by updated_at, regardless of line order", async () => {
+  const { dir, store } = setup();
+  const configRoot = path.join(dir, "codex-home");
+  // Newest entry first: an older duplicate on a later line must not win.
+  sessionIndex(configRoot, [
+    { id: "s1", thread_name: "改名后的新主题", updated_at: "2026-06-01T08:00:00Z" },
+    { id: "s1", thread_name: "最初命名", updated_at: "2026-05-01T08:00:00Z" },
+  ]);
+  const map = readSessionIndex(configRoot);
+  assert.equal(map.size, 1);
+  assert.equal(map.get("s1")?.name, "改名后的新主题");
+  await store.importFile(
+    file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]),
+    configRoot,
+  );
+  assert.equal(store.sessions()[0].topic, "改名后的新主题");
+
+  // An unparseable updated_at never displaces a dated duplicate.
+  const configRoot2 = path.join(dir, "codex-home-2");
+  sessionIndex(configRoot2, [
+    { id: "s2", thread_name: "无时间戳的行", updated_at: "not-a-date" },
+    { id: "s2", thread_name: "带时间戳的行", updated_at: "2026-06-01T08:00:00Z" },
+  ]);
+  await store.importFile(
+    file(dir, [meta("s2"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")], "s2.jsonl"),
+    configRoot2,
+  );
+  assert.equal(
+    store.sessions().find((s) => s.id === "s2")?.topic,
+    "带时间戳的行",
+  );
+});
+
+test("topics longer than 100 characters are truncated like project names", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "s1", thread_name: "主".repeat(150), updated_at: "2026-05-01T08:00:00Z" }]);
-  store.importFile(
+  await store.importFile(
     file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]),
     configRoot,
   );
@@ -187,9 +220,9 @@ test("topics longer than 100 characters are truncated like project names", () =>
 
 // ---------------------------------------------------------------- slice B: tokens
 
-test("token_count snapshots become per-turn diffs keyed by the nearest task_started", () => {
+test("token_count snapshots become per-turn diffs keyed by the nearest task_started", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       // before any task_started: not attributable, skipped entirely
@@ -224,9 +257,9 @@ test("token_count snapshots become per-turn diffs keyed by the nearest task_star
   );
 });
 
-test("token rows with null info or malformed usage are skipped without failing", () => {
+test("token rows with null info or malformed usage are skipped without failing", async () => {
   const { dir } = setup();
-  const result = parse(
+  const result = await parse(
     file(dir, [
       meta(),
       msg("task_started", 0, "t1"),
@@ -243,9 +276,9 @@ test("token rows with null info or malformed usage are skipped without failing",
   );
 });
 
-test("sessions surface per-turn and per-session token totals; absence stays null", () => {
+test("sessions surface per-turn and per-session token totals; absence stays null", async () => {
   const { dir, store } = setup();
-  store.importFile(
+  await store.importFile(
     file(
       dir,
       [
@@ -260,7 +293,7 @@ test("sessions surface per-turn and per-session token totals; absence stays null
       "tokens.jsonl",
     ),
   );
-  store.importFile(
+  await store.importFile(
     file(
       dir,
       [meta("s2"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")],
@@ -271,6 +304,15 @@ test("sessions surface per-turn and per-session token totals; absence stays null
   const s1 = byId.get("s1")!;
   assert.equal(s1.turns[0].tokens?.total_tokens, 112);
   assert.equal(s1.turns[0].tokens?.cached_input_tokens, 40);
+  // Tokens must expose exactly the usage fields — no session/turn ids leak in.
+  assert.deepEqual(Object.keys(s1.turns[0].tokens!).sort(), [
+    "cache_write_input_tokens",
+    "cached_input_tokens",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+  ]);
   assert.equal(s1.turns[1].tokens?.total_tokens, 250);
   assert.equal(s1.tokens?.total_tokens, 362);
   assert.equal(s1.tokens?.input_tokens, 300);
@@ -285,7 +327,7 @@ test("sessions surface per-turn and per-session token totals; absence stays null
   assert.equal(r2.tokens ?? null, null);
 });
 
-test("token_usage rows are rewritten idempotently per source", () => {
+test("token_usage rows are rewritten idempotently per source", async () => {
   const { dir, store } = setup();
   const p = file(dir, [
     meta("s1"),
@@ -293,8 +335,8 @@ test("token_usage rows are rewritten idempotently per source", () => {
     tokenRow(1, { total_token_usage: usage({ input_tokens: 100, output_tokens: 12, total_tokens: 112 }) }),
     msg("task_complete", 2, "t1"),
   ]);
-  store.importFile(p);
-  store.importFile(p);
+  await store.importFile(p);
+  await store.importFile(p);
   assert.equal(
     store.db.prepare("SELECT count(*) n FROM token_usage").get()!.n,
     1,
@@ -303,7 +345,7 @@ test("token_usage rows are rewritten idempotently per source", () => {
 
 // ---------------------------------------------------------------- slice C: migration
 
-test("opening an old-schema database migrates additively and preserves data", () => {
+test("opening an old-schema database migrates additively and preserves data", async () => {
   const { dir } = setup();
   const dbPath = path.join(dir, "old.sqlite3");
   // Schema as of the T2 integration commit (e654817): agent columns exist,
@@ -345,7 +387,7 @@ CREATE TABLE event (
   // new imports into the migrated DB carry topic + tokens end to end
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "s1", thread_name: "迁移后的新主题", updated_at: "2026-05-01T08:00:00Z" }]);
-  store.importFile(
+  await store.importFile(
     file(
       dir,
       [
@@ -372,7 +414,7 @@ test("/api/report carries topic and tokens; app.js and index.html render them wi
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "s1", thread_name: "前端联调主题", updated_at: "2026-05-01T08:00:00Z" }]);
-  store.importFile(
+  await store.importFile(
     file(
       dir,
       [

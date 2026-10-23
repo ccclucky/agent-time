@@ -21,7 +21,7 @@ const makeRow = (
   ...extra,
 });
 
-test("Slice 3: Subagents are unblocked, cumulative machine time is recorded, and 6-level drill-down is verified", () => {
+test("Slice 3: Subagents are unblocked, cumulative machine time is recorded, and 6-level drill-down is verified", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-slice3-"));
   const dbPath = path.join(tmpDir, "test.db");
   const store = new Store(dbPath);
@@ -62,7 +62,7 @@ test("Slice 3: Subagents are unblocked, cumulative machine time is recorded, and
   const jsonlPath = path.join(tmpDir, "subagent-session.jsonl");
   fs.writeFileSync(jsonlPath, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
 
-  store.importFile(jsonlPath, null, "claude");
+  await store.importFile(jsonlPath, null, "claude");
 
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);

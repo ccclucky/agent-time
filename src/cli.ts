@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { Store } from "./store.js";
 import { makeServer } from "./server.js";
+import { isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
 import { ValidationError } from "./types.js";
 export function defaultDb() {
@@ -75,7 +76,7 @@ async function main() {
   }
   try {
     if (command === "refresh") {
-      const result = store.refresh();
+      const result = await store.refresh();
       console.log(JSON.stringify(result));
       process.exitCode = result.failed ? 1 : 0;
       return;
@@ -89,8 +90,7 @@ async function main() {
         if (e.isDirectory()) walk(p);
         else if (
           e.isFile() &&
-          (p.endsWith(".jsonl") ||
-            (values.agent === "codex" && p.endsWith(".jsonl.zst")))
+          isSessionFile(values.agent ?? "", p)
         ) {
           paths.push(p);
           if (paths.length > 5000)
@@ -109,7 +109,7 @@ async function main() {
       warnings = 0;
     for (const p of paths.sort()) {
       try {
-        const result = store.importFile(
+        const result = await store.importFile(
           p,
           null,
           values.agent as "codex" | "claude",
