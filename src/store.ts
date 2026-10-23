@@ -29,6 +29,7 @@ interface Source {
   last_error: string | null;
   config_root: string | null;
   imported_at: string;
+  title: string | null;
 }
 
 export function groupSubagents(
