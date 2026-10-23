@@ -391,24 +391,30 @@ function timeline() {
 
   const totalTurns = allTurns.length;
 
-  if (!state.zoomInitialized && totalTurns > 25) {
-    const initialVisible = Math.min(25, totalTurns);
-    const pctSpan = Math.min(100, Math.max(8, Math.round((initialVisible / totalTurns) * 100)));
-    state.zoomStartPct = Math.max(0, 100 - pctSpan);
+  if (!state.zoomInitialized) {
+    state.zoomStartPct = 0;
     state.zoomEndPct = 100;
     state.zoomInitialized = true;
   }
-  const startIdx = Math.floor((state.zoomStartPct / 100) * totalTurns);
-  const endIdx = Math.min(totalTurns, Math.ceil((state.zoomEndPct / 100) * totalTurns) || totalTurns);
-  const visibleTurns = allTurns.slice(startIdx, Math.max(startIdx + 1, endIdx));
 
   const firstTurn = allTurns[0].turn;
   const lastTurn = allTurns[allTurns.length - 1].turn;
   const minTime = firstTurn.start_ms || firstTurn.end_ms || Date.now();
-  const maxTime = lastTurn.end_ms || lastTurn.start_ms || Date.now();
+  const maxTime = lastTurn.end_ms || lastTurn.start_ms || minTime + 1000;
   const totalTimelineSpan = Math.max(1, maxTime - minTime);
 
-  // 48px 全景画卷带：采用 48 个平滑聚合时间桶，彻底消除 1px 条形码摩尔纹
+  // 严格按选定物理时间范围过滤可视轮次
+  const rangeStartMs = minTime + (state.zoomStartPct / 100) * totalTimelineSpan;
+  const rangeEndMs = minTime + (state.zoomEndPct / 100) * totalTimelineSpan;
+
+  const visibleTurns = allTurns.filter(({ turn }) => {
+    if (state.zoomStartPct <= 0 && state.zoomEndPct >= 100) return true;
+    const tStart = turn.start_ms || turn.end_ms || minTime;
+    const tEnd = turn.end_ms || turn.start_ms || tStart;
+    return tEnd >= rangeStartMs && tStart <= rangeEndMs;
+  });
+
+  // 48px 平滑时间热力带：48 个等长聚合时间桶
   const BUCKETS = 48;
   const bucketDuration = Math.max(1, totalTimelineSpan / BUCKETS);
   const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
@@ -468,52 +474,85 @@ function timeline() {
     })
     .join("");
 
-  // 联动下方秒级高精甘特轮次列表
-  const turnRows = visibleTurns.map(({ session, turn, turnIndex }) => {
+  // 计算当前可视轮次的最大耗时基准（消除全撑满尺度失真，保证短轮次短、长轮次长）
+  const maxTurnDuration = Math.max(
+    1,
+    ...visibleTurns.map(({ turn }) => {
+      const wall = turn.elapsed_ms ?? (turn.end_ms && turn.start_ms ? turn.end_ms - turn.start_ms : 0);
+      const sum = (turn.work_ms || 0) + (turn.review_wait_ms || 0) + (turn.standby_ms || 0);
+      return Math.max(wall, sum);
+    })
+  );
+
+  const turnRows = visibleTurns.length > 0 ? visibleTurns.map(({ session, turn, turnIndex }) => {
+    const wall = turn.elapsed_ms ?? (turn.end_ms && turn.start_ms ? turn.end_ms - turn.start_ms : 0);
     const work = turn.work_ms || 0;
     const wait = turn.review_wait_ms || 0;
     const standby = turn.standby_ms || 0;
-    const sum = work + wait + standby || 1;
+    const sum = work + wait + standby;
+    const actualDuration = Math.max(wall, sum);
 
-    const workSubPct = (work / sum) * 100;
-    const waitSubPct = (wait / sum) * 100;
-    const standbySubPct = (standby / sum) * 100;
+    // 相对比例条宽（真实反映耗时大小差距）
+    const barWidthPct = actualDuration > 0
+      ? Math.max(4, Math.min(100, Math.round((actualDuration / maxTurnDuration) * 100)))
+      : 0;
 
-    const desc = turn.models[0] || session.project || "任务执行";
+    let modelName = turn.models[0] || "";
+    if (modelName === "<synthetic>") modelName = "系统辅助";
+    else if (!modelName) modelName = session.title || session.project || "任务执行";
+
     const isSelected = state.selectedTurnId === turn.id;
 
     return `
       <div class="turn-row ${isSelected ? "active" : ""}" data-session-id="${h(session.id)}" data-turn-id="${h(turn.id)}" tabindex="0" role="button" aria-label="查看轮次 #${turnIndex} 详情">
-        <span class="turn-num-col">Turn #${turnIndex}</span>
-        <span class="turn-desc-col" title="${h(desc)}">${h(desc)}</span>
-        <div class="turn-track-col">
-          <div style="background:var(--state-work); width:${workSubPct}%;" title="纯工作: ${fmt(work)}"></div>
-          <div style="background:var(--state-wait); width:${waitSubPct}%;" title="等待人审阅: ${fmt(wait)}"></div>
-          <div style="background:#9E968B; width:${standbySubPct}%;" title="待命: ${fmt(standby)}"></div>
+        <div class="turn-num-col">
+          <span class="turn-seq">Turn #${turnIndex}</span>
+          <span class="turn-session-tag" title="${h(session.project)}">${h(session.project)}</span>
         </div>
-        <span class="turn-time-col">${fmt(turn.elapsed_ms || turn.period_ms)}</span>
+        <span class="turn-desc-col" title="${h(modelName)}">${h(modelName)}</span>
+        <div class="turn-track-col">
+          ${actualDuration > 0 ? `
+            <div class="turn-bar-wrapper" style="width: ${barWidthPct}%;">
+              ${work > 0 ? `<div style="background:var(--state-work); width:${(work / (sum || 1)) * 100}%;" title="纯工作: ${fmt(work)}"></div>` : ""}
+              ${wait > 0 ? `<div style="background:var(--state-wait); width:${(wait / (sum || 1)) * 100}%;" title="等待人审阅: ${fmt(wait)}"></div>` : ""}
+              ${standby > 0 ? `<div style="background:#9E968B; width:${(standby / (sum || 1)) * 100}%;" title="待命: ${fmt(standby)}"></div>` : ""}
+            </div>
+          ` : `
+            <span class="turn-no-data-tag">未产生记录耗时</span>
+          `}
+        </div>
+        <span class="turn-time-col">${actualDuration > 0 ? fmt(actualDuration) : "—"}</span>
       </div>
     `;
-  }).join("");
+  }).join("") : `
+    <div style="padding: 28px 16px; text-align: center; color: var(--fg-muted); font-size: var(--text-sm);">
+      所选时间区间内无交互轮次，可拖动上方滑块或点击
+      <button class="filter-chip" id="btnResetTimelineZoomInline" style="margin-left: 6px; padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>
+    </div>
+  `;
 
   return `
   <section class="timeline-card">
     <div class="section-header">
       <div>
-        <span class="section-title">Brush & Zoom 全景时间轴与微缩视口</span>
-        <span class="section-subtitle">双向拖拽视口框 · 无级缩放秒级高精甘特轮次</span>
+        <span class="section-title">交互轮次时间流 (Turn Timeline)</span>
+        <span class="section-subtitle">按时间推移对比各轮真实耗时与三态构成 · 点击单轮直出详情</span>
       </div>
-      <span class="brush-scope-pill" id="brushScopeText">展示第 ${startIdx + 1} 至 ${endIdx} 轮 (共 ${totalTurns} 轮)</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        ${(state.zoomStartPct > 0 || state.zoomEndPct < 100) ? `
+          <button class="filter-chip" id="btnResetTimelineZoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
+        ` : ""}
+        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleTurns.length} 轮 (共 ${totalTurns} 轮)</span>
+      </div>
     </div>
 
-    <!-- 48px 全景画卷带 -->
+    <!-- 48px 全景热力画卷 -->
     <div class="brush-section">
       <div class="brush-strip-track" id="brushTrack">
         ${stripBlocks}
-        <!-- 悬浮双向可拖拽视口滑块 -->
-        <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(10, state.zoomEndPct - state.zoomStartPct)}%;">
+        <!-- 悬浮双向可拖拽温和半透明选区 -->
+        <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(6, state.zoomEndPct - state.zoomStartPct)}%;">
           <div class="brush-handle-bar" data-handle="left" title="向左拖拽扩展区间"></div>
-          <div class="brush-center-badge">视口缩放</div>
           <div class="brush-handle-bar" data-handle="right" title="向右拖拽扩展区间"></div>
         </div>
       </div>
@@ -524,11 +563,11 @@ function timeline() {
       </div>
     </div>
 
-    <!-- 秒级高精甘特轮次列表 -->
+    <!-- 真实比例甘特轮次列表 -->
     <div class="gantt-zoom-stage">
       <div class="gantt-header-row">
-        <span style="width:75px;">轮次编号</span>
-        <span style="width:220px;">任务与模型</span>
+        <span style="width:140px;">轮次编号与项目</span>
+        <span style="width:180px;">模型与任务</span>
         <span style="flex:1;">三态分布 (陶土橙:纯工作 / 琥珀金:等待人审阅 / 亚麻灰:待命)</span>
         <span style="width:85px; text-align:right;">单轮时长</span>
       </div>
@@ -543,6 +582,23 @@ function bindBrushEvents() {
   const vp = $("#brushViewport");
   const track = $("#brushTrack");
   if (!vp || !track) return;
+
+  const btnReset = $("#btnResetTimelineZoom");
+  if (btnReset) {
+    btnReset.onclick = () => {
+      state.zoomStartPct = 0;
+      state.zoomEndPct = 100;
+      render();
+    };
+  }
+  const btnResetInline = $("#btnResetTimelineZoomInline");
+  if (btnResetInline) {
+    btnResetInline.onclick = () => {
+      state.zoomStartPct = 0;
+      state.zoomEndPct = 100;
+      render();
+    };
+  }
 
   let isDragging = false;
   let dragType = "move";
