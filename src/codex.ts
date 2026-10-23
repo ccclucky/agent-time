@@ -1,7 +1,7 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { openSync, readSync, closeSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
+import { join, posix } from "node:path";
 import { TextDecoder } from "node:util";
 import zlib from "node:zlib";
 import { ValidationError, type Event, type Kind } from "./types.js";
@@ -109,6 +109,52 @@ export function* linesZst(path: string): Generator<Buffer> {
     yield buf.subarray(start);
   }
 }
+export interface IndexedThread {
+  name: string;
+  updated_at_ms: number | null;
+}
+// session_index.jsonl persists only *named* threads (123/799 local files), so
+// it is optional enrichment — never a discovery manifest. A missing index,
+// unparseable lines, or absent fractional timestamps degrade to "no topic"
+// and never fail the import. thread_name is local-only metadata, like project
+// names. updated_at carries 4–6 fractional digits (not standard millis), which
+// Temporal accepts; anything unparseable stays null while keeping the name.
+export function readSessionIndex(
+  configRoot: string | null,
+): Map<string, IndexedThread> {
+  const map = new Map<string, IndexedThread>();
+  if (!configRoot) return map;
+  let text: string;
+  try {
+    text = readFileSync(join(configRoot, "session_index.jsonl"), "utf8");
+  } catch {
+    return map;
+  }
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const { id, thread_name, updated_at } = row as Record<string, unknown>;
+    if (typeof id !== "string" || !ID.test(id)) continue;
+    if (typeof thread_name !== "string" || !thread_name.trim()) continue;
+    let updated_at_ms: number | null = null;
+    if (typeof updated_at === "string") {
+      try {
+        updated_at_ms = timestamp(updated_at);
+      } catch {
+        updated_at_ms = null;
+      }
+    }
+    map.set(id, { name: thread_name, updated_at_ms });
+  }
+  return map;
+}
+
 export function parse(path: string) {
   let meta: {
       id: string;

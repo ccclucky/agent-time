@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parse, hash } from "./codex.js";
+import { parse, hash, readSessionIndex } from "./codex.js";
 import { parseClaude } from "./claude.js";
 import { SCHEMA } from "./schema.js";
 import { Directories } from "./directories.js";
@@ -28,6 +28,7 @@ interface Source {
   issues: string;
   last_error: string | null;
   config_root: string | null;
+  topic: string | null;
   imported_at: string;
 }
 
@@ -174,7 +175,7 @@ export class Store {
       this.db.exec(
         "ALTER TABLE source ADD COLUMN agent TEXT NOT NULL DEFAULT 'Codex'",
       );
-    for (const col of ["last_error", "config_root"])
+    for (const col of ["last_error", "config_root", "topic"])
       if (!columns.includes(col))
         this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
     const eventCols = this.db
@@ -228,10 +229,16 @@ export class Store {
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
     const sid = hash(p),
       m = data.session;
+    // session_index.jsonl lives under the config root the file was discovered
+    // in (CODEX_HOME-aware); CLI imports without a config root stay untitled.
+    const topic =
+      adapter === "codex" && configRoot
+        ? (readSessionIndex(configRoot).get(m.id)?.name ?? "").slice(0, 100) || null
+        : null;
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
+          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,topic,agent) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,topic=excluded.topic,agent=excluded.agent,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
         )
         .run(
           sid,
@@ -241,6 +248,7 @@ export class Store {
           m.client,
           JSON.stringify(data.issues),
           configRoot,
+          topic,
           m.agent,
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
@@ -377,10 +385,12 @@ export class Store {
         id: s.session_id,
         agent: s.agent,
         project: s.project,
+        topic: null,
         issues: [],
         turns: [],
         imported_at: s.imported_at,
       };
+      if (s.topic && !item.topic) item.topic = s.topic;
       item.issues = [
         ...new Set([
           ...item.issues,
