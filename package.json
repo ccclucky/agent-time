@@ -19,6 +19,7 @@
     "dev": "tsx src/cli.ts",
     "build": "tsc",
     "test": "tsx --test tests/*.test.ts",
+    "smoke:codex": "tsx scripts/smoke-codex.mts",
     "check": "tsc --noEmit",
     "prepack": "npm run build"
   },
