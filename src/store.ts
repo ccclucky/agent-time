@@ -152,6 +152,91 @@ export function calculateClaudeTiming(
   };
 }
 
+/** Pi three-state timing split (ADR-0001 semantics adapted to Pi evidence).
+ * work_ms is machine-time accumulation of first-hand duration evidence:
+ * model response spans (end_ms - at_ms) plus tool execution spans on
+ * tool_result events. It is independent of the wall-clock elapsed span, so
+ * parallel tools may legitimately push it above elapsed_ms.
+ */
+export function calculatePiTiming(
+  entries: Event[],
+  start: number,
+  end: number,
+  elapsed: number,
+): {
+  work_ms: number;
+  review_wait_ms: number;
+  breakdown: TurnBreakdown;
+} {
+  let modelApiMs = 0;
+  let toolMs = 0;
+  const modelTotals = new Map<string, number>();
+  const thinkingTotals = new Map<string, number>();
+  // Model events without end_ms (model_change / thinking_level_change
+  // markers) carry no duration evidence and contribute zero.
+  for (const e of entries) {
+    if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
+    const dur = e.end_ms - e.at_ms;
+    modelApiMs += dur;
+    if (e.model)
+      modelTotals.set(e.model, (modelTotals.get(e.model) ?? 0) + dur);
+    if (e.thinking_level)
+      thinkingTotals.set(
+        e.thinking_level,
+        (thinkingTotals.get(e.thinking_level) ?? 0) + dur,
+      );
+  }
+  // Tools aggregate from tool_result events, where Pi's duration evidence
+  // lives (at_ms = tool start, end_ms = result creation).
+  const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+  // Approval suspension: positive interval from the issuing response end
+  // (tool_use.at_ms = tool ready) to the actual tool start (tool_result.at_ms),
+  // unioned across parallel calls. Fallback results start exactly at the
+  // issuing response end, contributing zero naturally; missing data is never
+  // fabricated.
+  const toolUses = entries.filter(
+    (e) => e.kind === "tool_use" && e.tool_id != null,
+  );
+  const usedUses = new Set<number>();
+  const waitIntervals: [number, number][] = [];
+  for (const r of entries) {
+    if (r.kind !== "tool_result") continue;
+    const dur =
+      r.end_ms != null && r.end_ms >= r.at_ms ? r.end_ms - r.at_ms : 0;
+    toolMs += dur;
+    const tname = r.tool_name || "tool";
+    const agg = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+    agg.count += 1;
+    agg.duration_ms += dur;
+    toolsMap.set(tname, agg);
+    if (r.tool_id == null) continue;
+    const uIdx = toolUses.findIndex(
+      (u, idx) => !usedUses.has(idx) && u.tool_id === r.tool_id && r.at_ms > u.at_ms,
+    );
+    if (uIdx !== -1) {
+      usedUses.add(uIdx);
+      waitIntervals.push([toolUses[uIdx].at_ms, r.at_ms]);
+    }
+  }
+  const reviewWaitMs = unionMs(waitIntervals);
+  return {
+    work_ms: modelApiMs + toolMs,
+    review_wait_ms: reviewWaitMs,
+    breakdown: {
+      model_api_ms: modelApiMs,
+      tool_execution_ms: toolMs,
+      review_wait_ms: reviewWaitMs,
+      tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      model_api_breakdown: [...modelTotals.entries()]
+        .map(([model, duration_ms]) => ({ model, duration_ms }))
+        .sort((a, b) => a.model.localeCompare(b.model)),
+      thinking_breakdown: [...thinkingTotals.entries()]
+        .map(([level, duration_ms]) => ({ level, duration_ms }))
+        .sort((a, b) => a.level.localeCompare(b.level)),
+    },
+  };
+}
+
 export class Store {
   readonly path: string;
   readonly db: DatabaseSync;
@@ -479,6 +564,16 @@ export class Store {
 
       if (elapsed !== null && start !== null && end !== null && sessionObj.agent === "Claude Code") {
         const timing = calculateClaudeTiming(entries, start, end, elapsed);
+        work_ms = timing.work_ms;
+        review_wait_ms = timing.review_wait_ms;
+        breakdown = timing.breakdown;
+      } else if (
+        elapsed !== null &&
+        start !== null &&
+        end !== null &&
+        sessionObj.agent === "Pi"
+      ) {
+        const timing = calculatePiTiming(entries, start, end, elapsed);
         work_ms = timing.work_ms;
         review_wait_ms = timing.review_wait_ms;
         breakdown = timing.breakdown;
