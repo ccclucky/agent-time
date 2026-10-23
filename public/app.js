@@ -968,9 +968,7 @@ function table(rows) {
           .map((s) => {
             const lastAt = Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0));
             const displayTitle = s.title ? h(s.title) : h(s.project);
-            const subTitle = s.title
-              ? `${h(s.project)} · ${h(s.id.slice(0, 16))}`
-              : h(s.id.slice(0, 16));
+            const subTitle = `${h(s.project)} · ${h(s.id.slice(0, 16))}`;
             return `
               <tr>
                 <td>
