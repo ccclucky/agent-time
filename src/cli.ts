@@ -6,7 +6,7 @@ import os from "node:os";
 import { Store } from "./store.js";
 import { makeServer } from "./server.js";
 import { expand } from "./locations.js";
-import { ValidationError } from "./types.js";
+import { ValidationError, type AdapterName, isAdapterName } from "./types.js";
 export function defaultDb() {
   return path.join(
     process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
@@ -43,8 +43,7 @@ async function main() {
     throw new ValidationError("端口应在 0–65535 之间");
   if (
     command === "import" &&
-    (!["codex", "claude", "pi"].includes(values.agent ?? "") ||
-      positionals.length !== 2)
+    (!isAdapterName(values.agent ?? "") || positionals.length !== 2)
   )
     throw new ValidationError(
       "使用 import --agent codex|claude|pi FILE_OR_DIRECTORY",
@@ -107,7 +106,7 @@ async function main() {
         const result = store.importFile(
           p,
           null,
-          values.agent as "codex" | "claude" | "pi",
+          values.agent as AdapterName,
         );
         good++;
         warnings += result.issues.length;

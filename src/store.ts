@@ -11,6 +11,7 @@ import { expand } from "./locations.js";
 import { unionMs } from "./metrics.js";
 import {
   ValidationError,
+  type AdapterName,
   type Event,
   type Session,
   type Status,
@@ -291,7 +292,7 @@ export class Store {
   importFile(
     filename: string,
     configRoot: string | null = null,
-    adapter: "codex" | "claude" | "pi" = "codex",
+    adapter: AdapterName = "codex",
   ) {
     const p = realpathSync(expand(filename, os.homedir())),
       before = statSync(p, { bigint: true });
