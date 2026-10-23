@@ -169,7 +169,7 @@ function overview() {
   const s = state.report.summary;
   return `<div class="layout"><div>${stats()}${
     s.sessions
-      ? `<section class="panel"><div class="panelhead"><h2>时间花销汇总</h2><button class="textbtn" data-metric="processing">展开账本 →</button></div><div class="totals"><div class="keyrow"><label>已测量轮次的处理耗时</label><b>${fmt(s.processing_ms)}</b></div><div class="keyrow"><label>其中：Agent 纯工作</label><span class="disabled">无法拆分</span></div><div class="keyrow"><label>其中：等待确认或补充</label><span class="disabled">无法拆分</span></div><div class="stack"><span style="width:100%;background:#cdd4e5"></span></div><p class="sub">总耗时可测量，内部构成未知。Codex 历史记录没有完整的确认与恢复事件，不能把整段时间当成 Agent 纯工作。</p></div></section><section class="panel"><div class="panelhead"><h2>贡献最多的会话</h2><button class="textbtn" data-page="sessions">查看全部 →</button></div>${table(
+      ? `<section class="panel"><div class="panelhead"><h2>时间花销汇总</h2><button class="textbtn" data-metric="processing">展开账本 →</button></div><div class="totals"><div class="keyrow"><label>已测量轮次的处理耗时</label><b>${fmt(s.processing_ms)}</b></div><div class="keyrow"><label>其中：Agent 纯工作</label><span class="disabled">无法拆分</span></div><div class="keyrow"><label>其中：等待确认或补充</label><span class="disabled">无法拆分</span></div><div class="stack"><span style="width:100%;background:#cdd4e5"></span></div><p class="sub">已记录时间区间的内部构成未知。Codex 执行事件与 Claude 消息记录的口径不同，可能包含授权等待或恢复间隔；当前数字尚不能视为实际 Agent 工作时间。</p></div></section><section class="panel"><div class="panelhead"><h2>贡献最多的会话</h2><button class="textbtn" data-page="sessions">查看全部 →</button></div>${table(
           state.report.sessions
             .slice()
             .sort((a, b) => b.period_ms - a.period_ms)
@@ -180,7 +180,7 @@ function overview() {
 }
 function table(rows) {
   if (!rows.length) return '<div class="empty">没有匹配的会话记录。</div>';
-  return `<div class="swipehint">左右滑动查看完整表格 →</div><div class="tablewrap" tabindex="0" aria-label="会话明细，可横向滚动"><table><thead><tr><th>项目 / 会话</th><th>工具</th><th>本期处理耗时</th><th>已测量轮次</th><th>最近开始</th><th></th></tr></thead><tbody>${rows.map((s) => `<tr><td><button class="textbtn" data-session="${h(s.id)}">${h(s.project)}<span class="muted" style="display:block;font-size:10px;font-weight:400">${h(s.id.slice(0, 16))}</span></button></td><td>Codex</td><td>${fmt(s.measured_turns ? s.period_ms : null)}</td><td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td><td class="muted">${h(stamp(Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0))))}</td><td><button class="textbtn" data-session="${h(s.id)}" aria-label="查看会话 ${h(s.id)}">→</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="swipehint">左右滑动查看完整表格 →</div><div class="tablewrap" tabindex="0" aria-label="会话明细，可横向滚动"><table><thead><tr><th>项目 / 会话</th><th>工具</th><th>本期处理耗时</th><th>已测量轮次</th><th>最近开始</th><th></th></tr></thead><tbody>${rows.map((s) => `<tr><td><button class="textbtn" data-session="${h(s.id)}">${h(s.project)}<span class="muted" style="display:block;font-size:10px;font-weight:400">${h(s.id.slice(0, 16))}</span></button></td><td>${h(s.agent)}</td><td>${fmt(s.measured_turns ? s.period_ms : null)}</td><td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td><td class="muted">${h(stamp(Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0))))}</td><td><button class="textbtn" data-session="${h(s.id)}" aria-label="查看会话 ${h(s.id)}">→</button></td></tr>`).join("")}</tbody></table></div>`;
 }
 function filtered() {
   const needle = state.query.trim().toLowerCase();
@@ -212,7 +212,7 @@ function compare() {
       }
       groups.set(label, g);
     }
-  return `<div class="notice">首批仅接入 Codex。以下按执行记录中的模型上下文分组，不代表已经验证每次实际模型调用，也不按整轮时长重复分配给多个模型。耗时更短不等于质量更好。</div><section class="panel"><div class="panelhead"><h2>按模型上下文汇总</h2></div>${groups.size ? `<div class="tablewrap"><table><thead><tr><th>模型上下文</th><th>本期已记录处理耗时</th><th>已测量 / 未测量轮次</th></tr></thead><tbody>${[...groups].map(([key, g]) => `<tr><td>${h(key)}</td><td>${fmt(g.n ? g.ms : null)}</td><td>${g.n} / ${g.unknown}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">这个时间范围还没有可分组的记录。</div>'}</section><p class="sub">Token、金额和模型响应性能分布尚未接入，不从未知数据推算。</p>`;
+  return `<div class="notice">当前接入 Codex 和 Claude Code，两者记录时间的口径不同，不能据此直接比较执行效率。以下按记录中的模型上下文分组，不代表已经验证每次实际模型调用，也不按整轮时长重复分配给多个模型。耗时更短不等于质量更好。</div><section class="panel"><div class="panelhead"><h2>按模型上下文汇总</h2></div>${groups.size ? `<div class="tablewrap"><table><thead><tr><th>模型上下文</th><th>本期已记录处理耗时</th><th>已测量 / 未测量轮次</th></tr></thead><tbody>${[...groups].map(([key, g]) => `<tr><td>${h(key)}</td><td>${fmt(g.n ? g.ms : null)}</td><td>${g.n} / ${g.unknown}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">这个时间范围还没有可分组的记录。</div>'}</section><p class="sub">Token、金额和模型响应性能分布尚未接入，不从未知数据推算。</p>`;
 }
 function directoryDraft(item) {
   return (
