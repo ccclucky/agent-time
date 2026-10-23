@@ -17,12 +17,22 @@ interface ContentBlock {
   content?: unknown;
 }
 
+export function extractProjectFromCwd(cwd: string): string {
+  const normalized = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
+  const worktreeMatch = normalized.match(
+    /^(.*?)(?:\/\.claude\/worktrees|\/\.worktrees?)\/[^/]+$/,
+  );
+  const projectRoot = worktreeMatch ? worktreeMatch[1] : normalized;
+  return posix.basename(projectRoot).slice(0, 100) || "未知项目";
+}
+
 export function parseClaude(path: string) {
   let sid: string | null = null,
     project = "未知项目",
     current: string | null = null,
     lastTurnId: string | null = null,
-    excluded = false;
+    excluded = false,
+    sessionTitle: string | null = null;
   const events: Event[] = [],
     issues = new Set<string>(),
     seen = new Set<string>();
@@ -61,6 +71,29 @@ export function parseClaude(path: string) {
         new TextDecoder("utf-8", { fatal: true }).decode(line),
       );
       if (!r || typeof r !== "object" || Array.isArray(r)) throw Error();
+      if (r.type === "custom-title" || r.type === "ai-title") {
+        const titleCandidate =
+          typeof r.title === "string"
+            ? r.title
+            : typeof r.aiTitle === "string"
+              ? r.aiTitle
+              : typeof r.customTitle === "string"
+                ? r.customTitle
+                : null;
+        if (
+          titleCandidate &&
+          titleCandidate.trim() &&
+          titleCandidate !== "undefined"
+        ) {
+          if (r.type === "custom-title" || !sessionTitle) {
+            sessionTitle = titleCandidate.trim();
+          }
+        }
+        if (validId(r.sessionId) && !sid) {
+          sid = r.sessionId;
+        }
+        continue;
+      }
       if (
         !["user", "assistant", "system", "progress", "attachment", "permission_request", "permission_response"].includes(
           r.type,
@@ -82,8 +115,7 @@ export function parseClaude(path: string) {
       }
       sid = r.sessionId;
       if (typeof r.cwd === "string")
-        project =
-          posix.basename(r.cwd.replaceAll("\\", "/")).slice(0, 100) || project;
+        project = extractProjectFromCwd(r.cwd);
       if (
         r.type !== "user" &&
         r.type !== "assistant" &&
@@ -112,6 +144,7 @@ export function parseClaude(path: string) {
         if (activeTurn) add(activeTurn, "review_wait_end", at, null, agentId);
         continue;
       }
+
 
       if (r.type === "user") {
         const isToolResult =
@@ -216,6 +249,7 @@ export function parseClaude(path: string) {
       id: "claude/" + sid,
       agent: "Claude Code",
       project,
+      title: sessionTitle || null,
       client: "claude",
     },
     events: [...unique.values()],

@@ -11,6 +11,7 @@ import {
   rmSync,
   symlinkSync,
   existsSync,
+  realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ import { locate } from "../src/locations.js";
 import { bounds, report, unionMs } from "../src/metrics.js";
 import { legacyJSON, hash, timestamp } from "../src/codex.js";
 import { makeServer } from "../src/server.js";
+import { extractProjectFromCwd } from "../src/claude.js";
 const resources: { dir: string; store: Store }[] = [];
 function setup() {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "agenttime-test-"))),
@@ -726,6 +728,42 @@ test("Claude directory enablement discovers main transcripts, with privacy and t
   assert.match(sessions[0].issues.join(" "), /三态耗时切分/);
   assert.deepEqual(readFileSync(p), before);
   assert(!readFileSync(store.path).includes(Buffer.from("PRIVATE")));
+});
+test("Claude extracts session title from ai-title and custom-title events", () => {
+  const { store, dir } = setup();
+  const rows = [
+    { type: "ai-title", aiTitle: "项目最致命的 3 个 bug", sessionId: "claude-session" },
+    ...claudeRows(),
+  ];
+  const p = file(dir, rows);
+  store.importFile(p, null, "claude");
+  const sessions = store.sessions();
+  assert.equal(sessions[0].title, "项目最致命的 3 个 bug");
+
+  const rowsWithCustom = [
+    ...rows,
+    { type: "custom-title", title: "用户自定义分析任务", sessionId: "claude-session" },
+  ];
+  const p2 = file(dir, rowsWithCustom);
+  store.importFile(p2, null, "claude");
+  const sessions2 = store.sessions();
+  assert.equal(sessions2[0].title, "用户自定义分析任务");
+});
+test("Claude normalizes worktree directory paths to parent project name", () => {
+  assert.equal(
+    extractProjectFromCwd(
+      "/path/to/my-project/.claude/worktrees/quizzical-chatterjee-fa46ff",
+    ),
+    "my-project",
+  );
+  assert.equal(
+    extractProjectFromCwd("/path/to/my-project/.worktree/feat-123"),
+    "my-project",
+  );
+  assert.equal(
+    extractProjectFromCwd("/path/to/regular-project"),
+    "regular-project",
+  );
 });
 test("Claude tool results, metadata and compact summaries are not new submissions", () => {
   const { store, dir } = setup();

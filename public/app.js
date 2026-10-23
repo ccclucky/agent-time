@@ -240,6 +240,29 @@ function stats() {
 // 模块 2：核心大盘 —— 耗时蒸发漏斗 (Time Drop Funnel)
 // 严格对齐 GLOSSARY.md：严禁粗暴相减，真实数据核算
 // ========================================================
+
+function renderFunnelStageTrack(pct, color, fullText, isGlow = false) {
+  if (pct <= 0) {
+    return `
+      <div class="funnel-fill" style="width: 0%; padding:0; min-width:0;"></div>
+      <span class="funnel-outside-hint">0.0% (无卡点损耗)</span>
+    `;
+  }
+  if (pct < 25) {
+    return `
+      <div class="funnel-fill" style="width: ${pct}%; background: ${color}; padding: 0; min-width:0; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}"></div>
+      <span class="funnel-outside-label" style="color: ${color};">
+        ${fullText}
+      </span>
+    `;
+  }
+  return `
+    <div class="funnel-fill" style="width: ${pct}%; background: ${color}; padding: 0 12px; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}">
+      <span class="funnel-text-inside">${fullText}</span>
+    </div>
+  `;
+}
+
 function funnel() {
   const s = state.report.summary;
   const proc = s.processing_ms || 0;
@@ -289,14 +312,16 @@ function funnel() {
     </div>
 
     <div class="funnel-stages">
-      <!-- 阶段 1: 总挂载机时基准 -->
+      <!-- 阶段 1: 原始挂载机时基准 -->
       <div class="funnel-bar-row">
         <div class="stage-label">
           <span style="color:#7A7268;">●</span>
           <span>1. 原始挂载机时总计</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: 100%; background: #9E968B;">100% 原始机时基准</div>
+          <div class="funnel-fill" style="width: 100%; background: #9E968B; padding: 0 12px;">
+            <span class="funnel-text-inside">100% 原始机时基准 (自然壁钟基底)</span>
+          </div>
         </div>
         <div class="stage-val">${fmt(grossTotal)}</div>
       </div>
@@ -308,7 +333,7 @@ function funnel() {
           <span>2. 扣除等待人审阅卡点</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: ${waitPct}%; background: var(--state-wait);">${waitPct}% 工具权限审批与方案决策</div>
+          ${renderFunnelStageTrack(waitPct, "var(--state-wait)", `-${waitPct}% 工具权限审批与方案决策`)}
         </div>
         <div class="stage-val">-${fmt(wait)}</div>
       </div>
@@ -320,7 +345,7 @@ function funnel() {
           <span>3. 扣除静默就绪待命</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: ${standbyPct}%; background: #7A7268;">${standbyPct}% 答复完毕至人类再次唤醒</div>
+          ${renderFunnelStageTrack(standbyPct, "#7A7268", `-${standbyPct}% 答复完毕至人类再次唤醒`)}
         </div>
         <div class="stage-val">-${fmt(standby)}</div>
       </div>
@@ -332,9 +357,7 @@ function funnel() {
           <span>4. 沉淀纯工作有效净值</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: ${workPct}%; background: var(--state-work); box-shadow: 0 0 10px rgba(204,120,92,0.35);">
-            ${workPct}% AI 模型推理与本地工具执行
-          </div>
+          ${renderFunnelStageTrack(workPct, "var(--state-work)", `${workPct}% AI 模型推理与本地工具执行`, true)}
         </div>
         <div class="stage-val" style="color:var(--state-work);">${fmt(work)}</div>
       </div>
@@ -367,86 +390,245 @@ function timeline() {
   allTurns.sort((a, b) => (a.turn.start_ms || 0) - (b.turn.start_ms || 0));
 
   const totalTurns = allTurns.length;
-  const startIdx = Math.floor((state.zoomStartPct / 100) * totalTurns);
-  const endIdx = Math.min(totalTurns, Math.ceil((state.zoomEndPct / 100) * totalTurns) || totalTurns);
-  const visibleTurns = allTurns.slice(startIdx, Math.max(startIdx + 1, endIdx));
+
+  if (!state.zoomInitialized) {
+    state.zoomStartPct = 0;
+    state.zoomEndPct = 100;
+    state.zoomInitialized = true;
+  }
+
+  if (!state.expandedSessionIds) {
+    state.expandedSessionIds = new Set();
+    // 默认展开前 2 个活跃会话
+    if (sessions.length > 0) state.expandedSessionIds.add(sessions[0].id);
+    if (sessions.length > 1) state.expandedSessionIds.add(sessions[1].id);
+  }
 
   const firstTurn = allTurns[0].turn;
   const lastTurn = allTurns[allTurns.length - 1].turn;
   const minTime = firstTurn.start_ms || firstTurn.end_ms || Date.now();
-  const maxTime = lastTurn.end_ms || lastTurn.start_ms || Date.now();
+  const maxTime = lastTurn.end_ms || lastTurn.start_ms || minTime + 1000;
   const totalTimelineSpan = Math.max(1, maxTime - minTime);
 
-  // 48px 全景画卷带：按实际持续时长比例与真实三态色块拼接
-  const stripBlocks = allTurns.map(({ turn }) => {
-    const turnDuration = Math.max(1000, (turn.end_ms || turn.start_ms || minTime) - (turn.start_ms || minTime));
-    const widthPct = Math.max(0.5, (turnDuration / totalTimelineSpan) * 100);
+  // 严格按选定物理时间范围过滤可视会话与轮次
+  const rangeStartMs = minTime + (state.zoomStartPct / 100) * totalTimelineSpan;
+  const rangeEndMs = minTime + (state.zoomEndPct / 100) * totalTimelineSpan;
 
+  // 80px 全景时间热力带：48 个等长聚合时间桶
+  const BUCKETS = 48;
+  const bucketDuration = Math.max(1, totalTimelineSpan / BUCKETS);
+  const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
+    start: minTime + i * bucketDuration,
+    end: minTime + (i + 1) * bucketDuration,
+    workMs: 0,
+    waitMs: 0,
+    standbyMs: 0,
+    turnsCount: 0,
+  }));
+
+  for (const { turn } of allTurns) {
+    const tStart = turn.start_ms || minTime;
+    const tEnd = turn.end_ms || tStart + 1000;
     const work = turn.work_ms || 0;
     const wait = turn.review_wait_ms || 0;
     const standby = turn.standby_ms || 0;
-    const sum = work + wait + standby || 1;
 
-    const workSubPct = (work / sum) * 100;
-    const waitSubPct = (wait / sum) * 100;
-    const standbySubPct = (standby / sum) * 100;
+    for (let i = 0; i < BUCKETS; i++) {
+      const b = buckets[i];
+      const overlapStart = Math.max(b.start, tStart);
+      const overlapEnd = Math.min(b.end, tEnd);
+      if (overlapEnd > overlapStart) {
+        const overlapRatio = (overlapEnd - overlapStart) / Math.max(1, tEnd - tStart);
+        b.workMs += work * overlapRatio;
+        b.waitMs += wait * overlapRatio;
+        b.standbyMs += standby * overlapRatio;
+        b.turnsCount += 1;
+      }
+    }
+  }
 
-    return `
-      <div style="width: ${widthPct}%; height: 100%; display: flex; flex-shrink: 0; border-right: 1px solid rgba(255,255,255,0.25);" title="纯工作: ${fmt(work)}, 等待人审阅: ${fmt(wait)}, 待命: ${fmt(standby)}">
-        <div style="width: ${workSubPct}%; background: var(--state-work);"></div>
-        <div style="width: ${waitSubPct}%; background: var(--state-wait);"></div>
-        <div style="width: ${standbySubPct}%; background: #9E968B;"></div>
-      </div>
-    `;
-  }).join("");
+  const maxBucketActivity = Math.max(1, ...buckets.map((b) => b.workMs + b.waitMs));
 
-  // 联动下方秒级高精甘特轮次列表
-  const turnRows = visibleTurns.map(({ session, turn, turnIndex }) => {
-    const work = turn.work_ms || 0;
-    const wait = turn.review_wait_ms || 0;
-    const standby = turn.standby_ms || 0;
-    const sum = work + wait + standby || 1;
+  const stripBlocks = buckets
+    .map((b, idx) => {
+      const totalActivity = b.workMs + b.waitMs;
+      // 使用次方根非线性缩放 (power scale)，避免单个超长会话峰值把其余中短活跃期压成贴地平线
+      const activityRatio = totalActivity > 0 ? Math.pow(totalActivity / maxBucketActivity, 0.42) : 0;
+      const heightPct = totalActivity > 0 ? Math.max(18, Math.min(100, Math.round(activityRatio * 100))) : 4;
+      const workRatio = totalActivity > 0 ? Math.round((b.workMs / totalActivity) * 100) : 0;
+      const waitRatio = totalActivity > 0 ? 100 - workRatio : 0;
+      const isMuted = totalActivity === 0;
 
-    const workSubPct = (work / sum) * 100;
-    const waitSubPct = (wait / sum) * 100;
-    const standbySubPct = (standby / sum) * 100;
+      const bStartPct = (idx / BUCKETS) * 100;
+      const bEndPct = ((idx + 1) / BUCKETS) * 100;
+      const isInViewport = bEndPct >= state.zoomStartPct && bStartPct <= state.zoomEndPct;
 
-    const desc = turn.models[0] || session.project || "任务执行";
-    const isSelected = state.selectedTurnId === turn.id;
-
-    return `
-      <div class="turn-row ${isSelected ? "active" : ""}" data-session-id="${h(session.id)}" data-turn-id="${h(turn.id)}" tabindex="0" role="button" aria-label="查看轮次 #${turnIndex} 详情">
-        <span class="turn-num-col">Turn #${turnIndex}</span>
-        <span class="turn-desc-col" title="${h(desc)}">${h(desc)}</span>
-        <div class="turn-track-col">
-          <div style="background:var(--state-work); width:${workSubPct}%;" title="纯工作: ${fmt(work)}"></div>
-          <div style="background:var(--state-wait); width:${waitSubPct}%;" title="等待人审阅: ${fmt(wait)}"></div>
-          <div style="background:#9E968B; width:${standbySubPct}%;" title="待命: ${fmt(standby)}"></div>
+      return `
+        <div class="brush-bucket-col" title="${stamp(b.start)}: 纯工作 ${fmt(b.workMs)}, 等待人审阅 ${fmt(b.waitMs)}, 包含 ${b.turnsCount} 轮交互">
+          <div class="brush-bucket-bar ${isInViewport ? "in-viewport" : "out-viewport"}" style="height:${heightPct}%; background:${isMuted ? "#DFD8CE" : "#FAF9F5"};">
+            ${!isMuted ? `
+              <div style="width:100%; height:${workRatio}%; background:var(--state-work);"></div>
+              <div style="width:100%; height:${waitRatio}%; background:var(--state-wait);"></div>
+            ` : ""}
+          </div>
         </div>
-        <span class="turn-time-col">${fmt(turn.elapsed_ms || turn.period_ms)}</span>
+      `;
+    })
+    .join("");
+
+  // 方案 A：以会话为一级主体聚合 (Session-First)
+  const sessionSummaries = sessions.map((s) => {
+    let sWork = 0;
+    let sWait = 0;
+    let sStandby = 0;
+    let sMinTime = Infinity;
+    let sMaxTime = 0;
+
+    for (const t of s.turns) {
+      sWork += t.work_ms || 0;
+      sWait += t.review_wait_ms || 0;
+      sStandby += t.standby_ms || 0;
+      const st = t.start_ms || t.end_ms;
+      const en = t.end_ms || t.start_ms;
+      if (st && st < sMinTime) sMinTime = st;
+      if (en && en > sMaxTime) sMaxTime = en;
+    }
+    if (sMinTime === Infinity) sMinTime = minTime;
+    if (sMaxTime === 0) sMaxTime = maxTime;
+
+    const sSum = sWork + sWait + sStandby;
+    return {
+      session: s,
+      work: sWork,
+      wait: sWait,
+      standby: sStandby,
+      total: sSum,
+      minTime: sMinTime,
+      maxTime: sMaxTime,
+      turnsCount: s.turns.length,
+    };
+  });
+
+  // 按物理时间范围过滤可见会话
+  const visibleSessions = sessionSummaries.filter((item) => {
+    if (state.zoomStartPct <= 0 && state.zoomEndPct >= 100) return true;
+    return item.maxTime >= rangeStartMs && item.minTime <= rangeEndMs;
+  });
+
+  const maxSessionTotal = Math.max(1, ...visibleSessions.map((s) => s.total));
+
+  const sessionCards = visibleSessions.length > 0 ? visibleSessions.map(({ session: s, work, wait, standby, total, turnsCount }) => {
+    const isExpanded = state.expandedSessionIds.has(s.id);
+    const sessionBarWidthPct = total > 0 ? Math.max(4, Math.min(100, Math.round((total / maxSessionTotal) * 100))) : 0;
+    const sessionTitleAnchor = s.title || s.project || "未命名会话";
+
+    // 计算内部轮次的最大耗时以呈现真实相对条长
+    const maxTurnInSession = Math.max(1, ...s.turns.map((t) => {
+      const wall = t.elapsed_ms ?? (t.end_ms && t.start_ms ? t.end_ms - t.start_ms : 0);
+      const sum = (t.work_ms || 0) + (t.review_wait_ms || 0) + (t.standby_ms || 0);
+      return Math.max(wall, sum);
+    }));
+
+    const turnRows = s.turns.map((t, idx) => {
+      const turnIndex = idx + 1;
+      const wall = t.elapsed_ms ?? (t.end_ms && t.start_ms ? t.end_ms - t.start_ms : 0);
+      const tWork = t.work_ms || 0;
+      const tWait = t.review_wait_ms || 0;
+      const tStandby = t.standby_ms || 0;
+      const tSum = tWork + tWait + tStandby;
+      const tDuration = Math.max(wall, tSum);
+
+      const tBarWidthPct = tDuration > 0 ? Math.max(4, Math.min(100, Math.round((tDuration / maxTurnInSession) * 100))) : 0;
+
+      let modelName = t.models[0] || "";
+      if (modelName === "<synthetic>") modelName = "系统辅助";
+      else if (!modelName) modelName = "任务执行";
+
+      const isTurnSelected = state.selectedTurnId === t.id;
+
+      return `
+        <div class="turn-row ${isTurnSelected ? "active" : ""}" data-session-id="${h(s.id)}" data-turn-id="${h(t.id)}" tabindex="0" role="button" aria-label="查看轮次 #${turnIndex} 详情">
+          <div class="turn-num-col">
+            <span class="turn-seq">#${turnIndex}</span>
+          </div>
+          <span class="turn-desc-col" title="${h(modelName)}">${h(modelName)}</span>
+          <div class="turn-track-col">
+            ${tDuration > 0 ? `
+              <div class="turn-bar-wrapper" style="width: ${tBarWidthPct}%;">
+                ${tWork > 0 ? `<div style="background:var(--state-work); width:${(tWork / (tSum || 1)) * 100}%;" title="纯工作: ${fmt(tWork)}"></div>` : ""}
+                ${tWait > 0 ? `<div style="background:var(--state-wait); width:${(tWait / (tSum || 1)) * 100}%;" title="等待人审阅: ${fmt(tWait)}"></div>` : ""}
+                ${tStandby > 0 ? `<div style="background:#9E968B; width:${(tStandby / (tSum || 1)) * 100}%;" title="待命: ${fmt(tStandby)}"></div>` : ""}
+              </div>
+            ` : `
+              <span class="turn-no-data-tag">未产生记录耗时</span>
+            `}
+          </div>
+          <span class="turn-time-col">${tDuration > 0 ? fmt(tDuration) : "—"}</span>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div class="session-timeline-card ${isExpanded ? "expanded" : ""}" data-session-id="${h(s.id)}">
+        <div class="session-card-header" role="button" tabindex="0" aria-expanded="${isExpanded}">
+          <div class="session-header-left">
+            <span class="session-expand-icon">${isExpanded ? "▼" : "▶"}</span>
+            <span class="session-project-pill" title="${h(s.project)}">${h(s.project)}</span>
+            <span class="session-title-anchor" title="${h(sessionTitleAnchor)}">${h(sessionTitleAnchor)}</span>
+            <span class="session-turns-pill">${turnsCount} 轮</span>
+          </div>
+          <div class="session-track-col">
+            ${total > 0 ? `
+              <div class="session-bar-wrapper" style="width: ${sessionBarWidthPct}%;">
+                ${work > 0 ? `<div style="background:var(--state-work); width:${(work / total) * 100}%;" title="纯工作: ${fmt(work)}"></div>` : ""}
+                ${wait > 0 ? `<div style="background:var(--state-wait); width:${(wait / total) * 100}%;" title="等待人审阅: ${fmt(wait)}"></div>` : ""}
+                ${standby > 0 ? `<div style="background:#9E968B; width:${(standby / total) * 100}%;" title="待命: ${fmt(standby)}"></div>` : ""}
+              </div>
+            ` : `
+              <span class="turn-no-data-tag">未产生记录耗时</span>
+            `}
+          </div>
+          <div class="session-header-right">
+            <span class="session-duration-val">${total > 0 ? fmt(total) : "—"}</span>
+          </div>
+        </div>
+        ${isExpanded ? `
+          <div class="session-turns-container">
+            ${turnRows}
+          </div>
+        ` : ""}
       </div>
     `;
-  }).join("");
+  }).join("") : `
+    <div style="padding: 28px 16px; text-align: center; color: var(--fg-muted); font-size: var(--text-sm);">
+      所选时间区间内无交互会话，可拖动上方滑块或点击
+      <button class="filter-chip" id="btnResetTimelineZoomInline" style="margin-left: 6px; padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>
+    </div>
+  `;
 
   return `
   <section class="timeline-card">
     <div class="section-header">
       <div>
-        <span class="section-title">Brush & Zoom 全景时间轴与微缩视口</span>
-        <span class="section-subtitle">双向拖拽视口框 · 无级缩放秒级高精甘特轮次</span>
+        <span class="section-title">会话时间流与轮次展开 (Session Timeline)</span>
+        <span class="section-subtitle">以会话为锚点查看各任务耗时分布 · 点击会话展开交互轮次</span>
       </div>
-      <span class="brush-scope-pill" id="brushScopeText">展示第 ${startIdx + 1} 至 ${endIdx} 轮 (共 ${totalTurns} 轮)</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        ${(state.zoomStartPct > 0 || state.zoomEndPct < 100) ? `
+          <button class="filter-chip" id="btnResetTimelineZoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
+        ` : ""}
+        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话 (共 ${sessions.length} 个会话, ${totalTurns} 轮交互)</span>
+      </div>
     </div>
 
-    <!-- 48px 全景画卷带 -->
+    <!-- 80px 全景热力画卷 -->
     <div class="brush-section">
       <div class="brush-strip-track" id="brushTrack">
         ${stripBlocks}
-        <!-- 悬浮双向可拖拽视口滑块 -->
-        <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(10, state.zoomEndPct - state.zoomStartPct)}%;">
-          <div class="brush-handle-bar" data-handle="left" title="向左拖拽扩展区间"></div>
-          <div class="brush-center-badge">视口缩放</div>
-          <div class="brush-handle-bar" data-handle="right" title="向右拖拽扩展区间"></div>
+        <!-- 悬浮双向可拖拽温和半透明选区 -->
+        <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(6, state.zoomEndPct - state.zoomStartPct)}%;">
+          <div class="brush-handle-bar" data-handle="left" title="向左拖拽调整开始时间"></div>
+          <div class="brush-handle-bar" data-handle="right" title="向右拖拽调整结束时间"></div>
         </div>
       </div>
       <div class="brush-ticks">
@@ -456,16 +638,10 @@ function timeline() {
       </div>
     </div>
 
-    <!-- 秒级高精甘特轮次列表 -->
+    <!-- 会话锚点时间流列表 -->
     <div class="gantt-zoom-stage">
-      <div class="gantt-header-row">
-        <span style="width:75px;">轮次编号</span>
-        <span style="width:220px;">任务与模型</span>
-        <span style="flex:1;">三态分布 (陶土橙:纯工作 / 琥珀金:等待人审阅 / 亚麻灰:待命)</span>
-        <span style="width:85px; text-align:right;">单轮时长</span>
-      </div>
-      <div class="gantt-turns-grid">
-        ${turnRows}
+      <div class="timeline-session-list">
+        ${sessionCards}
       </div>
     </div>
   </section>`;
@@ -475,6 +651,52 @@ function bindBrushEvents() {
   const vp = $("#brushViewport");
   const track = $("#brushTrack");
   if (!vp || !track) return;
+
+  const btnReset = $("#btnResetTimelineZoom");
+  if (btnReset) {
+    btnReset.onclick = () => {
+      state.zoomStartPct = 0;
+      state.zoomEndPct = 100;
+      render();
+    };
+  }
+  const btnResetInline = $("#btnResetTimelineZoomInline");
+  if (btnResetInline) {
+    btnResetInline.onclick = () => {
+      state.zoomStartPct = 0;
+      state.zoomEndPct = 100;
+      render();
+    };
+  }
+
+  // 点击会话卡片头部展开/折叠
+  document.querySelectorAll(".session-card-header").forEach((header) => {
+    header.onclick = (e) => {
+      const card = header.closest(".session-timeline-card");
+      if (!card) return;
+      const sid = card.dataset.sessionId;
+      if (!sid) return;
+      if (state.expandedSessionIds.has(sid)) {
+        state.expandedSessionIds.delete(sid);
+      } else {
+        state.expandedSessionIds.add(sid);
+      }
+      render();
+    };
+  });
+
+  // 点击轮次打开抽屉
+  document.querySelectorAll(".session-turns-container .turn-row").forEach((row) => {
+    row.onclick = (e) => {
+      e.stopPropagation();
+      const sid = row.dataset.sessionId;
+      const tid = row.dataset.turnId;
+      const sessions = state.report?.sessions || [];
+      const s = sessions.find((x) => x.id === sid);
+      const t = s?.turns?.find((x) => x.id === tid);
+      if (t && s) openDrawer(t, s);
+    };
+  });
 
   let isDragging = false;
   let dragType = "move";
@@ -707,12 +929,16 @@ function table(rows) {
         ${rows
           .map((s) => {
             const lastAt = Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0));
+            const displayTitle = s.title ? h(s.title) : h(s.project);
+            const subTitle = s.title
+              ? `${h(s.project)} · ${h(s.id.slice(0, 16))}`
+              : h(s.id.slice(0, 16));
             return `
               <tr>
                 <td>
-                  <button class="textbtn" data-session="${h(s.id)}">
-                    <strong>${h(s.project)}</strong>
-                    <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">${h(s.id.slice(0, 16))}</span>
+                  <button class="textbtn" data-session="${h(s.id)}" style="text-align:left;">
+                    <strong style="display:block; font-size:13px; color:var(--ink); line-height:1.4;">${displayTitle}</strong>
+                    <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono); margin-top:2px;">${subTitle}</span>
                   </button>
                 </td>
                 <td><span class="tag">${h(s.agent)}</span></td>
@@ -720,7 +946,7 @@ function table(rows) {
                 <td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td>
                 <td style="color:var(--fg-muted); font-family:var(--font-mono);">${h(stamp(lastAt))}</td>
                 <td>
-                  <button class="btn" data-session="${h(s.id)}" aria-label="查看会话全部轮次">全轮次 →</button>
+                  <button class="btn" data-session="${h(s.id)}" aria-label="下钻会话明细">下钻明细 →</button>
                 </td>
               </tr>
             `;
@@ -734,7 +960,7 @@ function table(rows) {
 function filtered() {
   const needle = state.query.trim().toLowerCase();
   const rows = state.report.sessions.filter((s) =>
-    (s.project + " " + s.id + " " + s.agent).toLowerCase().includes(needle),
+    (s.project + " " + s.id + " " + s.agent + " " + (s.title || "")).toLowerCase().includes(needle),
   );
   return state.sort === "duration"
     ? rows.sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
@@ -985,7 +1211,7 @@ function details(id) {
   }).join("");
 
   open(
-    `${head(s.project, `${s.agent} · ${s.id}`)}
+    `${head(s.title || s.project, `${s.project} · ${s.agent} · ${s.id}`)}
      <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
      <div style="max-height:60vh; overflow-y:auto;">
        ${turnsHtml}

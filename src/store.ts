@@ -29,6 +29,7 @@ interface Source {
   last_error: string | null;
   config_root: string | null;
   imported_at: string;
+  title: string | null;
 }
 
 export function groupSubagents(
@@ -160,6 +161,9 @@ export class Store {
     this.db = new DatabaseSync(this.path);
     this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;");
     this.db.exec(SCHEMA);
+    try {
+      this.db.prepare("ALTER TABLE source ADD COLUMN title TEXT").run();
+    } catch {}
     const columns = this.db
       .prepare("PRAGMA table_info(source)")
       .all()
@@ -216,7 +220,7 @@ export class Store {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
+          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent,title) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,title=excluded.title,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
         )
         .run(
           sid,
@@ -227,6 +231,7 @@ export class Store {
           JSON.stringify(data.issues),
           configRoot,
           m.agent,
+          (m as any).title ?? null,
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
       const put = this.db.prepare(
@@ -374,6 +379,7 @@ export class Store {
         ]),
       ].sort();
       if (s.imported_at > item.imported_at) item.imported_at = s.imported_at;
+      if (s.title && !item.title) item.title = s.title;
       sessions.set(s.session_id, item);
     }
     const seen = new Set<string>(),
