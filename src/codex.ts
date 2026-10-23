@@ -139,6 +139,29 @@ class LineSplitter {
     return tail;
   }
 }
+// Transcript extraction reads one file synchronously per drawer fetch. Unlike
+// the import path it must branch on .zst here too — iterating lines() over a
+// compressed file yields binary garbage that fails JSON parsing line-by-line
+// and silently produces zero turns. Whole-payload decompression is bounded by
+// the same 512 MiB compressed cap the importer enforces.
+const TRANSCRIPT_SOURCE_CAP = 512 * 1024 * 1024;
+export function* transcriptLines(path: string): Generator<Buffer> {
+  if (!path.endsWith(".zst")) {
+    yield* lines(path);
+    return;
+  }
+  if (typeof zlib.zstdDecompressSync !== "function")
+    throw new ValidationError(
+      "此 Node 版本不支持 zstd；请升级到 Node 22.15+ 后按需读取 .jsonl.zst 会话",
+    );
+  const compressed = readFileSync(path);
+  if (compressed.length > TRANSCRIPT_SOURCE_CAP)
+    throw new ValidationError("会话文件超过 512 MiB；未按需读取");
+  const splitter = new LineSplitter();
+  yield* splitter.push(zlib.zstdDecompressSync(compressed));
+  const tail = splitter.flush();
+  if (tail) yield tail;
+}
 export function* lines(path: string): Generator<Buffer> {
   const fd = openSync(path, "r"),
     chunk = Buffer.alloc(64 * 1024),
@@ -621,7 +644,7 @@ export function extractCodexTranscript(path: string): TranscriptTurn[] {
     if (isPromptWrapper(text)) return;
     t.prompt = truncateCodePoints(text);
   };
-  for (const line of lines(path)) {
+  for (const line of transcriptLines(path)) {
     if (!line.toString().trim()) continue;
     try {
       const row = JSON.parse(

@@ -17,6 +17,7 @@ import { makeServer } from "../src/server.js";
 import { extractClaudeTranscript } from "../src/claude.js";
 import { extractPiTranscript } from "../src/pi.js";
 import { extractCodexTranscript } from "../src/codex.js";
+import zlib from "node:zlib";
 
 const resources: { dir: string; store: Store }[] = [];
 function setup() {
@@ -475,4 +476,32 @@ test("Privacy copy states that turn prompt/CoT text is read on demand from local
   assert.match(privacy, /按需/);
   assert.match(privacy, /本机/);
   assert.match(privacy, /不上传/);
+});
+
+test("Codex .jsonl.zst: transcript extraction decompresses instead of reading raw bytes", () => {
+  const { dir } = setup();
+  const rows = codexResponseItemRows();
+  const zstPath = path.join(dir, "rollout.jsonl.zst");
+  writeFileSync(
+    zstPath,
+    zlib.zstdCompressSync(
+      Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n"),
+    ),
+  );
+  const turns = extractCodexTranscript(zstPath);
+  const fromPlain = extractCodexTranscript(jsonl(dir, rows, "plain.jsonl"));
+  assert.ok(turns.length > 0, "zst rollouts must yield turns, not binary garbage");
+  assert.deepEqual(
+    turns.map((t) => ({
+      id: t.turn_id,
+      prompt: t.prompt,
+      tools: t.tool_calls.length,
+    })),
+    fromPlain.map((t) => ({
+      id: t.turn_id,
+      prompt: t.prompt,
+      tools: t.tool_calls.length,
+    })),
+    "zst and plain extraction must agree",
+  );
 });
