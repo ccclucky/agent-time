@@ -240,6 +240,29 @@ function stats() {
 // 模块 2：核心大盘 —— 耗时蒸发漏斗 (Time Drop Funnel)
 // 严格对齐 GLOSSARY.md：严禁粗暴相减，真实数据核算
 // ========================================================
+
+function renderFunnelStageTrack(pct, color, fullText, isGlow = false) {
+  if (pct <= 0) {
+    return `
+      <div class="funnel-fill" style="width: 0%; padding:0; min-width:0;"></div>
+      <span class="funnel-outside-hint">0.0% (无卡点损耗)</span>
+    `;
+  }
+  if (pct < 25) {
+    return `
+      <div class="funnel-fill" style="width: ${pct}%; background: ${color}; padding: 0; min-width:0; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}"></div>
+      <span class="funnel-outside-label" style="color: ${color};">
+        ${fullText}
+      </span>
+    `;
+  }
+  return `
+    <div class="funnel-fill" style="width: ${pct}%; background: ${color}; padding: 0 12px; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}">
+      <span class="funnel-text-inside">${fullText}</span>
+    </div>
+  `;
+}
+
 function funnel() {
   const s = state.report.summary;
   const proc = s.processing_ms || 0;
@@ -289,14 +312,16 @@ function funnel() {
     </div>
 
     <div class="funnel-stages">
-      <!-- 阶段 1: 总挂载机时基准 -->
+      <!-- 阶段 1: 原始挂载机时基准 -->
       <div class="funnel-bar-row">
         <div class="stage-label">
           <span style="color:#7A7268;">●</span>
           <span>1. 原始挂载机时总计</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: 100%; background: #9E968B;">100% 原始机时基准</div>
+          <div class="funnel-fill" style="width: 100%; background: #9E968B; padding: 0 12px;">
+            <span class="funnel-text-inside">100% 原始机时基准 (自然壁钟基底)</span>
+          </div>
         </div>
         <div class="stage-val">${fmt(grossTotal)}</div>
       </div>
@@ -308,7 +333,7 @@ function funnel() {
           <span>2. 扣除等待人审阅卡点</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: ${waitPct}%; background: var(--state-wait);">${waitPct}% 工具权限审批与方案决策</div>
+          ${renderFunnelStageTrack(waitPct, "var(--state-wait)", `-${waitPct}% 工具权限审批与方案决策`)}
         </div>
         <div class="stage-val">-${fmt(wait)}</div>
       </div>
@@ -320,7 +345,7 @@ function funnel() {
           <span>3. 扣除静默就绪待命</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: ${standbyPct}%; background: #7A7268;">${standbyPct}% 答复完毕至人类再次唤醒</div>
+          ${renderFunnelStageTrack(standbyPct, "#7A7268", `-${standbyPct}% 答复完毕至人类再次唤醒`)}
         </div>
         <div class="stage-val">-${fmt(standby)}</div>
       </div>
@@ -332,9 +357,7 @@ function funnel() {
           <span>4. 沉淀纯工作有效净值</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width: ${workPct}%; background: var(--state-work); box-shadow: 0 0 10px rgba(204,120,92,0.35);">
-            ${workPct}% AI 模型推理与本地工具执行
-          </div>
+          ${renderFunnelStageTrack(workPct, "var(--state-work)", `${workPct}% AI 模型推理与本地工具执行`, true)}
         </div>
         <div class="stage-val" style="color:var(--state-work);">${fmt(work)}</div>
       </div>
@@ -385,28 +408,65 @@ function timeline() {
   const maxTime = lastTurn.end_ms || lastTurn.start_ms || Date.now();
   const totalTimelineSpan = Math.max(1, maxTime - minTime);
 
-  // 48px 全景画卷带：按实际持续时长比例与真实三态色块拼接
-  const stripBlocks = allTurns.map(({ turn }) => {
-    const turnDuration = Math.max(1000, (turn.end_ms || turn.start_ms || minTime) - (turn.start_ms || minTime));
-    const widthPct = Math.max(0.5, (turnDuration / totalTimelineSpan) * 100);
+  // 48px 全景画卷带：采用 48 个平滑聚合时间桶，彻底消除 1px 条形码摩尔纹
+  const BUCKETS = 48;
+  const bucketDuration = Math.max(1, totalTimelineSpan / BUCKETS);
+  const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
+    start: minTime + i * bucketDuration,
+    end: minTime + (i + 1) * bucketDuration,
+    workMs: 0,
+    waitMs: 0,
+    standbyMs: 0,
+    turnsCount: 0,
+  }));
 
+  for (const { turn } of allTurns) {
+    const tStart = turn.start_ms || minTime;
+    const tEnd = turn.end_ms || tStart + 1000;
     const work = turn.work_ms || 0;
     const wait = turn.review_wait_ms || 0;
     const standby = turn.standby_ms || 0;
-    const sum = work + wait + standby || 1;
 
-    const workSubPct = (work / sum) * 100;
-    const waitSubPct = (wait / sum) * 100;
-    const standbySubPct = (standby / sum) * 100;
+    for (let i = 0; i < BUCKETS; i++) {
+      const b = buckets[i];
+      const overlapStart = Math.max(b.start, tStart);
+      const overlapEnd = Math.min(b.end, tEnd);
+      if (overlapEnd > overlapStart) {
+        const overlapRatio = (overlapEnd - overlapStart) / Math.max(1, tEnd - tStart);
+        b.workMs += work * overlapRatio;
+        b.waitMs += wait * overlapRatio;
+        b.standbyMs += standby * overlapRatio;
+        b.turnsCount += 1;
+      }
+    }
+  }
 
-    return `
-      <div style="width: ${widthPct}%; height: 100%; display: flex; flex-shrink: 0; border-right: 1px solid rgba(255,255,255,0.25);" title="纯工作: ${fmt(work)}, 等待人审阅: ${fmt(wait)}, 待命: ${fmt(standby)}">
-        <div style="width: ${workSubPct}%; background: var(--state-work);"></div>
-        <div style="width: ${waitSubPct}%; background: var(--state-wait);"></div>
-        <div style="width: ${standbySubPct}%; background: #9E968B;"></div>
-      </div>
-    `;
-  }).join("");
+  const maxBucketActivity = Math.max(1, ...buckets.map((b) => b.workMs + b.waitMs));
+
+  const stripBlocks = buckets
+    .map((b, idx) => {
+      const totalActivity = b.workMs + b.waitMs;
+      const heightPct = totalActivity > 0 ? Math.max(22, Math.min(100, (totalActivity / maxBucketActivity) * 100)) : 14;
+      const workRatio = totalActivity > 0 ? Math.round((b.workMs / totalActivity) * 100) : 0;
+      const waitRatio = totalActivity > 0 ? 100 - workRatio : 0;
+      const isMuted = totalActivity === 0;
+
+      const bStartPct = (idx / BUCKETS) * 100;
+      const bEndPct = ((idx + 1) / BUCKETS) * 100;
+      const isInViewport = bEndPct >= state.zoomStartPct && bStartPct <= state.zoomEndPct;
+
+      return `
+        <div class="brush-bucket-col" title="${stamp(b.start)}: 纯工作 ${fmt(b.workMs)}, 等待人审阅 ${fmt(b.waitMs)}, 包含 ${b.turnsCount} 轮交互">
+          <div class="brush-bucket-bar ${isInViewport ? "in-viewport" : "out-viewport"}" style="height:${heightPct}%; background:${isMuted ? "#DFD8CE" : "#FAF9F5"};">
+            ${!isMuted ? `
+              <div style="width:100%; height:${workRatio}%; background:var(--state-work);"></div>
+              <div style="width:100%; height:${waitRatio}%; background:var(--state-wait);"></div>
+            ` : ""}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
 
   // 联动下方秒级高精甘特轮次列表
   const turnRows = visibleTurns.map(({ session, turn, turnIndex }) => {
