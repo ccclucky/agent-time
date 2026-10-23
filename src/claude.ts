@@ -5,8 +5,18 @@
 import { posix } from "node:path";
 import { lines, timestamp, hash, legacyJSON } from "./codex.js";
 import { ValidationError, type Event } from "./types.js";
+
 const validId = (v: unknown): v is string =>
   typeof v === "string" && /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/.test(v);
+
+interface ContentBlock {
+  type?: string;
+  id?: string;
+  name?: string;
+  tool_use_id?: string;
+  content?: unknown;
+}
+
 export function parseClaude(path: string) {
   let sid: string | null = null,
     project = "未知项目",
@@ -28,14 +38,21 @@ export function parseClaude(path: string) {
     tool_id: string | null = null,
     tool_name: string | null = null,
   ) => {
-    const event: any = { turn_id, kind, at_ms, model };
-    if (agent_id) event.agent_id = agent_id;
-    if (tool_id) event.tool_id = tool_id;
-    if (tool_name) event.tool_name = tool_name;
-    events.push({
-      ...event,
-      key: hash(legacyJSON(["Claude Code", sid, event])),
-    });
+    const rawObj: Record<string, unknown> = { turn_id, kind, at_ms, model };
+    if (agent_id) rawObj.agent_id = agent_id;
+    if (tool_id) rawObj.tool_id = tool_id;
+    if (tool_name) rawObj.tool_name = tool_name;
+    const event: Event = {
+      turn_id,
+      kind,
+      at_ms,
+      model,
+      agent_id: agent_id ?? undefined,
+      tool_id: tool_id ?? undefined,
+      tool_name: tool_name ?? undefined,
+      key: hash(legacyJSON(["Claude Code", sid, rawObj])),
+    };
+    events.push(event);
   };
   for (const line of lines(path)) {
     if (!line.toString().trim()) continue;
@@ -83,7 +100,7 @@ export function parseClaude(path: string) {
       if (seen.has(key)) continue;
       seen.add(key);
       const at = timestamp(r.timestamp),
-        content = r.message?.content;
+        content = r.message?.content as unknown;
 
       const activeTurn = current || (agentId ? lastTurnId : null);
 
@@ -104,15 +121,15 @@ export function parseClaude(path: string) {
               (b: unknown) =>
                 b &&
                 typeof b === "object" &&
-                (b as { type?: unknown }).type === "tool_result",
+                (b as ContentBlock).type === "tool_result",
             ));
 
         if (isToolResult) {
           if (activeTurn) {
             if (Array.isArray(content)) {
               for (const b of content) {
-                if (b && typeof b === "object" && (b as any).type === "tool_result") {
-                  const tid = typeof (b as any).tool_use_id === "string" ? (b as any).tool_use_id : null;
+                if (b && typeof b === "object" && (b as ContentBlock).type === "tool_result") {
+                  const tid = typeof (b as ContentBlock).tool_use_id === "string" ? (b as ContentBlock).tool_use_id! : null;
                   add(activeTurn, "tool_result", at, null, agentId, tid, null);
                 }
               }
@@ -133,7 +150,7 @@ export function parseClaude(path: string) {
               (b: unknown) =>
                 b &&
                 typeof b === "object" &&
-                (b as { type?: unknown }).type === "text",
+                (b as ContentBlock).type === "text",
             ))
         ))
           continue;
@@ -161,9 +178,9 @@ export function parseClaude(path: string) {
           );
         if (Array.isArray(content)) {
           for (const b of content) {
-            if (b && typeof b === "object" && (b as any).type === "tool_use") {
-              const tid = typeof (b as any).id === "string" ? (b as any).id : null;
-              const tname = typeof (b as any).name === "string" ? (b as any).name : "tool";
+            if (b && typeof b === "object" && (b as ContentBlock).type === "tool_use") {
+              const tid = typeof (b as ContentBlock).id === "string" ? (b as ContentBlock).id! : null;
+              const tname = typeof (b as ContentBlock).name === "string" ? (b as ContentBlock).name! : "tool";
               add(activeTurn, "tool_use", at, null, agentId, tid, tname);
             }
           }

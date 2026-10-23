@@ -7,13 +7,17 @@ import { parseClaude } from "./claude.js";
 import { SCHEMA } from "./schema.js";
 import { Directories } from "./directories.js";
 import { expand } from "./locations.js";
+import { unionMs } from "./metrics.js";
 import {
   ValidationError,
   type Event,
   type Session,
   type Status,
+  type SubagentSummary,
   type Turn,
+  type TurnBreakdown,
 } from "./types.js";
+
 interface Source {
   agent: string;
   id: string;
@@ -26,6 +30,127 @@ interface Source {
   config_root: string | null;
   imported_at: string;
 }
+
+export function groupSubagents(
+  events: Event[],
+  turns: Turn[] = [],
+): SubagentSummary[] {
+  const map = new Map<string, Event[]>();
+  for (const e of events) {
+    if (e.agent_id) {
+      const list = map.get(e.agent_id) ?? [];
+      list.push(e);
+      map.set(e.agent_id, list);
+    }
+  }
+  const result: SubagentSummary[] = [];
+  for (const [subId, sEvents] of map.entries()) {
+    sEvents.sort((a, b) => a.at_ms - b.at_ms);
+    const subStart = sEvents[0].at_ms;
+    const subEnd = sEvents[sEvents.length - 1].at_ms;
+    result.push({
+      agent_id: subId,
+      start_ms: subStart,
+      end_ms: subEnd,
+      work_ms: Math.max(0, subEnd - subStart),
+      review_wait_ms: 0,
+      turns: turns.filter((t) => t.events.some((e) => e.agent_id === subId)),
+    });
+  }
+  return result;
+}
+
+export function calculateClaudeTiming(
+  entries: Event[],
+  start: number,
+  end: number,
+  elapsed: number,
+): {
+  work_ms: number;
+  review_wait_ms: number;
+  breakdown: TurnBreakdown;
+} {
+  const waitStarts = entries
+    .filter((e) => e.kind === "review_wait_start")
+    .map((e) => e.at_ms)
+    .sort((a, b) => a - b);
+  const waitEnds = entries
+    .filter((e) => e.kind === "review_wait_end")
+    .map((e) => e.at_ms)
+    .sort((a, b) => a - b);
+
+  const waitIntervals: [number, number][] = [];
+  const usedWaitEnds = new Set<number>();
+  for (const wStart of waitStarts) {
+    const wEndIdx = waitEnds.findIndex(
+      (t, idx) => !usedWaitEnds.has(idx) && t >= wStart,
+    );
+    let wEnd = end;
+    if (wEndIdx !== -1) {
+      usedWaitEnds.add(wEndIdx);
+      wEnd = waitEnds[wEndIdx];
+    }
+    if (wEnd > wStart) {
+      waitIntervals.push([wStart, wEnd]);
+    }
+  }
+  const totalWait = unionMs(waitIntervals);
+
+  const toolUses = entries.filter((e) => e.kind === "tool_use");
+  const toolResults = entries.filter((e) => e.kind === "tool_result");
+  const usedResultIndices = new Set<number>();
+  const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+  let totalToolMs = 0;
+
+  for (const u of toolUses) {
+    const tname = u.tool_name || "tool";
+    let rIndex = -1;
+    if (u.tool_id) {
+      rIndex = toolResults.findIndex(
+        (r, idx) =>
+          !usedResultIndices.has(idx) &&
+          r.tool_id === u.tool_id &&
+          r.at_ms >= u.at_ms,
+      );
+    }
+    if (rIndex === -1) {
+      rIndex = toolResults.findIndex(
+        (r, idx) => !usedResultIndices.has(idx) && r.at_ms >= u.at_ms,
+      );
+    }
+
+    let tDuration = 0;
+    if (rIndex !== -1) {
+      usedResultIndices.add(rIndex);
+      const rAt = toolResults[rIndex].at_ms;
+      let waitInside = 0;
+      for (const [ws, we] of waitIntervals) {
+        const overlap = Math.max(0, Math.min(rAt, we) - Math.max(u.at_ms, ws));
+        waitInside += overlap;
+      }
+      tDuration = Math.max(0, rAt - u.at_ms - waitInside);
+    }
+    totalToolMs += tDuration;
+    const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+    existing.count += 1;
+    existing.duration_ms += tDuration;
+    toolsMap.set(tname, existing);
+  }
+
+  const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait);
+  const work_ms = Math.max(0, elapsed - totalWait);
+  return {
+    work_ms,
+    review_wait_ms: totalWait,
+    breakdown: {
+      model_api_ms: modelApiMs,
+      tool_execution_ms: totalToolMs,
+      review_wait_ms: totalWait,
+      tools: [...toolsMap.values()],
+    },
+  };
+}
+
 export class Store {
   readonly path: string;
   readonly db: DatabaseSync;
@@ -335,102 +460,14 @@ export class Store {
       let review_wait_ms: number | null = null;
       let breakdown: Turn["breakdown"] = null;
 
-      if (elapsed !== null && sessionObj.agent === "Claude Code") {
-        // Calculate review wait intervals
-        const waitStarts = entries
-          .filter((e) => e.kind === "review_wait_start")
-          .map((e) => e.at_ms)
-          .sort((a, b) => a - b);
-        const waitEnds = entries
-          .filter((e) => e.kind === "review_wait_end")
-          .map((e) => e.at_ms)
-          .sort((a, b) => a - b);
-
-        let totalWait = 0;
-        const waitIntervals: [number, number][] = [];
-        for (let i = 0; i < waitStarts.length; i++) {
-          const wStart = waitStarts[i];
-          const wEnd = waitEnds.find((t) => t >= wStart) ?? end!;
-          const wDuration = Math.max(0, wEnd - wStart);
-          totalWait += wDuration;
-          waitIntervals.push([wStart, wEnd]);
-        }
-        review_wait_ms = totalWait;
-
-        // Tool execution calculations
-        const toolUses = entries.filter((e) => e.kind === "tool_use");
-        const toolResults = entries.filter((e) => e.kind === "tool_result");
-        const usedResultIndices = new Set<number>();
-        const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
-        let totalToolMs = 0;
-
-        for (const u of toolUses) {
-          const tname = u.tool_name || "tool";
-          let rIndex = -1;
-          if (u.tool_id) {
-            rIndex = toolResults.findIndex(
-              (r, idx) => !usedResultIndices.has(idx) && r.tool_id === u.tool_id && r.at_ms >= u.at_ms,
-            );
-          }
-          if (rIndex === -1) {
-            rIndex = toolResults.findIndex(
-              (r, idx) => !usedResultIndices.has(idx) && r.at_ms >= u.at_ms,
-            );
-          }
-
-          let tDuration = 0;
-          if (rIndex !== -1) {
-            usedResultIndices.add(rIndex);
-            const rAt = toolResults[rIndex].at_ms;
-            let waitInside = 0;
-            for (const [ws, we] of waitIntervals) {
-              const overlap = Math.max(0, Math.min(rAt, we) - Math.max(u.at_ms, ws));
-              waitInside += overlap;
-            }
-            tDuration = Math.max(0, rAt - u.at_ms - waitInside);
-          }
-          totalToolMs += tDuration;
-          const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
-          existing.count += 1;
-          existing.duration_ms += tDuration;
-          toolsMap.set(tname, existing);
-        }
-
-        const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait);
-        work_ms = Math.max(0, elapsed - totalWait);
-        breakdown = {
-          model_api_ms: modelApiMs,
-          tool_execution_ms: totalToolMs,
-          review_wait_ms: totalWait,
-          tools: [...toolsMap.values()],
-        };
+      if (elapsed !== null && start !== null && end !== null && sessionObj.agent === "Claude Code") {
+        const timing = calculateClaudeTiming(entries, start, end, elapsed);
+        work_ms = timing.work_ms;
+        review_wait_ms = timing.review_wait_ms;
+        breakdown = timing.breakdown;
       }
 
-      // Check subagents in turn
-      const turnSubagentEvents = new Map<string, Event[]>();
-      for (const e of entries) {
-        if (e.agent_id) {
-          const list = turnSubagentEvents.get(e.agent_id) ?? [];
-          list.push(e);
-          turnSubagentEvents.set(e.agent_id, list);
-        }
-      }
-      const turnSubagents: Turn["subagents"] = [];
-      if (turnSubagentEvents.size > 0) {
-        for (const [subId, sEvents] of turnSubagentEvents.entries()) {
-          sEvents.sort((a, b) => a.at_ms - b.at_ms);
-          const subStart = sEvents[0].at_ms;
-          const subEnd = sEvents[sEvents.length - 1].at_ms;
-          turnSubagents.push({
-            agent_id: subId,
-            start_ms: subStart,
-            end_ms: subEnd,
-            work_ms: Math.max(0, subEnd - subStart),
-            review_wait_ms: 0,
-            turns: [],
-          });
-        }
-      }
+      const turnSubagents = groupSubagents(entries);
 
       sessionObj.turns.push({
         id: tid,
@@ -478,32 +515,12 @@ export class Store {
         ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
         : null;
 
-      // Build session-level subagents summary
-      const sessionSubagentMap = new Map<string, Event[]>();
-      for (const t of s.turns) {
-        for (const e of t.events) {
-          if (e.agent_id) {
-            const list = sessionSubagentMap.get(e.agent_id) ?? [];
-            list.push(e);
-            sessionSubagentMap.set(e.agent_id, list);
-          }
-        }
-      }
-      if (sessionSubagentMap.size > 0) {
-        s.subagents = [];
-        for (const [subId, sEvents] of sessionSubagentMap.entries()) {
-          sEvents.sort((a, b) => a.at_ms - b.at_ms);
-          const subStart = sEvents[0].at_ms;
-          const subEnd = sEvents[sEvents.length - 1].at_ms;
-          s.subagents.push({
-            agent_id: subId,
-            start_ms: subStart,
-            end_ms: subEnd,
-            work_ms: Math.max(0, subEnd - subStart),
-            review_wait_ms: 0,
-            turns: s.turns.filter((t) => t.events.some((e) => e.agent_id === subId)),
-          });
-        }
+      const sessionSubagents = groupSubagents(
+        s.turns.flatMap((t) => t.events),
+        s.turns,
+      );
+      if (sessionSubagents.length > 0) {
+        s.subagents = sessionSubagents;
       }
     }
     return [...sessions.values()];
