@@ -68,6 +68,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          echo "Verifying npm identity with token..."
+          npm whoami
           npm publish --access public --provenance
 
       - name: Post-publish install smoke test
