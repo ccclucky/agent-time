@@ -4,6 +4,7 @@
   "description": "Local-first AI coding agent time analytics",
   "type": "module",
   "bin": {
+    "agent-time": "dist/cli.js",
     "agenttime": "dist/cli.js"
   },
   "files": [

@@ -77,6 +77,8 @@ jobs:
           cd "$SMOKE_DIR"
           npm init -y
           # Verify execution via npm exec / npx from npmjs (with fallback to local tarball in dry-run/timing windows)
-          echo "Testing agenttime command execution..."
+          echo "Testing agent-time command execution..."
           npx --yes "@ccclucky/agent-time@${{ steps.release_version.outputs.version }}" --help || \
+          npx --yes --package "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}" -- agent-time --help
+          echo "Testing agenttime alias command execution..."
           npx --yes --package "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}" -- agenttime --help

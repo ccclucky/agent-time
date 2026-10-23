@@ -12,7 +12,8 @@ Install globally:
 
 ```sh
 npm install -g @ccclucky/agent-time
-agenttime
+agent-time
+# 或使用无连字符别名：agenttime
 ```
 
 Or run instantly without installation:
