@@ -827,8 +827,10 @@ test("Pi: imports through Store.importFile into sessions() with end_ms/thinking_
   assert.equal(turn.status, "completed");
   assert.equal(turn.start_ms, T("2026-10-09T22:03:05.000Z"));
   assert.equal(turn.end_ms, T("2026-10-09T22:03:20.000Z"));
-  // Timing split lands in the next ticket; this ticket must not fake it.
-  assert.equal(turn.work_ms, null);
+  // Three-state split: model 1904 + 2600, tool 27 -> work 4531; approval
+  // interval [response end 22:03:17.362, tool start 22:03:17.367) -> 5ms.
+  assert.equal(turn.work_ms, 4531);
+  assert.equal(turn.review_wait_ms, 5);
   assert.deepEqual(turn.models.sort(), ["dp-llm/Qwen3.6-35B-A3B", "z-ai/glm-5.3"]);
 
   const model = turn.events.find(
