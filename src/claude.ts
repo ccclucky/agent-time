@@ -23,8 +23,14 @@ export function parseClaude(path: string) {
     kind: Event["kind"],
     at_ms: number,
     model: string | null = null,
+    agent_id: string | null = null,
+    tool_id: string | null = null,
+    tool_name: string | null = null,
   ) => {
-    const event = { turn_id, kind, at_ms, model };
+    const event: any = { turn_id, kind, at_ms, model };
+    if (agent_id) event.agent_id = agent_id;
+    if (tool_id) event.tool_id = tool_id;
+    if (tool_name) event.tool_name = tool_name;
     events.push({
       ...event,
       key: hash(legacyJSON(["Claude Code", sid, event])),
@@ -38,7 +44,7 @@ export function parseClaude(path: string) {
       );
       if (!r || typeof r !== "object" || Array.isArray(r)) throw Error();
       if (
-        !["user", "assistant", "system", "progress", "attachment"].includes(
+        !["user", "assistant", "system", "progress", "attachment", "permission_request", "permission_response"].includes(
           r.type,
         )
       )
@@ -59,7 +65,9 @@ export function parseClaude(path: string) {
       if (
         r.type !== "user" &&
         r.type !== "assistant" &&
-        !(r.type === "system" && r.subtype === "turn_duration")
+        !(r.type === "system" && r.subtype === "turn_duration") &&
+        !(r.type === "permission_request" || r.subtype === "permission_request") &&
+        !(r.type === "permission_response" || r.subtype === "permission_response")
       )
         continue;
       if (!validId(r.uuid)) {
@@ -71,24 +79,46 @@ export function parseClaude(path: string) {
       seen.add(key);
       const at = timestamp(r.timestamp),
         content = r.message?.content;
+
+      if (r.type === "permission_request" || r.subtype === "permission_request") {
+        if (current) add(current, "review_wait_start", at);
+        continue;
+      }
+      if (r.type === "permission_response" || r.subtype === "permission_response") {
+        if (current) add(current, "review_wait_end", at);
+        continue;
+      }
+
       if (r.type === "user") {
-        // Tool results, injected metadata, compact summaries and synthetic prompts
-        // are not independent human submissions.
-        if (
-          r.isMeta ||
-          r.isCompactSummary ||
-          r.isSynthetic ||
+        const isToolResult =
           r.toolUseResult ||
-          r.sourceToolAssistantUUID ||
           (Array.isArray(content) &&
             content.some(
               (b: unknown) =>
                 b &&
                 typeof b === "object" &&
                 (b as { type?: unknown }).type === "tool_result",
-            ))
-        )
+            ));
+
+        if (isToolResult) {
+          if (current) {
+            if (Array.isArray(content)) {
+              for (const b of content) {
+                if (b && typeof b === "object" && (b as any).type === "tool_result") {
+                  const tid = typeof (b as any).tool_use_id === "string" ? (b as any).tool_use_id : null;
+                  add(current, "tool_result", at, null, null, tid, null);
+                }
+              }
+            } else {
+              add(current, "tool_result", at);
+            }
+          }
           continue;
+        }
+
+        if (r.isMeta || r.isCompactSummary || r.isSynthetic || r.sourceToolAssistantUUID)
+          continue;
+
         if (!(
           typeof content === "string" ||
           (Array.isArray(content) &&
@@ -120,6 +150,15 @@ export function parseClaude(path: string) {
               .slice(0, 120)
               .join(""),
           );
+        if (Array.isArray(content)) {
+          for (const b of content) {
+            if (b && typeof b === "object" && (b as any).type === "tool_use") {
+              const tid = typeof (b as any).id === "string" ? (b as any).id : null;
+              const tname = typeof (b as any).name === "string" ? (b as any).name : "tool";
+              add(current, "tool_use", at, null, null, tid, tname);
+            }
+          }
+        }
         // A tool-use completion is not a completed user interaction. Null or
         // missing stop_reason never implies completion from the last file line.
         if (["end_turn", "stop_sequence"].includes(r.message?.stop_reason)) {
@@ -144,7 +183,7 @@ export function parseClaude(path: string) {
       "Claude Code 子 Agent、混合会话或分支记录暂不支持；未导入",
     );
   issues.add(
-    "Claude Code 耗时为用户消息记录至明确结束记录的跨度，可能包含授权等待；不是精确执行耗时。缺少明确结束标记时不计时。",
+    "Claude Code 已支持基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。缺少明确结束标记时不计时。",
   );
   const unique = new Map(events.map((e) => [e.key, e]));
   return {
