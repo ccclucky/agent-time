@@ -113,7 +113,7 @@ export class Directories {
       typeof enabled !== "boolean"
     )
       throw new ValidationError("请选择有效工具和接入状态");
-    if (enabled && !["codex", "claude"].includes(agent))
+    if (enabled && !["codex", "claude", "pi"].includes(agent))
       throw new ValidationError(
         "此工具适配器尚未实现，只能保存目录，不能启用接入",
       );

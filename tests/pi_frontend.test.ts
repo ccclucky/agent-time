@@ -44,3 +44,12 @@ test("Pi directory metadata is supported and points at sessions history", () => 
   assert.equal(item.default_path, "~/.pi/agent");
   assert.deepEqual(item.history_subdirectories, ["sessions"]);
 });
+test("Pi can be enabled and the preference persists; others still cannot", () => {
+  const { store, dirs } = setup();
+  dirs.save("pi", null, true);
+  assert.equal(dirs.get("pi").enabled, true);
+  assert.equal(new Directories(store, "/other-home").get("pi").enabled, true);
+  dirs.save("pi", null, false);
+  assert.equal(dirs.get("pi").enabled, false);
+  assert.throws(() => dirs.save("opencode", null, true), /不能启用/);
+});
