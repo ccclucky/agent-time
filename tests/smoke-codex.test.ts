@@ -14,6 +14,9 @@ import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
+// zstd fixtures need zlib zstd (Node >=22.15 / >=23.8); skip on older runtimes.
+const hasZstd = typeof zlib.zstdCompressSync === "function";
+const zst = hasZstd ? test : test.skip;
 const require = createRequire(import.meta.url);
 const SCRIPT = fileURLToPath(new URL("../scripts/smoke-codex.mts", import.meta.url));
 const tsxCli = require.resolve("tsx/cli");
@@ -53,7 +56,7 @@ function runSmoke(codexHome: string) {
   });
 }
 
-test("smoke: codex exits 0 with a classified summary on a synthetic mini-tree", () => {
+zst("smoke: codex exits 0 with a classified summary on a synthetic mini-tree", () => {
   const home = setup();
   zstFile(home, "sessions/2026/06/13/rollout-a.jsonl.zst", [meta("a"), ...turn()]);
   // empty stub: metadata only, zero events
@@ -80,7 +83,7 @@ test("smoke: codex exits 0 with a classified summary on a synthetic mini-tree", 
   assert.match(r.stdout, /"failures"\s*:\s*\[\]/);
 });
 
-test("smoke: a corrupted zst file makes the run exit non-zero with the reason", () => {
+zst("smoke: a corrupted zst file makes the run exit non-zero with the reason", () => {
   const home = setup();
   zstFile(home, "sessions/2026/06/13/rollout-a.jsonl.zst", [meta("a"), ...turn()]);
   const broken = path.join(home, "sessions/2026/06/13/rollout-broken.jsonl.zst");

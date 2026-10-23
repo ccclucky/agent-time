@@ -572,11 +572,19 @@ export class Store {
     // The same session may be registered from two paths (e.g. .jsonl and
     // .jsonl.zst); keep the widest snapshot per session/turn.
     const turnTokens = new Map<string, TokenUsage>();
+    // Per-session view of the same rows: turn ids that never become event
+    // groups (external-import-only turns) still carry retained token rows,
+    // and their deltas must reach the session rollup.
+    const tokensBySession = new Map<string, Map<string, TokenUsage>>();
     for (const r of tokenRows) {
       const key = pairKey(r.session_id, r.turn_id);
       const prev = turnTokens.get(key);
-      if (!prev || r.total_tokens > prev.total_tokens)
+      if (!prev || r.total_tokens > prev.total_tokens) {
         turnTokens.set(key, mapUsage(r, (v) => v));
+        let byTurn = tokensBySession.get(r.session_id);
+        if (!byTurn) tokensBySession.set(r.session_id, (byTurn = new Map()));
+        byTurn.set(r.turn_id, mapUsage(r, (v) => v));
+      }
     }
     const sessions = new Map<string, Session>();
     for (const s of sources) {
@@ -759,8 +767,20 @@ export class Store {
         : null;
 
       const tokened = s.turns.filter((t) => t.tokens);
-      s.tokens = tokened.length
-        ? tokened.reduce((acc, t) => addUsage(acc, t.tokens!), zeroUsage())
+      // Token rows for turns without event groups (external-import-only)
+      // have no Turn object; roll them into the session total so retained
+      // history is not silently dropped from the advertised totals.
+      const usedTurnIds = new Set(s.turns.map((t) => t.id));
+      const orphanUsages: TokenUsage[] = [];
+      for (const [tid, usage] of tokensBySession.get(s.id) ?? []) {
+        if (!usedTurnIds.has(tid)) orphanUsages.push(usage);
+      }
+      const tokenSums = [
+        ...tokened.map((t) => t.tokens!),
+        ...orphanUsages,
+      ];
+      s.tokens = tokenSums.length
+        ? tokenSums.reduce((acc, u) => addUsage(acc, u), zeroUsage())
         : null;
 
       const sessionSubagents = groupSubagents(

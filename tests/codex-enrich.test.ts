@@ -327,6 +327,47 @@ test("sessions surface per-turn and per-session token totals; absence stays null
   assert.equal(r2.tokens ?? null, null);
 });
 
+test("external-import-only token rows roll into session totals without phantom turns", async () => {
+  const { dir, store } = setup();
+  await store.importFile(
+    file(
+      dir,
+      [
+        meta("ext"),
+        msg("task_started", 0, "external-import-turn-1"),
+        tokenRow(1, { total_token_usage: usage({ input_tokens: 50, output_tokens: 5, total_tokens: 55 }) }),
+        msg("task_complete", 2, "external-import-turn-1"),
+      ],
+      "external.jsonl",
+    ),
+  );
+  await store.importFile(
+    file(
+      dir,
+      [
+        meta("mix"),
+        msg("task_started", 0, "t1"),
+        tokenRow(1, { total_token_usage: usage({ input_tokens: 100, output_tokens: 10, total_tokens: 110 }) }),
+        msg("task_complete", 2, "t1"),
+        msg("task_started", 3, "external-import-turn-1"),
+        tokenRow(4, { total_token_usage: usage({ input_tokens: 200, output_tokens: 20, total_tokens: 220 }) }),
+        msg("task_complete", 5, "external-import-turn-1"),
+      ],
+      "mixed.jsonl",
+    ),
+  );
+  const byId = new Map(store.sessions().map((s) => [s.id, s]));
+  const ext = byId.get("ext")!;
+  assert.equal(ext.turns.length, 0);
+  assert.equal(ext.tokens?.total_tokens, 55);
+  assert.equal(ext.work_ms ?? null, null);
+  const mix = byId.get("mix")!;
+  assert.equal(mix.turns.length, 1);
+  assert.equal(mix.turns[0].tokens?.total_tokens, 110);
+  assert.equal(mix.tokens?.total_tokens, 220);
+  assert.equal(mix.tokens?.input_tokens, 200);
+});
+
 test("token_usage rows are rewritten idempotently per source", async () => {
   const { dir, store } = setup();
   const p = file(dir, [
