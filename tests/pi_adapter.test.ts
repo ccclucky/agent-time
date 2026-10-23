@@ -919,3 +919,61 @@ test("Pi: Store migrates a legacy event table by adding end_ms and thinking_leve
   store.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test("Pi: session_info names the session; latest wins and an empty name clears it", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const header = {
+    type: "session",
+    version: 3,
+    id: "01ab0001-0000-4000-8000-000000000001",
+    timestamp: "2026-10-10T10:00:00.000Z",
+    cwd: "/Users/demo/work/titled_project",
+  };
+  const userTurn = (at: string) => ({
+    type: "message",
+    id: "u" + at,
+    parentId: null,
+    timestamp: at,
+    message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: Date.parse(at) },
+  });
+  const named = parsePi(
+    writeSession(tmpDir, "2026-10-10T10-00-00-000Z_01ab0001-0000-4000-8000-000000000001.jsonl", [
+      header,
+      { type: "session_info", id: "si1", parentId: null, timestamp: "2026-10-10T10:01:00.000Z", name: "  重构\n解析器  " },
+      { type: "session_info", id: "si2", parentId: "si1", timestamp: "2026-10-10T10:02:00.000Z", name: "Pi 解析器重构" },
+      userTurn("2026-10-10T10:03:00.000Z"),
+    ]),
+  );
+  assert.equal(named.session.title, "Pi 解析器重构");
+  const cleared = parsePi(
+    writeSession(tmpDir, "2026-10-10T11-00-00-000Z_01ab0002-0000-4000-8000-000000000002.jsonl", [
+      { ...header, id: "01ab0002-0000-4000-8000-000000000002" },
+      { type: "session_info", id: "si1", parentId: null, timestamp: "2026-10-10T11:01:00.000Z", name: "旧名字" },
+      { type: "session_info", id: "si2", parentId: "si1", timestamp: "2026-10-10T11:02:00.000Z", name: "   " },
+      userTurn("2026-10-10T11:03:00.000Z"),
+    ]),
+  );
+  assert.equal(cleared.session.title, null);
+  const unnamed = parsePi(
+    writeSession(tmpDir, "2026-10-10T12-00-00-000Z_01ab0003-0000-4000-8000-000000000003.jsonl", [
+      { ...header, id: "01ab0003-0000-4000-8000-000000000003" },
+      userTurn("2026-10-10T12:03:00.000Z"),
+    ]),
+  );
+  assert.equal(unnamed.session.title, null);
+
+  const dbPath = path.join(tmpDir, "titles.db");
+  const store = new Store(dbPath);
+  const p = path.join(
+    tmpDir,
+    "2026-10-10T10-00-00-000Z_01ab0001-0000-4000-8000-000000000001.jsonl",
+  );
+  store.importFile(p, null, "pi");
+  const row = store.db
+    .prepare("SELECT title FROM source WHERE session_id=?")
+    .get("pi/01ab0001-0000-4000-8000-000000000001") as { title: string | null };
+  assert.equal(row.title, "Pi 解析器重构");
+  assert.equal(store.sessions()[0].title, "Pi 解析器重构");
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

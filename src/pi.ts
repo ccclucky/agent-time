@@ -39,6 +39,7 @@ export function parsePi(path: string) {
     project: string | null = null,
     current: string | null = null,
     currentThinking: string | null = null,
+    sessionTitle: string | null = null,
     excluded = false;
   const events: Event[] = [],
     issues = new Set<string>(),
@@ -121,6 +122,17 @@ export function parsePi(path: string) {
         currentThinking = level;
         // Inside an open turn the switch itself is timing evidence.
         if (current) add(current, "model", iso(r.timestamp), null, { thinking_level: level });
+        continue;
+      }
+      if (r.type === "session_info") {
+        if (!sid) continue;
+        // Upstream semantics: the latest entry wins and a name that is empty
+        // after sanitizing explicitly clears the display name.
+        const name =
+          typeof r.name === "string"
+            ? r.name.replace(/[\r\n]+/g, " ").trim()
+            : "";
+        sessionTitle = name ? truncate(name, 100) : null;
         continue;
       }
       if (!sid || r.type !== "message") continue;
@@ -238,6 +250,7 @@ export function parsePi(path: string) {
       agent: "Pi",
       project,
       client: "pi",
+      title: sessionTitle,
     },
     events: [...unique.values()],
     issues: [...issues].sort(),
