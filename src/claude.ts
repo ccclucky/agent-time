@@ -156,7 +156,9 @@ export function parseClaude(path: string) {
           continue;
         if (validId(r.parentUuid)) {
           const previous = userParents.get(r.parentUuid);
-          if (previous && previous !== r.uuid) excluded = true;
+          if (previous && previous !== r.uuid) {
+            issues.add("会话包含重试或分支提问；已兼容解析所有有效轮次");
+          }
           userParents.set(r.parentUuid, r.uuid);
         }
         current = r.uuid as string;

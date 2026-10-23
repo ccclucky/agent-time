@@ -828,7 +828,7 @@ test("Claude scanner excludes subagent files and folders", () => {
   dirs.save("claude", null, true);
   assert.equal(store.refresh(dirs).discovered, 1);
 });
-test("Claude subagents, mixed sessions and competing human branches reject whole snapshots", () => {
+test("Claude subagents, mixed sessions and competing human branches handle snapshots appropriately", () => {
   const { store, dir } = setup();
   store.importFile(
     file(dir, [
@@ -840,9 +840,21 @@ test("Claude subagents, mixed sessions and competing human branches reject whole
   );
   assert.equal(store.sessions().length, 1);
 
-  for (const rows of [
-    [...claudeRows(), claudeRow("user", "mixed", 20, { sessionId: "other" })],
-    [
+  // Mixed sessions with different sessionIds must still throw
+  assert.throws(() =>
+    store.importFile(
+      file(dir, [
+        ...claudeRows(),
+        claudeRow("user", "mixed", 20, { sessionId: "other" }),
+      ]),
+      null,
+      "claude",
+    ),
+  );
+
+  // Competing human branches (retries/edits) are now supported and do not reject
+  store.importFile(
+    file(dir, [
       ...claudeRows(),
       claudeRow("user", "branch-a", 20, {
         parentUuid: "assistant-end",
@@ -852,9 +864,10 @@ test("Claude subagents, mixed sessions and competing human branches reject whole
         parentUuid: "assistant-end",
         message: { content: "b" },
       }),
-    ],
-  ])
-    assert.throws(() => store.importFile(file(dir, rows), null, "claude"));
+    ]),
+    null,
+    "claude",
+  );
 });
 test("Claude multiple rounds and model switches preserve each model without duplicating time", () => {
   const { store, dir } = setup();
