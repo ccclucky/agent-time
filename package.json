@@ -25,7 +25,9 @@
     "type": "git",
     "url": "git+https://github.com/ccclucky/agent-time.git"
   },
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@js-temporal/polyfill": "^0.5.1"
   },

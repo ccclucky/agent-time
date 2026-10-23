@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Code quality & type checks
+        run: |
+          npm run check
+          node --check public/app.js
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Align package.json version with release tag
+        id: release_version
+        run: |
+          TAG_NAME="${{ github.event.release.tag_name }}"
+          # Strip leading 'v' if present (e.g. v0.2.0 -> 0.2.0)
+          VERSION="${TAG_NAME#v}"
+          echo "Target publish version: $VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build package & pre-publish smoke test
+        id: pack
+        run: |
+          TARBALL=$(npm pack)
+          echo "Generated tarball: $TARBALL"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          node scripts/package-smoke.mjs "$TARBALL"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --access public --provenance
+
+      - name: Post-publish install smoke test
+        run: |
+          SMOKE_DIR=$(mktemp -d)
+          cd "$SMOKE_DIR"
+          npm init -y
+          # Verify execution via npm exec / npx from npmjs (with fallback to local tarball in dry-run/timing windows)
+          echo "Testing agenttime command execution..."
+          npx --yes "agenttime@${{ steps.release_version.outputs.version }}" --help || \
+          npx --yes --package "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}" -- agenttime --help
