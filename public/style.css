@@ -45,6 +45,8 @@
   --state-idle: #7A7268;        /* 深亚麻灰 - 待命时长 */
   --state-idle-light: #EEEAE2;  /* 亚麻浅底 */
 
+  --state-token: #5E7A8B;       /* 石板蓝灰 - Token 用量下钻 */
+
   /* 5. 阴影系统 */
   --shadow-sm: 0 1px 3px rgba(31, 30, 29, 0.04);
   --shadow-md: 0 4px 14px rgba(31, 30, 29, 0.06);
@@ -947,6 +949,14 @@ h1#title {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+/* 会话主题可能较长：超出抽屉宽度时省略号截断，完整内容悬停可见 */
+.drawer-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .drawer-close {

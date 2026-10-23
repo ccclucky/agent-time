@@ -149,7 +149,7 @@ export function makeServer(store: Store, directories = new Directories(store)) {
               throw new ValidationError(
                 "请先在配置页保存目录，不能在同步请求中指定任意文件",
               );
-            json(res, store.refresh(directories));
+            json(res, await store.refresh(directories));
           }
         } else json(res, { error: "请求方法不受支持" }, 405);
       } catch (e) {

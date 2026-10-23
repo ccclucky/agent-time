@@ -23,6 +23,16 @@ export const NAMES: Record<Agent, string> = {
   opencode: "OpenCode",
   antigravity: "Antigravity",
 };
+// Single source of truth for which filenames count as session files per
+// agent: Codex accepts .jsonl and .jsonl.zst, every other adapter only .jsonl.
+// Shared by the CLI import walk, directory discovery, and Store.importFile so
+// the three can never drift apart.
+export function isSessionFile(agent: string, file: string): boolean {
+  return (
+    file.endsWith(".jsonl") ||
+    (agent === "codex" && file.endsWith(".jsonl.zst"))
+  );
+}
 export function resolvePath(raw: unknown, home: string): string {
   if (
     typeof raw !== "string" ||
@@ -158,7 +168,7 @@ export class Directories {
           const p = path.join(dir, entry.name);
           if (entry.isDirectory()) {
             if (item.agent !== "claude" || entry.name !== "subagents") walk(p);
-          } else if (entry.isFile() && p.endsWith(".jsonl")) {
+          } else if (entry.isFile() && isSessionFile(item.agent, p)) {
             const real = realpathSync(p),
               rel = path.relative(root, real);
             if (

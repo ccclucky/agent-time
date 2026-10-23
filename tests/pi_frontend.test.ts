@@ -92,7 +92,7 @@ const piRows = () => [
     },
   },
 ];
-test("enabled Pi directory discovers sessions/<encoded-project> transcripts as Pi", () => {
+test("enabled Pi directory discovers sessions/<encoded-project> transcripts as Pi", async () => {
   const { store, dirs, home } = setup();
   file(
     path.join(
@@ -106,7 +106,7 @@ test("enabled Pi directory discovers sessions/<encoded-project> transcripts as P
     "2026-10-09T22-03-15-000Z_01a122b0-a300-7113-8773-07227583e9b1.jsonl",
   );
   dirs.save("pi", null, true);
-  const result = store.refresh(dirs);
+  const result = await store.refresh(dirs);
   assert.equal(result.updated, 1);
   assert.equal(result.failed, 0);
   assert.equal(result.discovered, 1);

@@ -53,6 +53,8 @@ tokens:
       idle:
         primary: '#7A7268'   # 稳重亚麻灰 (系统就绪待命)
         light: '#EEEAE2'     # 亚麻浅底
+      token:
+        primary: '#5E7A8B'   # 石板蓝灰 (Token 用量下钻)
 
   spacing:
     xs: '4px'

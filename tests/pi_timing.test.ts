@@ -20,7 +20,7 @@ const writeSession = (dir: string, name: string, rows: object[]) => {
   return p;
 };
 
-test("Pi timing: terminated turns fill work/review_wait from duration evidence (no approval gap)", () => {
+test("Pi timing: terminated turns fill work/review_wait from duration evidence (no approval gap)", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   // Single turn, tool starts exactly at the issuing response end:
   // model a1 [B+1000, B+3000) = 2000ms, bash [B+3000, B+4000) = 1000ms,
@@ -87,7 +87,7 @@ test("Pi timing: terminated turns fill work/review_wait from duration evidence (
   ]);
 
   const store = new Store(path.join(tmpDir, "test.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);
   const turn = sessions[0].turns[0];
@@ -104,7 +104,7 @@ test("Pi timing: terminated turns fill work/review_wait from duration evidence (
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi timing: two-turn session — exact split, model/thinking breakdown, durationMs fallback, standby, report()", () => {
+test("Pi timing: two-turn session — exact split, model/thinking breakdown, durationMs fallback, standby, report()", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   // Turn 1 [B, B+12100): model glm [1000,3000)=2000 (high); parallel calls —
   // read starts right away [3000,8000)=5000, bash pends approval
@@ -243,7 +243,7 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
   ]);
 
   const store = new Store(path.join(tmpDir, "test.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);
   const s = sessions[0];
@@ -322,7 +322,7 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi timing: parallel calls share one approval gap (interval union, not sum) and tools[] aggregates by name", () => {
+test("Pi timing: parallel calls share one approval gap (interval union, not sum) and tools[] aggregates by name", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   // One assistant response [B+1000, B+3000) issues two parallel calls; both
   // hang on the same approval until B+6000, then run in parallel:
@@ -407,7 +407,7 @@ test("Pi timing: parallel calls share one approval gap (interval union, not sum)
   ]);
 
   const store = new Store(path.join(tmpDir, "test.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const turn = store.sessions()[0].turns[0];
   assert.equal(turn.elapsed_ms, 11600);
   assert.equal(turn.review_wait_ms, null);
@@ -423,7 +423,7 @@ test("Pi timing: parallel calls share one approval gap (interval union, not sum)
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi timing: report basis documents the Pi measurement methodology", () => {
+test("Pi timing: report basis documents the Pi measurement methodology", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   const p = writeSession(tmpDir, "basis.jsonl", [
     {
@@ -456,7 +456,7 @@ test("Pi timing: report basis documents the Pi measurement methodology", () => {
     },
   ]);
   const store = new Store(path.join(tmpDir, "test.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const rep = report(store.sessions(), "2026-10-21", "2026-10-21", "UTC", "Pi");
   assert.ok(rep.basis.includes("Pi"), "basis must cover the Pi 口径");
   assert.ok(rep.basis.includes("机时累加"));
@@ -533,7 +533,7 @@ test("Pi timing: marker events without end_ms and invalid spans contribute zero,
   assert.deepEqual(timing.breakdown.thinking_breakdown, []);
 });
 
-test("Pi timing: assistant response without a model name still counts its duration as 未知模型", () => {
+test("Pi timing: assistant response without a model name still counts its duration as 未知模型", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   // a1 omits message.model entirely: the response span [B+500, B+2000) is
   // still first-hand evidence and must land in work_ms, bucketed as
@@ -569,7 +569,7 @@ test("Pi timing: assistant response without a model name still counts its durati
     },
   ]);
   const store = new Store(path.join(tmpDir, "test.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const turn = store.sessions()[0].turns[0];
   assert.equal(turn.status, "completed");
   assert.equal(turn.work_ms, 1500);
@@ -585,7 +585,7 @@ test("Pi timing: assistant response without a model name still counts its durati
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi timing: open turns keep null timing instead of guessing", () => {
+test("Pi timing: open turns keep null timing instead of guessing", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   const p = writeSession(tmpDir, "open-turn.jsonl", [
     {
@@ -619,7 +619,7 @@ test("Pi timing: open turns keep null timing instead of guessing", () => {
     // No tool result, no terminal event: the turn is still open.
   ]);
   const store = new Store(path.join(tmpDir, "test.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const turn = store.sessions()[0].turns[0];
   assert.equal(turn.status, "open");
   assert.equal(turn.work_ms, null);
