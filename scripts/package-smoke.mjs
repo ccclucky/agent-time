@@ -41,7 +41,13 @@ try {
   const imported = spawnSync(
     npm,
     [...args, "--db", db, "import", "--agent", "codex", source],
-    { cwd: dir, env, encoding: "utf8", timeout: 120000 },
+    {
+      cwd: dir,
+      env,
+      encoding: "utf8",
+      timeout: 120000,
+      shell: process.platform === "win32",
+    },
   );
   assert.equal(imported.status, 0, imported.stderr);
   assert.equal(JSON.parse(imported.stdout.trim()).imported_files, 1);
@@ -50,6 +56,7 @@ try {
     env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
+    shell: process.platform === "win32",
   });
   let output = "",
     stderr = "";
@@ -97,10 +104,16 @@ try {
       try {
         process.kill(-child.pid, "SIGTERM");
       } catch {}
-    } else child.kill("SIGTERM");
+    } else {
+      try {
+        spawnSync("taskkill", ["/F", "/T", "/PID", String(child.pid)]);
+      } catch {}
+    }
     await new Promise((resolve) =>
       child.exitCode !== null ? resolve() : child.once("exit", resolve),
     );
   }
-  rmSync(dir, { recursive: true, force: true });
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch {}
 }
