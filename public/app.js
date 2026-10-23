@@ -157,9 +157,13 @@ async function load() {
 function render() {
   if (!state.report) return;
 
-  // 1. 顶部标题
-  $("#title").textContent = names[state.page][0];
-  $("#subtitle").textContent = names[state.page][1];
+  // 1. 顶部标题（#session/:id 详情页拥有专属标题，不占用侧边导航四页命名）
+  const pageTitle =
+    state.page === "session"
+      ? ["会话详情", "本会话专属操作分布、体检指标与瓶颈归因。"]
+      : names[state.page];
+  $("#title").textContent = pageTitle[0];
+  $("#subtitle").textContent = pageTitle[1];
 
   // 2. 导航栏 (带 1.8px 矢量 SVG 图标与活动状态)
   $("#nav").innerHTML = Object.entries(names)
@@ -192,13 +196,16 @@ function render() {
     );
   }
 
-  // 4. 页面主体分发
-  $("#content").innerHTML = {
-    overview: overview,
-    sessions: sessions,
-    compare: compare,
-    sources: sources,
-  }[state.page]();
+  // 4. 页面主体分发（#session/:id 详情页取代首页组合视图）
+  $("#content").innerHTML =
+    state.page === "session"
+      ? sessionDetail()
+      : {
+          overview: overview,
+          sessions: sessions,
+          compare: compare,
+          sources: sources,
+        }[state.page]();
 
   if ($("#search")) $("#search").value = state.query;
 
@@ -711,6 +718,386 @@ function sessionStream() {
     `,
       )
       .join("")}
+  `;
+}
+
+// ========================================================
+// 切片 2：独立会话详情页与路由联动 (#session/:id)
+// 数据全部客户端聚合自 state.report.sessions（轮次与事件已内嵌），
+// 本切片不做任何后端改动；轮次时序流胶囊区为切片 3 预留。
+// ========================================================
+
+// 会话 id 形如 claude/<uuid>，卡片写入时已 encodeURIComponent，
+// 解析时必须 decode 还原完整 id
+function parseSessionHash() {
+  const hash = location.hash || "";
+  if (!hash.startsWith("#session/")) return null;
+  const raw = hash.slice("#session/".length);
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+// hashchange 与首屏引导共用：解析 #session/:id 切换视图状态
+function applyRoute() {
+  const id = parseSessionHash();
+  if (id) {
+    state.activeSessionId = id;
+    state.page = "session";
+  } else if (state.page === "session") {
+    state.page = "overview";
+    state.activeSessionId = null;
+  }
+  render();
+  if (state.page === "session") window.scrollTo(0, 0);
+}
+
+// “← 返回总览”：清掉哈希并恢复首页组合视图
+function goOverview() {
+  if (parseSessionHash()) {
+    history.pushState(null, "", location.pathname + location.search);
+  }
+  state.page = "overview";
+  state.activeSessionId = null;
+  render();
+  window.scrollTo(0, 0);
+}
+
+function detailSession() {
+  return (
+    (state.report?.sessions || []).find((s) => s.id === state.activeSessionId) ||
+    null
+  );
+}
+
+// 深链会话可能不在 /api/report 的裁剪日期范围内：显式兜底而非崩溃
+function sessionDetailFallback() {
+  return `
+    <section class="panel empty">
+      <h2>该会话不在当前统计日期范围内</h2>
+      <p class="sub">统计快照只包含 ${h(state.start)} — ${h(state.end)} 内的会话记录。请放宽日期范围后重试，或返回总览。</p>
+      <div style="display:flex; gap:10px; justify-content:center; margin-top:14px;">
+        <button class="btn" data-range="month">放宽至近 30 天</button>
+        <button class="btn primary" data-action="back-overview">← 返回总览</button>
+      </div>
+    </section>`;
+}
+
+// 会话状态 pill：后端只有逐轮状态，这里按轮聚合
+function sessionStatus(s) {
+  const total = s.turns.length;
+  if (!total) return { label: "暂无轮次记录", cls: "" };
+  const done = s.turns.filter((t) => t.status === "completed").length;
+  if (done === total) return { label: "已完结 (Completed)", cls: "ok" };
+  return { label: `存在未完结轮次 (${done}/${total} 轮完结)`, cls: "warn" };
+}
+
+// 总壁钟时长 (WALL TIME)：当前范围内该会话轮次的首尾物理跨度
+function sessionWallSpan(s) {
+  let first = Infinity;
+  let last = 0;
+  for (const t of s.turns) {
+    const st = t.start_ms || t.end_ms;
+    const en = t.end_ms || t.start_ms;
+    if (st && st < first) first = st;
+    if (en && en > last) last = en;
+  }
+  if (first === Infinity || !last) return { firstMs: null, lastMs: null, wallMs: null };
+  return { firstMs: first, lastMs: last, wallMs: Math.max(0, last - first) };
+}
+
+// 会话专属 Operations Breakdown 聚合：本地工具 / 模型推理 / 等待人审阅 / 待命
+// Codex 会话 breakdown 为 null，按 0 贡献；total 为 0 时上层显示诚实空态
+function sessionBreakdown(s) {
+  const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
+  for (const t of s.turns) {
+    agg.tool += t.breakdown?.tool_execution_ms ?? 0;
+    agg.model += t.breakdown?.model_api_ms ?? 0;
+    agg.wait += t.review_wait_ms ?? 0;
+    agg.standby += t.standby_ms ?? 0;
+  }
+  return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
+}
+
+// 配对 review_wait_start / review_wait_end 形成等待区间（与后端口径一致）
+function reviewWaitIntervals(turn) {
+  const starts = (turn.events || [])
+    .filter((e) => e.kind === "review_wait_start")
+    .map((e) => e.at_ms)
+    .sort((a, b) => a - b);
+  const ends = (turn.events || [])
+    .filter((e) => e.kind === "review_wait_end")
+    .map((e) => e.at_ms)
+    .sort((a, b) => a - b);
+  const used = new Set();
+  const intervals = [];
+  for (const ws of starts) {
+    const eIdx = ends.findIndex((t, i) => !used.has(i) && t >= ws);
+    const we = eIdx !== -1 ? (used.add(eIdx), ends[eIdx]) : null;
+    if (we !== null && we > ws) intervals.push([ws, we]);
+  }
+  return intervals;
+}
+
+// 单次调用粒度的工具耗时（慢操作榜单的原始证据）。
+// 配对与时长口径镜像后端 calculateClaudeTiming / calculatePiTiming：
+// - Pi：tool_result.end_ms 落盘了实际完成时间 → duration = end_ms − result.at_ms
+// - Claude：tool_result 只有记录时刻 → duration = result.at_ms − use.at_ms − 区间内等待人审阅重叠
+function perCallToolTimings(turn) {
+  const evs = [...(turn.events || [])].sort((a, b) => a.at_ms - b.at_ms);
+  const waits = reviewWaitIntervals(turn);
+  const uses = evs.filter((e) => e.kind === "tool_use");
+  const results = evs.filter((e) => e.kind === "tool_result");
+  const used = new Set();
+  const calls = [];
+  for (const u of uses) {
+    let rIdx = -1;
+    if (u.tool_id) {
+      rIdx = results.findIndex(
+        (r, i) => !used.has(i) && r.tool_id === u.tool_id && r.at_ms >= u.at_ms,
+      );
+    }
+    if (rIdx === -1) {
+      rIdx = results.findIndex((r, i) => !used.has(i) && r.at_ms >= u.at_ms);
+    }
+    if (rIdx === -1) continue;
+    used.add(rIdx);
+    const r = results[rIdx];
+    let duration;
+    if (r.end_ms != null && r.end_ms >= r.at_ms) {
+      duration = r.end_ms - r.at_ms;
+    } else {
+      let waitInside = 0;
+      for (const [ws, we] of waits) {
+        waitInside += Math.max(0, Math.min(r.at_ms, we) - Math.max(u.at_ms, ws));
+      }
+      duration = Math.max(0, r.at_ms - u.at_ms - waitInside);
+    }
+    calls.push({
+      name: u.tool_name || r.tool_name || "本地工具",
+      duration_ms: duration,
+      turnId: turn.id,
+    });
+  }
+  return calls;
+}
+
+// 慢操作（单次 >15s）跨轮收集，按耗时倒序
+function slowToolCalls(s, threshold = 15000) {
+  const calls = [];
+  s.turns.forEach((t, i) => {
+    for (const c of perCallToolTimings(t)) {
+      if (c.duration_ms > threshold) calls.push({ ...c, turnIndex: i + 1 });
+    }
+  });
+  return calls.sort((a, b) => b.duration_ms - a.duration_ms);
+}
+
+// 自动化自治率 (AUTONOMY)：纯工作耗时 ÷ (纯工作 + 等待人审阅) × 100%
+// 人工确认次数 = 成对闭合的 review_wait_start/end（Claude 独有；Pi/Codex 优雅降级）
+function sessionAutonomy(s) {
+  let work = 0;
+  let wait = 0;
+  let hasWork = false;
+  let confirmations = 0;
+  for (const t of s.turns) {
+    if (t.work_ms !== null && t.work_ms !== undefined) {
+      work += t.work_ms;
+      hasWork = true;
+    }
+    if (t.review_wait_ms !== null && t.review_wait_ms !== undefined) {
+      wait += t.review_wait_ms;
+    }
+    let open = 0;
+    for (const e of t.events || []) {
+      if (e.kind === "review_wait_start") open++;
+      else if (e.kind === "review_wait_end" && open > 0) {
+        confirmations++;
+        open--;
+      }
+    }
+  }
+  if (!hasWork) return { rate: null, workSum: null, confirmations };
+  const denom = work + wait;
+  return {
+    rate: denom > 0 ? (work / denom) * 100 : 100,
+    workSum: work,
+    confirmations,
+  };
+}
+
+// 系统瓶颈归因诊断：只输出由真实数据推导的规则结论，不编造
+function attributionLines(s) {
+  const b = sessionBreakdown(s);
+  if (b.total <= 0) {
+    return [
+      "该会话暂无细分耗时数据（Codex 会话不提供 breakdown 事件），无法进行瓶颈归因。",
+    ];
+  }
+  const dims = [
+    { key: "tool", label: "本地工具执行", verdict: "瓶颈为本地工具/脚本执行" },
+    { key: "model", label: "AI 模型推理", verdict: "瓶颈为模型推理等待" },
+    { key: "wait", label: "等待人审阅", verdict: "瓶颈为等待人审阅卡点" },
+    { key: "standby", label: "静默待命", verdict: "会话大部分时间处于静默待命" },
+  ].map((d) => ({ ...d, pct: (b[d.key] / b.total) * 100 }));
+  const top = dims.slice().sort((a, b) => b.pct - a.pct)[0];
+  const lines = [
+    `主要耗时源：${top.label} 占 ${top.pct.toFixed(1)}%，${top.verdict}。`,
+  ];
+  const waitPct = (b.wait / b.total) * 100;
+  lines.push(
+    waitPct >= 25
+      ? `等待人审阅占比 ${waitPct.toFixed(1)}%，建议提升自动化（预设工具权限白名单，减少授权卡点）。`
+      : `等待人审阅占比仅 ${waitPct.toFixed(1)}%，人机交付流转紧凑。`,
+  );
+  const slow = slowToolCalls(s);
+  lines.push(
+    slow.length
+      ? `检测到 ${slow.length} 项 >15s 慢操作，最慢为 ${slow[0].name}（${fmt(slow[0].duration_ms)}，轮次 #${slow[0].turnIndex}）。`
+      : "未检测到 >15s 的慢操作，执行节奏平稳。",
+  );
+  return lines;
+}
+
+function detailKpiCard(label, val, sub, tone = "") {
+  return `
+    <div class="kpi-card${tone ? ` ${tone}` : ""}">
+      <div class="kpi-label">${h(label)}</div>
+      <div class="kpi-val">${h(val)}</div>
+      <div class="kpi-sub">${h(sub)}</div>
+    </div>`;
+}
+
+const DETAIL_BREAKDOWN_ROWS = [
+  { key: "tool", label: "本地工具 (Tool Execution)", color: "var(--color-mcp)" },
+  { key: "model", label: "模型推理 (Model API)", color: "var(--color-system)" },
+  { key: "wait", label: "等待人审阅 (Review Wait)", color: "var(--color-skills)" },
+  { key: "standby", label: "待命 (Standby)", color: "var(--state-standby)" },
+];
+
+function sessionDetail() {
+  const s = detailSession();
+  if (!s) return sessionDetailFallback();
+
+  const b = sessionBreakdown(s);
+  const wall = sessionWallSpan(s);
+  const autonomy = sessionAutonomy(s);
+  const slow = slowToolCalls(s);
+  const status = sessionStatus(s);
+
+  // 首屏第一视觉：8px 全宽分段占比条 + 4 行百分比明细
+  const segHtml =
+    b.total > 0
+      ? DETAIL_BREAKDOWN_ROWS.map((r) => {
+          const pct = (b[r.key] / b.total) * 100;
+          return pct > 0
+            ? `<div style="width:${pct.toFixed(1)}%; background:${r.color};" title="${h(r.label)}: ${pct.toFixed(1)}%"></div>`
+            : "";
+        }).join("")
+      : "";
+  const breakdownBody =
+    b.total > 0
+      ? `
+        <div class="multi-seg-bar tall">${segHtml}</div>
+        ${DETAIL_BREAKDOWN_ROWS.map((r) => {
+          const ms = b[r.key];
+          const pct = ((ms / b.total) * 100).toFixed(1);
+          return `
+            <div class="breakdown-row">
+              <div class="breakdown-label">
+                <span class="seg-legend-swatch" style="background:${r.color};"></span>
+                <span>${h(r.label)}</span>
+              </div>
+              <div class="breakdown-val">
+                <span>${ms > 0 ? fmt(ms) : "—"}</span>
+                <strong>${pct}%</strong>
+              </div>
+            </div>`;
+        }).join("")}`
+      : `<div class="s1-empty">该会话暂无细分耗时数据 — 当前接入的 Codex 会话不提供 breakdown 事件，不做任何伪造拆分。</div>`;
+
+  const workPct =
+    b.total > 0 ? (((b.tool + b.model) / b.total) * 100).toFixed(1) : null;
+
+  const slowRows = slow.slice(0, 3).map(
+    (c, i) => `
+      <div class="slow-tool-row">
+        <span class="slow-tool-name"><strong class="slow-tool-rank">${i + 1}.</strong> ${h(c.name)}<span class="slow-tool-turn">轮次 #${c.turnIndex}</span></span>
+        <span class="slow-tool-time">${fmt(c.duration_ms)}</span>
+      </div>`,
+  );
+
+  return `
+    <div class="detail-nav">
+      <button class="btn-back-home" data-action="back-overview" aria-label="返回总览">
+        <span>← 返回总览</span>
+      </button>
+      <span class="detail-id-mono">${h(s.agent)} · ${h(s.id)}</span>
+      <span class="detail-status-pill ${status.cls}">${h(status.label)}</span>
+    </div>
+    <h2 class="detail-title">${h(s.title || s.project)}</h2>
+
+    <section class="session-breakdown-full">
+      <div class="breakdown-head">
+        <strong>本会话操作与耗时分布 (Session Operations Breakdown)</strong>
+        <span class="breakdown-head-val">${b.tool + b.model > 0 ? `纯工作净值 ${fmt(b.tool + b.model)} (${workPct}%)` : "无纯工作耗时证据"}</span>
+      </div>
+      ${breakdownBody}
+    </section>
+
+    <div class="detail-kpis">
+      ${detailKpiCard(
+        "总壁钟时长 (WALL TIME)",
+        wall.wallMs !== null ? fmt(wall.wallMs) : "—",
+        "开始至完结绝对跨度（当前统计范围内）",
+      )}
+      ${detailKpiCard(
+        "纯工作有效净值 (ACTIVE WORK)",
+        autonomy.workSum !== null ? fmt(autonomy.workSum) : "—",
+        autonomy.workSum !== null ? "模型推理 + 本地工具执行" : "该会话未提供三态切分",
+        "work",
+      )}
+      ${detailKpiCard(
+        "自动化自治率 (AUTONOMY)",
+        autonomy.rate !== null ? `${autonomy.rate.toFixed(1)}%` : "—",
+        autonomy.rate !== null
+          ? `${autonomy.confirmations} 次人工确认卡点`
+          : "该会话未提供三态切分",
+      )}
+      ${detailKpiCard(
+        "慢操作瓶颈数",
+        `${slow.length} 项`,
+        ">15s 慢本地操作",
+        slow.length ? "alert" : "",
+      )}
+    </div>
+
+    <div class="detail-diag-grid">
+      <div class="diag-card">
+        <div class="diag-head">
+          <span>慢操作 TOP 榜 (Slowest Operations)</span>
+          <span class="diag-head-sub">单次调用耗时 > 15s · 倒序</span>
+        </div>
+        ${
+          slowRows.length
+            ? slowRows.join("")
+            : `<div class="s1-empty">未检测到 >15s 的慢操作。</div>`
+        }
+      </div>
+      <div class="diag-card">
+        <div class="diag-head">
+          <span>瓶颈诊断与效率归因 (Attribution)</span>
+          <span class="diag-head-sub ok">系统自检结论</span>
+        </div>
+        <div class="diag-attribution">
+          ${attributionLines(s).map((l) => `<p>• ${h(l)}</p>`).join("")}
+        </div>
+      </div>
+    </div>
+    <!-- 切片 3 预留：轮次时序流胶囊 (Turn Capsules) 将渲染在此处 -->
   `;
 }
 
@@ -1428,6 +1815,10 @@ document.addEventListener("click", async (e) => {
 
   if (b.dataset.page) {
     state.page = b.dataset.page;
+    // 从详情页点击侧边导航：清掉 #session/:id 哈希，避免下一次 applyRoute 又跳回详情
+    if (parseSessionHash()) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
     render();
     window.scrollTo(0, 0);
   }
@@ -1443,7 +1834,8 @@ document.addEventListener("click", async (e) => {
   }
 
   if (b.dataset.session) {
-    details(b.dataset.session);
+    // 会话表下钻入口统一改为 #session/:id 详情页路由（旧弹窗 details() 保留但不再从此进入）
+    location.hash = "#session/" + encodeURIComponent(b.dataset.session);
   }
 
   if (b.dataset.saveDirectory) await saveDirectory(b.dataset.saveDirectory);
@@ -1463,6 +1855,9 @@ document.addEventListener("click", async (e) => {
   switch (b.dataset.action) {
     case "close":
       close();
+      break;
+    case "back-overview":
+      goOverview();
       break;
     case "close-drawer":
       closeDrawer();
@@ -1572,5 +1967,9 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// 首次拉取
+// #session/:id 哈希路由：deep-link、浏览器前进/后退、卡片点击统一由此驱动
+window.addEventListener("hashchange", applyRoute);
+
+// 首次引导：先解析地址栏深链（如 #session/claude%2Fxxx），再拉取数据渲染
+applyRoute();
 load();

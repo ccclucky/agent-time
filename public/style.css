@@ -1428,3 +1428,302 @@ input[type="search"] {
   background-position: left 10px center;
   padding-left: 32px;
 }
+
+/* ========================================================
+   切片 2：独立会话详情页 (#session/:id)
+   SSOT: prototypes/session-first-detail-view.html — DETAIL PAGE 区段
+   ======================================================== */
+.detail-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.btn-back-home {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--state-work);
+  background: var(--state-work-light);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-back-home:hover {
+  border-color: var(--state-work);
+  background: #FFFFFF;
+}
+
+.detail-id-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.detail-status-pill {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: #DCFCE7;
+  color: #166534;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.detail-status-pill.warn {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+.detail-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--fg-title);
+  margin-bottom: 18px;
+  letter-spacing: -0.01em;
+}
+
+/* 首屏第一视觉：会话专属 Operations Breakdown */
+.session-breakdown-full {
+  background: var(--card-muted);
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.breakdown-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.breakdown-head strong {
+  font-size: var(--text-md);
+  color: var(--fg-title);
+}
+
+.breakdown-head-val {
+  font-size: var(--text-base);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+.breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: var(--text-base);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.breakdown-row:last-child {
+  border-bottom: none;
+}
+
+.breakdown-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg-title);
+  min-width: 0;
+}
+
+.breakdown-val {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.breakdown-val strong {
+  color: var(--fg-title);
+  margin-left: 14px;
+  display: inline-block;
+  min-width: 48px;
+  text-align: right;
+}
+
+/* 4 项核心体检 KPI */
+.detail-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.detail-kpis .kpi-card {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.kpi-label {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+
+.kpi-val {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--fg-title);
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+.kpi-sub {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
+
+.detail-kpis .kpi-card.work .kpi-val {
+  color: var(--state-work);
+}
+
+.detail-kpis .kpi-card.alert .kpi-val {
+  color: #DC2626;
+}
+
+/* 中部双栏：慢操作 TOP 榜 + 瓶颈归因诊断 */
+.detail-diag-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.diag-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.diag-head {
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--fg-title);
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.diag-head-sub {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.diag-head-sub.ok {
+  color: #16A34A;
+  font-weight: 700;
+}
+
+.slow-tool-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--card-muted);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: var(--text-sm);
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  min-width: 0;
+}
+
+.slow-tool-row:hover {
+  border-color: var(--state-work);
+  background: #FFFFFF;
+}
+
+.slow-tool-name {
+  font-family: var(--font-mono);
+  color: var(--fg-title);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.slow-tool-rank {
+  color: var(--state-work);
+}
+
+.slow-tool-turn {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-left: 8px;
+}
+
+.slow-tool-time {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #DC2626;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.diag-attribution {
+  font-size: var(--text-sm);
+  line-height: 1.8;
+  color: var(--fg-body);
+}
+
+.diag-attribution p {
+  margin: 0 0 6px;
+}
+
+@media (max-width: 960px) {
+  .detail-kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .detail-diag-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-nav {
+    flex-wrap: wrap;
+  }
+
+  .detail-id-mono {
+    order: 3;
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
