@@ -660,12 +660,12 @@ function openDrawer(turn, session) {
       </div>
       <!-- Token / 模型下钻：与三态并排呈现；无快照如实留空，绝不 0 断言 -->
       <div class="drawer-kpi-grid" style="margin-top:10px;">
-        <div class="drawer-kpi-box" style="border-top:3px solid #5E7A8B;">
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
           <div class="drawer-kpi-title">本轮 Token 用量</div>
           <div class="drawer-kpi-val">${fmtTokens(turn.tokens ? turn.tokens.total_tokens : null)}</div>
           <div class="drawer-kpi-sub">${h(tokenSub(turn.tokens))}</div>
         </div>
-        <div class="drawer-kpi-box" style="border-top:3px solid #5E7A8B;">
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
           <div class="drawer-kpi-title">会话累计 Token</div>
           <div class="drawer-kpi-val">${fmtTokens(session.tokens ? session.tokens.total_tokens : null)}</div>
           <div class="drawer-kpi-sub">${session.tokens ? "全部轮次快照差分累计" : "源记录未携带 Token 快照"}</div>
