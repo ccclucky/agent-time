@@ -275,3 +275,355 @@ test("Pi: terminal stopReason maps length->complete, aborted->abort, error->fail
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test("Pi: approval gap is observable when durationMs is present (seconds-level)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  // Assistant response ends at 22:03:17.362Z; the tool only starts 5s later
+  // (approval pended), runs 1s, result created at 22:03:23.362Z.
+  // toolResult.durationMs = 1000 -> tool start 22:03:22.362Z, i.e. a
+  // 5000ms observable gap after the issuing response end.
+  const p = writeSession(tmpDir, "approval-gap.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000011",
+      timestamp: "2026-10-09T22:03:15.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: "2026-10-09T22:03:15.437Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "needs approval" }],
+        timestamp: T("2026-10-09T22:03:15.437Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-10-09T22:03:17.363Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-gap", name: "bash", arguments: {} }],
+        model: "z-ai/glm-5.3",
+        stopReason: "toolUse",
+        timestamp: T("2026-10-09T22:03:15.458Z"),
+        durationMs: 1904,
+      },
+    },
+    {
+      type: "message",
+      id: "t1",
+      parentId: "a1",
+      timestamp: "2026-10-09T22:03:23.363Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-gap",
+        toolName: "bash",
+        content: ["ok"],
+        durationMs: 1000,
+        timestamp: T("2026-10-09T22:03:23.362Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a2",
+      parentId: "t1",
+      timestamp: "2026-10-09T22:03:24.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        model: "z-ai/glm-5.3",
+        stopReason: "stop",
+        timestamp: T("2026-10-09T22:03:23.400Z"),
+        durationMs: 600,
+      },
+    },
+  ]);
+
+  const data = parsePi(p);
+  const toolUse = data.events.find((e) => e.kind === "tool_use")!;
+  const toolResult = data.events.find((e) => e.kind === "tool_result")!;
+  assert.equal(toolUse.at_ms, T("2026-10-09T22:03:17.362Z"));
+  assert.equal(toolResult.at_ms, T("2026-10-09T22:03:22.362Z"));
+  assert.equal(toolResult.end_ms, T("2026-10-09T22:03:23.362Z"));
+  // The seconds-level approval gap is derivable: tool start - response end.
+  assert.equal(toolResult.at_ms - toolUse.at_ms, 5000);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: falls back when durationMs is missing (model end and tool start) and records issues", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  const p = writeSession(tmpDir, "no-duration.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000012",
+      timestamp: "2026-10-09T22:03:15.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: "2026-10-09T22:03:15.437Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "q" }],
+        timestamp: T("2026-10-09T22:03:15.437Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      // durationMs absent: model end_ms falls back to record append ISO.
+      timestamp: "2026-10-09T22:03:19.100Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-nb", name: "read", arguments: {} }],
+        model: "z-ai/glm-5.3",
+        stopReason: "toolUse",
+        timestamp: T("2026-10-09T22:03:17.000Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "t1",
+      parentId: "a1",
+      // durationMs absent: tool start falls back to issuing response end
+      // (22:03:19.100Z) and an issue is recorded.
+      timestamp: "2026-10-09T22:03:25.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-nb",
+        toolName: "read",
+        content: ["ok"],
+        timestamp: T("2026-10-09T22:03:25.000Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a2",
+      parentId: "t1",
+      timestamp: "2026-10-09T22:03:26.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        model: "z-ai/glm-5.3",
+        stopReason: "stop",
+        timestamp: T("2026-10-09T22:03:25.500Z"),
+      },
+    },
+  ]);
+
+  const data = parsePi(p);
+  const model1 = data.events.find(
+    (e) => e.kind === "model" && e.at_ms === T("2026-10-09T22:03:17.000Z"),
+  )!;
+  assert.equal(model1.end_ms, T("2026-10-09T22:03:19.100Z"));
+
+  const toolResult = data.events.find((e) => e.kind === "tool_result")!;
+  assert.equal(toolResult.at_ms, T("2026-10-09T22:03:19.100Z"));
+  assert.equal(toolResult.end_ms, T("2026-10-09T22:03:25.000Z"));
+  assert.ok(
+    data.issues.some((i) => i.includes("durationMs")),
+    "missing tool durationMs must be flagged as an issue",
+  );
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: model_change and thinking_level_change emit model events with evidence", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  const p = writeSession(tmpDir, "model-change.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000013",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    // Session-initial model change happens before any user turn; it is
+    // attributed to the turn the next user message opens.
+    {
+      type: "model_change",
+      id: "mc1",
+      parentId: null,
+      timestamp: "2026-10-09T22:03:00.500Z",
+      provider: "dp-llm",
+      modelId: "Qwen3.6-35B-A3B",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: "mc1",
+      timestamp: "2026-10-09T22:03:05.000Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "q" }],
+        timestamp: T("2026-10-09T22:03:05.000Z"),
+      },
+    },
+    // First response keeps the turn open (toolUse) and carries no level.
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-10-09T22:03:07.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        model: "Qwen3.6-35B-A3B",
+        stopReason: "toolUse",
+        timestamp: T("2026-10-09T22:03:05.200Z"),
+        durationMs: 1800,
+      },
+    },
+    // Level switch while the turn is still open emits a model event with the
+    // new level and no model name.
+    {
+      type: "thinking_level_change",
+      id: "tl1",
+      parentId: "a1",
+      timestamp: "2026-10-09T22:03:07.500Z",
+      thinkingLevel: "medium",
+    },
+    // Final response lacks thinkingLevel; the switched level applies.
+    {
+      type: "message",
+      id: "a2",
+      parentId: "tl1",
+      timestamp: "2026-10-09T22:03:09.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "final" }],
+        model: "Qwen3.6-35B-A3B",
+        stopReason: "stop",
+        timestamp: T("2026-10-09T22:03:08.000Z"),
+        durationMs: 1000,
+      },
+    },
+  ]);
+
+  const data = parsePi(p);
+  assert.deepEqual(
+    data.events.map((e) => e.kind),
+    ["start", "model", "model", "model", "model", "complete"],
+  );
+  const models = data.events.filter((e) => e.kind === "model");
+
+  const change = models[0];
+  assert.equal(change.model, "dp-llm/Qwen3.6-35B-A3B");
+  assert.equal(change.at_ms, T("2026-10-09T22:03:00.500Z"));
+  assert.equal(change.turn_id, "u1");
+
+  const first = models[1];
+  assert.equal(first.model, "Qwen3.6-35B-A3B");
+  assert.ok(first.thinking_level == null);
+
+  const levelSwitch = models[2];
+  assert.equal(levelSwitch.model, null);
+  assert.equal(levelSwitch.thinking_level, "medium");
+  assert.equal(levelSwitch.at_ms, T("2026-10-09T22:03:07.500Z"));
+
+  const final = models[3];
+  assert.equal(final.model, "Qwen3.6-35B-A3B");
+  assert.equal(final.thinking_level, "medium");
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: skips non-user-flow entries and unknown types; bad lines become issues", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  const rows: object[] = [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000014",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    { type: "compaction", id: "c1", parentId: null, timestamp: "2026-10-09T22:03:00.100Z" },
+    { type: "context_edit", id: "ce1", parentId: "c1", timestamp: "2026-10-09T22:03:00.200Z" },
+    { type: "branch_summary", id: "bs1", parentId: "ce1", timestamp: "2026-10-09T22:03:00.300Z" },
+    { type: "custom", id: "cu1", parentId: "bs1", timestamp: "2026-10-09T22:03:00.300Z" },
+    { type: "custom_message", id: "cm1", parentId: "cu1", timestamp: "2026-10-09T22:03:00.300Z" },
+    { type: "label", id: "l1", parentId: "cm1", timestamp: "2026-10-09T22:03:00.300Z" },
+    { type: "session_info", id: "si1", parentId: "l1", timestamp: "2026-10-09T22:03:00.300Z" },
+    { type: "usage", id: "us1", parentId: "si1", timestamp: "2026-10-09T22:03:00.300Z" },
+    { type: "mystery_entry", id: "mx1", parentId: "us1", timestamp: "2026-10-09T22:03:00.300Z" },
+    {
+      type: "message",
+      id: "sys1",
+      parentId: "mx1",
+      timestamp: "2026-10-09T22:03:00.400Z",
+      message: { role: "system", content: "", timestamp: T("2026-10-09T22:03:00.400Z") },
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: "sys1",
+      timestamp: "2026-10-09T22:03:05.000Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "q" }],
+        timestamp: T("2026-10-09T22:03:05.000Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-10-09T22:03:07.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        model: "m",
+        stopReason: "stop",
+        timestamp: T("2026-10-09T22:03:05.200Z"),
+        durationMs: 1800,
+      },
+    },
+  ];
+  const p = path.join(tmpDir, "skips.jsonl");
+  fs.writeFileSync(
+    p,
+    rows.map((r) => JSON.stringify(r)).join("\n") +
+      "\n{ this is not json\n" +
+      JSON.stringify({
+        type: "message",
+        id: "u2",
+        parentId: null,
+        timestamp: "2026-10-09T22:04:05.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "second" }],
+          timestamp: T("2026-10-09T22:04:05.000Z"),
+        },
+      }) +
+      "\n",
+  );
+
+  const data = parsePi(p);
+  // Only the two user turns produce events; skips never open turns or leak in.
+  assert.deepEqual(
+    data.events.map((e) => `${e.kind}:${e.turn_id}`),
+    ["start:u1", "model:u1", "complete:u1", "start:u2"],
+  );
+  assert.ok(
+    data.issues.some((i) => i.includes("无法解析")),
+    "malformed line becomes an issue",
+  );
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

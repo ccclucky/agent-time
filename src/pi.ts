@@ -35,13 +35,17 @@ export function parsePi(path: string) {
   let sid: string | null = null,
     project: string | null = null,
     current: string | null = null,
+    currentThinking: string | null = null,
     excluded = false;
   const events: Event[] = [],
     issues = new Set<string>(),
     // toolCallId -> issuing assistant response end + tool name, so toolResult
     // records can fall back to the issuing response end when durationMs is
     // missing and prefer their own toolName when present.
-    toolCalls = new Map<string, { end: number; name: string | null }>();
+    toolCalls = new Map<string, { end: number; name: string | null }>(),
+    // model_change entries seen before any open user turn describe the model
+    // the next turn starts with; keep them until a turn opens.
+    pendingModels: { at: number; model: string }[] = [];
 
   const add = (
     turn_id: string,
@@ -93,6 +97,29 @@ export function parsePi(path: string) {
               .slice(0, 100) || project;
         continue;
       }
+      if (r.type === "model_change") {
+        if (!sid) continue;
+        const provider = typeof r.provider === "string" ? r.provider.trim() : "";
+        const modelId = typeof r.modelId === "string" ? r.modelId.trim() : "";
+        if (!provider || !modelId) continue;
+        const at = iso(r.timestamp),
+          model = Array.from(provider + "/" + modelId).slice(0, 120).join("");
+        if (current) add(current, "model", at, model);
+        else pendingModels.push({ at, model });
+        continue;
+      }
+      if (r.type === "thinking_level_change") {
+        if (!sid) continue;
+        const level =
+          typeof r.thinkingLevel === "string" && r.thinkingLevel.trim()
+            ? Array.from(r.thinkingLevel.trim()).slice(0, 40).join("")
+            : null;
+        if (!level) continue;
+        currentThinking = level;
+        // Inside an open turn the switch itself is timing evidence.
+        if (current) add(current, "model", iso(r.timestamp), null, { thinking_level: level });
+        continue;
+      }
       if (!sid || r.type !== "message") continue;
       const m = r.message;
       if (!m || typeof m !== "object" || Array.isArray(m)) continue;
@@ -103,6 +130,7 @@ export function parsePi(path: string) {
         }
         current = r.id as string;
         add(current, "start", iso(r.timestamp));
+        for (const m of pendingModels.splice(0)) add(current, "model", m.at, m.model);
         continue;
       }
       if (m.role === "assistant") {
@@ -117,7 +145,7 @@ export function parsePi(path: string) {
         const level =
           typeof m.thinkingLevel === "string" && m.thinkingLevel.trim()
             ? Array.from(m.thinkingLevel.trim()).slice(0, 40).join("")
-            : null;
+            : currentThinking;
         if (typeof m.model === "string" && m.model.trim())
           add(turn, "model", requestStart, Array.from(m.model).slice(0, 120).join(""), {
             end_ms: responseEnd,
