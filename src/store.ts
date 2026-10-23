@@ -7,12 +7,17 @@ import { parseClaude } from "./claude.js";
 import { SCHEMA } from "./schema.js";
 import { Directories } from "./directories.js";
 import { expand } from "./locations.js";
+import { unionMs } from "./metrics.js";
 import {
   ValidationError,
   type Event,
   type Session,
   type Status,
+  type SubagentSummary,
+  type Turn,
+  type TurnBreakdown,
 } from "./types.js";
+
 interface Source {
   agent: string;
   id: string;
@@ -25,6 +30,127 @@ interface Source {
   config_root: string | null;
   imported_at: string;
 }
+
+export function groupSubagents(
+  events: Event[],
+  turns: Turn[] = [],
+): SubagentSummary[] {
+  const map = new Map<string, Event[]>();
+  for (const e of events) {
+    if (e.agent_id) {
+      const list = map.get(e.agent_id) ?? [];
+      list.push(e);
+      map.set(e.agent_id, list);
+    }
+  }
+  const result: SubagentSummary[] = [];
+  for (const [subId, sEvents] of map.entries()) {
+    sEvents.sort((a, b) => a.at_ms - b.at_ms);
+    const subStart = sEvents[0].at_ms;
+    const subEnd = sEvents[sEvents.length - 1].at_ms;
+    result.push({
+      agent_id: subId,
+      start_ms: subStart,
+      end_ms: subEnd,
+      work_ms: Math.max(0, subEnd - subStart),
+      review_wait_ms: 0,
+      turns: turns.filter((t) => t.events.some((e) => e.agent_id === subId)),
+    });
+  }
+  return result;
+}
+
+export function calculateClaudeTiming(
+  entries: Event[],
+  start: number,
+  end: number,
+  elapsed: number,
+): {
+  work_ms: number;
+  review_wait_ms: number;
+  breakdown: TurnBreakdown;
+} {
+  const waitStarts = entries
+    .filter((e) => e.kind === "review_wait_start")
+    .map((e) => e.at_ms)
+    .sort((a, b) => a - b);
+  const waitEnds = entries
+    .filter((e) => e.kind === "review_wait_end")
+    .map((e) => e.at_ms)
+    .sort((a, b) => a - b);
+
+  const waitIntervals: [number, number][] = [];
+  const usedWaitEnds = new Set<number>();
+  for (const wStart of waitStarts) {
+    const wEndIdx = waitEnds.findIndex(
+      (t, idx) => !usedWaitEnds.has(idx) && t >= wStart,
+    );
+    let wEnd = end;
+    if (wEndIdx !== -1) {
+      usedWaitEnds.add(wEndIdx);
+      wEnd = waitEnds[wEndIdx];
+    }
+    if (wEnd > wStart) {
+      waitIntervals.push([wStart, wEnd]);
+    }
+  }
+  const totalWait = unionMs(waitIntervals);
+
+  const toolUses = entries.filter((e) => e.kind === "tool_use");
+  const toolResults = entries.filter((e) => e.kind === "tool_result");
+  const usedResultIndices = new Set<number>();
+  const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+  let totalToolMs = 0;
+
+  for (const u of toolUses) {
+    const tname = u.tool_name || "tool";
+    let rIndex = -1;
+    if (u.tool_id) {
+      rIndex = toolResults.findIndex(
+        (r, idx) =>
+          !usedResultIndices.has(idx) &&
+          r.tool_id === u.tool_id &&
+          r.at_ms >= u.at_ms,
+      );
+    }
+    if (rIndex === -1) {
+      rIndex = toolResults.findIndex(
+        (r, idx) => !usedResultIndices.has(idx) && r.at_ms >= u.at_ms,
+      );
+    }
+
+    let tDuration = 0;
+    if (rIndex !== -1) {
+      usedResultIndices.add(rIndex);
+      const rAt = toolResults[rIndex].at_ms;
+      let waitInside = 0;
+      for (const [ws, we] of waitIntervals) {
+        const overlap = Math.max(0, Math.min(rAt, we) - Math.max(u.at_ms, ws));
+        waitInside += overlap;
+      }
+      tDuration = Math.max(0, rAt - u.at_ms - waitInside);
+    }
+    totalToolMs += tDuration;
+    const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+    existing.count += 1;
+    existing.duration_ms += tDuration;
+    toolsMap.set(tname, existing);
+  }
+
+  const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait);
+  const work_ms = Math.max(0, elapsed - totalWait);
+  return {
+    work_ms,
+    review_wait_ms: totalWait,
+    breakdown: {
+      model_api_ms: modelApiMs,
+      tool_execution_ms: totalToolMs,
+      review_wait_ms: totalWait,
+      tools: [...toolsMap.values()],
+    },
+  };
+}
+
 export class Store {
   readonly path: string;
   readonly db: DatabaseSync;
@@ -37,7 +163,7 @@ export class Store {
     const columns = this.db
       .prepare("PRAGMA table_info(source)")
       .all()
-      .map((r) => r.name);
+      .map((r) => (r as { name: string }).name);
     if (!columns.includes("agent"))
       this.db.exec(
         "ALTER TABLE source ADD COLUMN agent TEXT NOT NULL DEFAULT 'Codex'",
@@ -45,6 +171,13 @@ export class Store {
     for (const col of ["last_error", "config_root"])
       if (!columns.includes(col))
         this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
+    const eventCols = this.db
+      .prepare("PRAGMA table_info(event)")
+      .all()
+      .map((r) => (r as { name: string }).name);
+    for (const col of ["agent_id", "tool_id", "tool_name"])
+      if (!eventCols.includes(col))
+        this.db.exec(`ALTER TABLE event ADD COLUMN ${col} TEXT`);
     try {
       chmodSync(this.path, 0o600);
     } catch {}
@@ -96,9 +229,21 @@ export class Store {
           m.agent,
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
-      const put = this.db.prepare("INSERT INTO event VALUES(?,?,?,?,?,?)");
+      const put = this.db.prepare(
+        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
+      );
       for (const e of data.events)
-        put.run(sid, e.key, e.turn_id, e.kind, e.at_ms, e.model);
+        put.run(
+          sid,
+          e.key,
+          e.turn_id,
+          e.kind,
+          e.at_ms,
+          e.model,
+          e.agent_id ?? null,
+          e.tool_id ?? null,
+          e.tool_name ?? null,
+        );
     });
     return { events: data.events.length, issues: data.issues };
   }
@@ -207,7 +352,7 @@ export class Store {
         .all() as unknown as Source[],
       events: this.db
         .prepare(
-          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
+          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
         )
         .all() as unknown as (Event & { session_id: string })[],
     }));
@@ -249,29 +394,47 @@ export class Store {
       grouped.set(key, g);
     }
     for (const { sid, tid, entries } of grouped.values()) {
-      const starts = [
+      let starts = [
         ...new Set(
-          entries.filter((e) => e.kind === "start").map((e) => e.at_ms),
+          entries.filter((e) => e.kind === "start" && !e.agent_id).map((e) => e.at_ms),
         ),
       ].sort((a, b) => a - b);
-      const endings = [
+      if (starts.length === 0) {
+        starts = [
+          ...new Set(
+            entries.filter((e) => e.kind === "start").map((e) => e.at_ms),
+          ),
+        ].sort((a, b) => a - b);
+      }
+
+      let endings = [
         ...new Map(
           entries
-            .filter((e) => ["complete", "abort", "fail"].includes(e.kind))
+            .filter((e) => ["complete", "abort", "fail"].includes(e.kind) && !e.agent_id)
             .map((e) => [`${e.at_ms}:${e.kind}`, e]),
         ).values(),
       ];
+      if (endings.length === 0) {
+        endings = [
+          ...new Map(
+            entries
+              .filter((e) => ["complete", "abort", "fail"].includes(e.kind))
+              .map((e) => [`${e.at_ms}:${e.kind}`, e]),
+          ).values(),
+        ];
+      }
+
       const start = starts.length === 1 ? starts[0] : null,
         end = endings.length === 1 ? endings[0].at_ms : null,
         endKind = endings.length === 1 ? endings[0].kind : null;
       let status: Status =
-          endKind === "complete"
-            ? "completed"
-            : endKind === "abort"
-              ? "aborted"
-              : endKind === "fail"
-                ? "failed"
-                : "open",
+        endKind === "complete"
+          ? "completed"
+          : endKind === "abort"
+            ? "aborted"
+            : endKind === "fail"
+              ? "failed"
+              : "open",
         reason: string | null = null;
       if (starts.length > 1 || endings.length > 1) {
         status = "invalid";
@@ -284,16 +447,33 @@ export class Store {
         reason = "结束时间早于开始时间，未计入耗时";
       } else if (end === null)
         reason = "尚无结束事件；可能进行中，也可能记录中断，不推测当前状态";
-      sessions.get(sid)!.turns.push({
+
+      const elapsed =
+        ["completed", "aborted", "failed"].includes(status) &&
+        start !== null &&
+        end !== null
+          ? end - start
+          : null;
+
+      const sessionObj = sessions.get(sid)!;
+      let work_ms: number | null = null;
+      let review_wait_ms: number | null = null;
+      let breakdown: Turn["breakdown"] = null;
+
+      if (elapsed !== null && start !== null && end !== null && sessionObj.agent === "Claude Code") {
+        const timing = calculateClaudeTiming(entries, start, end, elapsed);
+        work_ms = timing.work_ms;
+        review_wait_ms = timing.review_wait_ms;
+        breakdown = timing.breakdown;
+      }
+
+      const turnSubagents = groupSubagents(entries);
+
+      sessionObj.turns.push({
         id: tid,
         start_ms: start,
         end_ms: end,
-        elapsed_ms:
-          ["completed", "aborted", "failed"].includes(status) &&
-          start !== null &&
-          end !== null
-            ? end - start
-            : null,
+        elapsed_ms: elapsed,
         status,
         reason,
         models: [
@@ -302,17 +482,47 @@ export class Store {
           ),
         ].sort(),
         events: entries,
-        work_ms: null,
-        human_ms: null,
+        work_ms,
+        review_wait_ms,
+        standby_ms: null,
+        human_ms: review_wait_ms,
         response_gap_ms: null,
+        subagents: turnSubagents.length ? turnSubagents : undefined,
+        breakdown,
       });
     }
-    for (const s of sessions.values())
+    for (const s of sessions.values()) {
       s.turns.sort(
         (a, b) =>
           (a.start_ms ?? a.end_ms ?? 0) - (b.start_ms ?? b.end_ms ?? 0) ||
           a.id.localeCompare(b.id),
       );
+      for (let i = 1; i < s.turns.length; i++) {
+        const prevEnd = s.turns[i - 1].end_ms;
+        const currStart = s.turns[i].start_ms;
+        if (prevEnd !== null && currStart !== null && currStart >= prevEnd) {
+          s.turns[i].standby_ms = currStart - prevEnd;
+          s.turns[i].response_gap_ms = s.turns[i].standby_ms;
+        }
+      }
+      s.work_ms = s.turns.some((t) => t.work_ms !== null)
+        ? s.turns.reduce((acc, t) => acc + (t.work_ms ?? 0), 0)
+        : null;
+      s.review_wait_ms = s.turns.some((t) => t.review_wait_ms !== null)
+        ? s.turns.reduce((acc, t) => acc + (t.review_wait_ms ?? 0), 0)
+        : null;
+      s.standby_ms = s.turns.some((t) => t.standby_ms !== null)
+        ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
+        : null;
+
+      const sessionSubagents = groupSubagents(
+        s.turns.flatMap((t) => t.events),
+        s.turns,
+      );
+      if (sessionSubagents.length > 0) {
+        s.subagents = sessionSubagents;
+      }
+    }
     return [...sessions.values()];
   }
   sourceInfo() {

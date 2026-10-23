@@ -721,8 +721,8 @@ test("Claude directory enablement discovers main transcripts, with privacy and t
   assert.equal(sessions[0].project, "claude-project");
   assert.equal(sessions[0].turns.length, 1);
   assert.equal(summary(store).processing_ms, 600000);
-  assert.equal(sessions[0].turns[0].work_ms, null);
-  assert.match(sessions[0].issues.join(" "), /不是精确执行耗时/);
+  assert.equal(sessions[0].turns[0].work_ms, 600000);
+  assert.match(sessions[0].issues.join(" "), /三态耗时切分/);
   assert.deepEqual(readFileSync(p), before);
   assert(!readFileSync(store.path).includes(Buffer.from("PRIVATE")));
 });
@@ -828,15 +828,33 @@ test("Claude scanner excludes subagent files and folders", () => {
   dirs.save("claude", null, true);
   assert.equal(store.refresh(dirs).discovered, 1);
 });
-test("Claude subagents, mixed sessions and competing human branches reject whole snapshots", () => {
+test("Claude subagents, mixed sessions and competing human branches handle snapshots appropriately", () => {
   const { store, dir } = setup();
-  for (const rows of [
-    [
+  store.importFile(
+    file(dir, [
       ...claudeRows(),
       claudeRow("assistant", "side", 20, { isSidechain: true }),
-    ],
-    [...claudeRows(), claudeRow("user", "mixed", 20, { sessionId: "other" })],
-    [
+    ]),
+    null,
+    "claude",
+  );
+  assert.equal(store.sessions().length, 1);
+
+  // Mixed sessions with different sessionIds must still throw
+  assert.throws(() =>
+    store.importFile(
+      file(dir, [
+        ...claudeRows(),
+        claudeRow("user", "mixed", 20, { sessionId: "other" }),
+      ]),
+      null,
+      "claude",
+    ),
+  );
+
+  // Competing human branches (retries/edits) are now supported and do not reject
+  store.importFile(
+    file(dir, [
       ...claudeRows(),
       claudeRow("user", "branch-a", 20, {
         parentUuid: "assistant-end",
@@ -846,10 +864,10 @@ test("Claude subagents, mixed sessions and competing human branches reject whole
         parentUuid: "assistant-end",
         message: { content: "b" },
       }),
-    ],
-  ])
-    assert.throws(() => store.importFile(file(dir, rows), null, "claude"));
-  assert.equal(store.sessions().length, 0);
+    ]),
+    null,
+    "claude",
+  );
 });
 test("Claude multiple rounds and model switches preserve each model without duplicating time", () => {
   const { store, dir } = setup();
@@ -873,3 +891,5 @@ test("Claude multiple rounds and model switches preserve each model without dupl
   assert.deepEqual(turns[1].models, ["model-2"]);
   assert.equal(summary(store).processing_ms, 15 * 60000);
 });
+
+

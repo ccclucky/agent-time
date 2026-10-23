@@ -94,22 +94,53 @@ export function report(
   );
   const total = intervals.reduce((s, [a, b]) => s + b - a, 0),
     covered = unionMs(intervals);
+
+  let totalWork: number | null = null;
+  let totalHuman: number | null = null;
+  let totalStandby: number | null = null;
+
+  for (const s of included) {
+    for (const t of s.turns) {
+      if (t.work_ms !== null) {
+        const period = t.period_ms ?? null;
+        totalWork =
+          (totalWork ?? 0) +
+          (period !== null && t.elapsed_ms
+            ? Math.round((t.work_ms * period) / t.elapsed_ms)
+            : t.work_ms);
+      }
+      if (t.review_wait_ms !== null) {
+        const period = t.period_ms ?? null;
+        totalHuman =
+          (totalHuman ?? 0) +
+          (period !== null && t.elapsed_ms
+            ? Math.round((t.review_wait_ms * period) / t.elapsed_ms)
+            : t.review_wait_ms);
+      }
+      if (t.standby_ms !== null) {
+        totalStandby = (totalStandby ?? 0) + t.standby_ms;
+      }
+    }
+  }
+
   return {
     range: { start, end, timezone },
     summary: {
       processing_ms: intervals.length ? total : null,
       processing_union_ms: intervals.length ? covered : null,
       overlap_ms: intervals.length ? total - covered : null,
-      work_ms: null,
-      human_ms: null,
-      response_gap_ms: null,
+      work_ms: totalWork,
+      human_ms: totalHuman,
+      review_wait_ms: totalHuman,
+      standby_ms: totalStandby,
+      response_gap_ms: totalStandby,
       sessions: included.length,
       turns: Object.values(counts).reduce((a, b) => a + b, 0),
       measured_turns: counts.completed + counts.aborted + counts.failed,
       statuses: counts,
     },
     basis:
-      "Codex：执行开始至结束记录；Claude Code：用户消息至明确结束记录的时间跨度。两种记录口径不同，均不能拆分授权等待，也不是精确的纯工作时间。",
+      "Codex：执行开始至结束记录；Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。",
     sessions: included,
   };
 }
