@@ -1690,11 +1690,15 @@ function renderDrawerTranscript(entry, session, turn) {
           ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
           : "该来源未记录该轮的模型思考文本。",
       );
-    // 截断等诚实备注（missing_fields）只在抽屉内提示一次
-    if (notes.length && !$("#drawerTranscriptNote")) {
+    // 截断等诚实备注（missing_fields）只在抽屉内提示一次；
+    // Codex 的 ZDR 说明已由思考槽位的降级文案展示，避免同一句话出现两遍
+    const extraNotes = notes.filter(
+      (n) => !(session.agent === "Codex" && n.includes("ZDR")),
+    );
+    if (extraNotes.length && !$("#drawerTranscriptNote")) {
       cotEl.insertAdjacentHTML(
         "afterend",
-        `<p class="drawer-transcript-note" id="drawerTranscriptNote">${h(notes.join("；"))}</p>`,
+        `<p class="drawer-transcript-note" id="drawerTranscriptNote">${h(extraNotes.join("；"))}</p>`,
       );
     }
     // 工具调用明细行：transcript 中的 detail（命令 / 补丁内容）按 call_id 回填

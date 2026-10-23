@@ -153,6 +153,113 @@ function claudeFixtureRows() {
   ];
 }
 
+function codexVerifyRows() {
+  // Codex rollout whose user prompt exists ONLY as response_item/message rows
+  // (no event_msg/user_message): exercises the response_item extraction path,
+  // the wrapper exclusion, the ZDR reasoning shape and exec tool calls.
+  const at = (minutesAgo) =>
+    new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  return [
+    {
+      type: "session_meta",
+      timestamp: at(70),
+      payload: { id: "codex-verify-demo", source: "cli", cwd: "/work/verify-codex" },
+    },
+    {
+      type: "response_item",
+      timestamp: at(69),
+      payload: {
+        type: "message",
+        role: "user",
+        id: "msg-env",
+        content: [{ type: "text", text: "<user_instructions>\n# AGENTS.md instructions\n PRIVATE\n</user_instructions>" }],
+      },
+    },
+    {
+      type: "event_msg",
+      timestamp: at(68),
+      payload: { type: "task_started", turn_id: "v1" },
+    },
+    {
+      type: "turn_context",
+      timestamp: at(68),
+      payload: { turn_id: "v1", model: "gpt-5.3" },
+    },
+    {
+      type: "response_item",
+      timestamp: at(67),
+      payload: {
+        type: "message",
+        role: "user",
+        id: "msg-real",
+        content: [{ type: "text", text: "帮我把 Codex 抽屉的提示修好" }],
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: at(66),
+      payload: { type: "reasoning", summary: [], encrypted_content: "ZDR-encrypted-blob" },
+    },
+    {
+      type: "response_item",
+      timestamp: at(65),
+      payload: {
+        type: "function_call",
+        name: "exec",
+        call_id: "call-1",
+        arguments: JSON.stringify({ cmd: "npm run build", timeout: 30000 }),
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: at(64),
+      payload: { type: "function_call_output", call_id: "call-1", output: "ok" },
+    },
+    {
+      type: "event_msg",
+      timestamp: at(60),
+      payload: { type: "task_complete", turn_id: "v1" },
+    },
+  ];
+}
+
+function piVerifyRows() {
+  // Minimal Pi session so the Pi filter chip and its badge are exercisable.
+  const B = Date.now() - 40 * 60_000;
+  const iso = (ms) => new Date(ms).toISOString();
+  return [
+    {
+      type: "session",
+      version: 3,
+      id: "pi-verify-0000-0000-000000000001",
+      timestamp: iso(B),
+      cwd: "/work/verify-pi",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: iso(B),
+      message: { role: "user", content: [{ type: "text", text: "跑一遍验证脚本" }], timestamp: B },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: iso(B + 3001),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        model: "z-ai/glm-5.3",
+        stopReason: "stop",
+        timestamp: B + 1000,
+        durationMs: 2000,
+        thinkingLevel: "high",
+      },
+    },
+  ];
+}
+
 async function startServer(port, dbPath) {
   const child = spawn(
     "npm",
@@ -190,15 +297,15 @@ async function startServer(port, dbPath) {
   throw new Error(`API on port ${port} never answered /api/sources`);
 }
 
-function seedDatabase(dbPath, fixturePath) {
+function seedDatabase(dbPath, fixturePath, agent) {
   const result = spawnSync(
     "npm",
-    ["run", "dev", "--", "--db", dbPath, "import", "--agent", "claude", fixturePath],
+    ["run", "dev", "--", "--db", dbPath, "import", "--agent", agent, fixturePath],
     { encoding: "utf8", timeout: 120_000, cwd: REPO_ROOT },
   );
   if (result.status !== 0) {
     throw new Error(
-      `fixture import failed:\n${result.stdout}\n${result.stderr}`,
+      `fixture import failed (${agent}):\n${result.stdout}\n${result.stderr}`,
     );
   }
 }
@@ -216,12 +323,19 @@ async function main() {
   const dir = mkdtempSync(path.join(tmpdir(), PREFIX));
   cleanupPaths.push(dir);
   const dbPath = path.join(dir, "verify.sqlite3");
-  const fixturePath = path.join(dir, "verify-session.jsonl");
-  writeFileSync(
-    fixturePath,
-    claudeFixtureRows().map((r) => JSON.stringify(r)).join("\n") + "\n",
-  );
-  seedDatabase(dbPath, fixturePath);
+  const fixtures = [
+    ["verify-claude.jsonl", claudeFixtureRows(), "claude"],
+    ["verify-codex.jsonl", codexVerifyRows(), "codex"],
+    ["verify-pi.jsonl", piVerifyRows(), "pi"],
+  ];
+  for (const [name, rows, agent] of fixtures) {
+    const fixturePath = path.join(dir, name);
+    writeFileSync(
+      fixturePath,
+      rows.map((r) => JSON.stringify(r)).join("\n") + "\n",
+    );
+    seedDatabase(dbPath, fixturePath, agent);
+  }
 
   let port = BASE_PORT;
   for (;;) {
@@ -341,7 +455,163 @@ async function main() {
       drawer ? `right=${drawer.right} innerWidth=${drawer.innerWidth}` : "drawer missing",
     );
 
-    // 8. Zero console errors across the whole run.
+    // 8. Vertical rhythm: consecutive homepage modules keep a real, generous
+    //    gap and no two module boxes intersect (bounding-box audit).
+    // Checks 6/7 navigated to the detail page — return to the overview first.
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    const rhythm = await page.evaluate(() => {
+      const sels = [".stats", ".funnel-card", ".timeline-card", ".s1-grid", ".session-stream-head"];
+      const mods = sels
+        .map((s) => document.querySelector(s))
+        .filter(Boolean)
+        .map((el) => el.getBoundingClientRect());
+      const gaps = [];
+      let overlaps = 0;
+      for (let i = 1; i < mods.length; i++) {
+        gaps.push(Math.round(mods[i].top - mods[i - 1].bottom));
+        // Vertical stack audit: a later module must start below the previous
+        // one's bottom edge (1px tolerance for border rounding).
+        if (mods[i].top < mods[i - 1].bottom - 1) overlaps++;
+      }
+      const minGap = Math.min(...gaps);
+      return { gaps, minGap, overlaps, count: mods.length };
+    });
+    check(
+      "homepage module gaps ≥ 16px with zero overlaps",
+      rhythm.count === 5 && rhythm.overlaps === 0 && rhythm.minGap >= 16,
+      `gaps=${rhythm.gaps.join(",")}px overlaps=${rhythm.overlaps}`,
+    );
+
+    // 9. Agent filter chips: present for every seeded harness and the stream
+    //    re-filters (stream cards, badges) when a chip is clicked.
+    const chips = await page.evaluate(() =>
+      [...document.querySelectorAll("[data-agent-chip]")].map((b) => b.dataset.agentChip),
+    );
+    check(
+      "agent chips list 全部 + every seeded agent",
+      chips.length === 4 &&
+        chips.includes("all") &&
+        chips.includes("Codex") &&
+        chips.includes("Claude Code") &&
+        chips.includes("Pi"),
+      chips.join(","),
+    );
+    const clickChip = async (key) => {
+      await page.locator(`[data-agent-chip="${key}"]`).first().click();
+      await page.waitForTimeout(150);
+    };
+    const streamMarks = () =>
+      page.evaluate(() => {
+        const cards = [...document.querySelectorAll(".session-stream-card")];
+        const marks = new Set(
+          cards.map((c) =>
+            c.querySelector(".agent-mark")?.classList.contains("agent-mark-codex")
+              ? "Codex"
+              : c.querySelector(".agent-mark")?.classList.contains("agent-mark-claude")
+                ? "Claude Code"
+                : c.querySelector(".agent-mark")?.classList.contains("agent-mark-pi")
+                  ? "Pi"
+                  : "none",
+          ),
+        );
+        const count = document.querySelector(".session-stream-head .sub")?.textContent || "";
+        return { cards: cards.length, marks: [...marks], count: count.trim() };
+      });
+    await clickChip("Codex");
+    const codexStream = await streamMarks();
+    check(
+      "Codex chip narrows the stream to Codex-only cards",
+      codexStream.marks.length === 1 && codexStream.marks[0] === "Codex" && codexStream.cards > 0,
+      `${codexStream.cards} cards, marks=${codexStream.marks.join("/")} (${codexStream.count})`,
+    );
+    await clickChip("Pi");
+    const piStream = await streamMarks();
+    check(
+      "Pi chip narrows the stream to Pi-only cards",
+      piStream.marks.length === 1 && piStream.marks[0] === "Pi" && piStream.cards > 0,
+      `${piStream.cards} cards, marks=${piStream.marks.join("/")} (${piStream.count})`,
+    );
+    await clickChip("all");
+    const allStream = await streamMarks();
+    check(
+      "全部 chip restores the full stream",
+      allStream.marks.length === 3 && allStream.cards === codexStream.cards + piStream.cards + 1,
+      `${allStream.cards} cards, marks=${allStream.marks.join("/")}`,
+    );
+
+    // 10. Badges land in TOP 3 rows, stream cards, and the sessions table.
+    const badgeSpread = await page.evaluate(() => {
+      const q = (s) => document.querySelectorAll(s).length;
+      return {
+        top: q(".rank-mini-item .agent-mark"),
+        stream: q(".session-stream-card .agent-mark"),
+      };
+    });
+    check(
+      "agent badges present in TOP3 rows and stream cards",
+      badgeSpread.top > 0 && badgeSpread.stream > 0,
+      `top=${badgeSpread.top} stream=${badgeSpread.stream}`,
+    );
+    await page.evaluate(() => {
+      document.querySelector('[data-page="sessions"]')?.click();
+    });
+    await page.waitForTimeout(200);
+    const tableBadges = await page.evaluate(
+      () => document.querySelectorAll(".agent-cell .agent-mark").length,
+    );
+    check("sessions table rows carry agent badges", tableBadges > 0, `rows=${tableBadges}`);
+
+    // 11. Codex drawer: real prompt from response_item rows, ZDR thinking copy,
+    //     friendly exec label + detail line from arguments JSON.
+    const report = await (await fetch(`${base}/api/report?start=${new Date(Date.now() - 86400000).toISOString().slice(0, 10)}&end=${new Date().toISOString().slice(0, 10)}&timezone=UTC`)).json();
+    const codexSession = (report.sessions || []).find((s) => s.agent === "Codex");
+    check("seeded Codex session visible in report", !!codexSession, codexSession?.id || "missing");
+    if (codexSession) {
+      await page.goto(`${base}/#session/${encodeURIComponent(codexSession.id)}`, {
+        waitUntil: "networkidle",
+      });
+      await page.locator(".turn-capsule").first().click();
+      await page.waitForTimeout(600); // drawer slide-in + transcript fetch
+      const drawer = await page.evaluate(() => ({
+        open: !document.querySelector("#detailDrawer")?.classList.contains("collapsed"),
+        mark: !!document.querySelector("#drawerAgentMark .agent-mark-codex"),
+        prompt: document.querySelector("#drawerPrompt")?.textContent?.trim() || "",
+        thinking: document.querySelector("#drawerThinking")?.textContent?.trim() || "",
+        toolLabel: document.querySelector(".tool-exec-card strong")?.textContent?.trim() || "",
+        toolDetail: document.querySelector(".tool-exec-card .tool-exec-detail")?.textContent?.trim() || "",
+      }));
+      check(
+        "Codex drawer shows the real prompt (response_item extraction)",
+        drawer.open && drawer.prompt === "帮我把 Codex 抽屉的提示修好",
+        `prompt="${drawer.prompt.slice(0, 40)}"`,
+      );
+      check(
+        "Codex drawer thinking slot explains ZDR encryption",
+        drawer.thinking.includes("ZDR") || drawer.thinking.includes("加密"),
+        `thinking="${drawer.thinking.slice(0, 50)}"`,
+      );
+      check(
+        "Codex tool stack shows friendly label + detail line",
+        drawer.toolLabel === "执行命令" && drawer.toolDetail === "npm run build",
+        `label="${drawer.toolLabel}" detail="${drawer.toolDetail}"`,
+      );
+      check("drawer header carries the Codex badge", drawer.mark, "agent-mark-codex");
+      const detailBadges = await page.evaluate(
+        () => ({
+          nav: document.querySelectorAll(".detail-nav .agent-mark").length,
+          capsules: document.querySelectorAll(".turn-capsule .agent-mark").length,
+        }),
+      );
+      check(
+        "detail nav and turn capsules carry agent badges",
+        detailBadges.nav === 1 && detailBadges.capsules > 0,
+        `nav=${detailBadges.nav} capsules=${detailBadges.capsules}`,
+      );
+      await page.evaluate(() => document.querySelector("[data-action='back-overview']")?.click());
+      await page.waitForTimeout(200);
+    }
+
+    // 12. Zero console errors across the whole run.
     check(
       "zero console errors",
       consoleErrors.length === 0,
