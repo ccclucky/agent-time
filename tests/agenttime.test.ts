@@ -721,8 +721,8 @@ test("Claude directory enablement discovers main transcripts, with privacy and t
   assert.equal(sessions[0].project, "claude-project");
   assert.equal(sessions[0].turns.length, 1);
   assert.equal(summary(store).processing_ms, 600000);
-  assert.equal(sessions[0].turns[0].work_ms, null);
-  assert.match(sessions[0].issues.join(" "), /不是精确执行耗时/);
+  assert.equal(sessions[0].turns[0].work_ms, 600000);
+  assert.match(sessions[0].issues.join(" "), /三态耗时切分/);
   assert.deepEqual(readFileSync(p), before);
   assert(!readFileSync(store.path).includes(Buffer.from("PRIVATE")));
 });
@@ -873,3 +873,4 @@ test("Claude multiple rounds and model switches preserve each model without dupl
   assert.deepEqual(turns[1].models, ["model-2"]);
   assert.equal(summary(store).processing_ms, 15 * 60000);
 });
+

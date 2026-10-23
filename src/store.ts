@@ -12,6 +12,7 @@ import {
   type Event,
   type Session,
   type Status,
+  type Turn,
 } from "./types.js";
 interface Source {
   agent: string;
@@ -37,7 +38,7 @@ export class Store {
     const columns = this.db
       .prepare("PRAGMA table_info(source)")
       .all()
-      .map((r) => r.name);
+      .map((r) => (r as { name: string }).name);
     if (!columns.includes("agent"))
       this.db.exec(
         "ALTER TABLE source ADD COLUMN agent TEXT NOT NULL DEFAULT 'Codex'",
@@ -303,16 +304,95 @@ export class Store {
         reason = "结束时间早于开始时间，未计入耗时";
       } else if (end === null)
         reason = "尚无结束事件；可能进行中，也可能记录中断，不推测当前状态";
-      sessions.get(sid)!.turns.push({
+
+      const elapsed =
+        ["completed", "aborted", "failed"].includes(status) &&
+        start !== null &&
+        end !== null
+          ? end - start
+          : null;
+
+      const sessionObj = sessions.get(sid)!;
+      let work_ms: number | null = null;
+      let review_wait_ms: number | null = null;
+      let breakdown: Turn["breakdown"] = null;
+
+      if (elapsed !== null && sessionObj.agent === "Claude Code") {
+        // Calculate review wait intervals
+        const waitStarts = entries
+          .filter((e) => e.kind === "review_wait_start")
+          .map((e) => e.at_ms)
+          .sort((a, b) => a - b);
+        const waitEnds = entries
+          .filter((e) => e.kind === "review_wait_end")
+          .map((e) => e.at_ms)
+          .sort((a, b) => a - b);
+
+        let totalWait = 0;
+        const waitIntervals: [number, number][] = [];
+        for (let i = 0; i < waitStarts.length; i++) {
+          const wStart = waitStarts[i];
+          const wEnd = waitEnds.find((t) => t >= wStart) ?? end!;
+          const wDuration = Math.max(0, wEnd - wStart);
+          totalWait += wDuration;
+          waitIntervals.push([wStart, wEnd]);
+        }
+        review_wait_ms = totalWait;
+
+        // Tool execution calculations
+        const toolUses = entries.filter((e) => e.kind === "tool_use");
+        const toolResults = entries.filter((e) => e.kind === "tool_result");
+        const usedResultIndices = new Set<number>();
+        const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+        let totalToolMs = 0;
+
+        for (const u of toolUses) {
+          const tname = u.tool_name || "tool";
+          let rIndex = -1;
+          if (u.tool_id) {
+            rIndex = toolResults.findIndex(
+              (r, idx) => !usedResultIndices.has(idx) && r.tool_id === u.tool_id && r.at_ms >= u.at_ms,
+            );
+          }
+          if (rIndex === -1) {
+            rIndex = toolResults.findIndex(
+              (r, idx) => !usedResultIndices.has(idx) && r.at_ms >= u.at_ms,
+            );
+          }
+
+          let tDuration = 0;
+          if (rIndex !== -1) {
+            usedResultIndices.add(rIndex);
+            const rAt = toolResults[rIndex].at_ms;
+            let waitInside = 0;
+            for (const [ws, we] of waitIntervals) {
+              const overlap = Math.max(0, Math.min(rAt, we) - Math.max(u.at_ms, ws));
+              waitInside += overlap;
+            }
+            tDuration = Math.max(0, rAt - u.at_ms - waitInside);
+          }
+          totalToolMs += tDuration;
+          const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+          existing.count += 1;
+          existing.duration_ms += tDuration;
+          toolsMap.set(tname, existing);
+        }
+
+        const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait);
+        work_ms = Math.max(0, elapsed - totalWait);
+        breakdown = {
+          model_api_ms: modelApiMs,
+          tool_execution_ms: totalToolMs,
+          review_wait_ms: totalWait,
+          tools: [...toolsMap.values()],
+        };
+      }
+
+      sessionObj.turns.push({
         id: tid,
         start_ms: start,
         end_ms: end,
-        elapsed_ms:
-          ["completed", "aborted", "failed"].includes(status) &&
-          start !== null &&
-          end !== null
-            ? end - start
-            : null,
+        elapsed_ms: elapsed,
         status,
         reason,
         models: [
@@ -321,19 +401,38 @@ export class Store {
           ),
         ].sort(),
         events: entries,
-        work_ms: null,
-        review_wait_ms: null,
+        work_ms,
+        review_wait_ms,
         standby_ms: null,
-        human_ms: null,
+        human_ms: review_wait_ms,
         response_gap_ms: null,
+        breakdown,
       });
     }
-    for (const s of sessions.values())
+    for (const s of sessions.values()) {
       s.turns.sort(
         (a, b) =>
           (a.start_ms ?? a.end_ms ?? 0) - (b.start_ms ?? b.end_ms ?? 0) ||
           a.id.localeCompare(b.id),
       );
+      for (let i = 1; i < s.turns.length; i++) {
+        const prevEnd = s.turns[i - 1].end_ms;
+        const currStart = s.turns[i].start_ms;
+        if (prevEnd !== null && currStart !== null && currStart >= prevEnd) {
+          s.turns[i].standby_ms = currStart - prevEnd;
+          s.turns[i].response_gap_ms = s.turns[i].standby_ms;
+        }
+      }
+      s.work_ms = s.turns.some((t) => t.work_ms !== null)
+        ? s.turns.reduce((acc, t) => acc + (t.work_ms ?? 0), 0)
+        : null;
+      s.review_wait_ms = s.turns.some((t) => t.review_wait_ms !== null)
+        ? s.turns.reduce((acc, t) => acc + (t.review_wait_ms ?? 0), 0)
+        : null;
+      s.standby_ms = s.turns.some((t) => t.standby_ms !== null)
+        ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
+        : null;
+    }
     return [...sessions.values()];
   }
   sourceInfo() {
