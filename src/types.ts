@@ -30,6 +30,15 @@ export interface TurnBreakdown {
   tools: ToolExecutionDetail[];
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+}
+
 export interface SubagentSummary {
   agent_id: string;
   name?: string;
@@ -69,6 +78,7 @@ export interface Turn {
   agent_id?: string | null;
   subagents?: SubagentSummary[];
   breakdown?: TurnBreakdown | null;
+  tokens?: TokenUsage | null;
 }
 
 export interface Session {
@@ -85,6 +95,7 @@ export interface Session {
   review_wait_ms?: number | null;
   standby_ms?: number | null;
   subagents?: SubagentSummary[];
+  tokens?: TokenUsage | null;
 }
 
 export class ValidationError extends Error {}

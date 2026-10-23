@@ -183,3 +183,119 @@ test("topics longer than 100 characters are truncated like project names", () =>
   );
   assert.equal(store.sessions()[0].topic?.length, 100);
 });
+
+// ---------------------------------------------------------------- slice B: tokens
+
+test("token_count snapshots become per-turn diffs keyed by the nearest task_started", () => {
+  const { dir } = setup();
+  const result = parse(
+    file(dir, [
+      meta(),
+      // before any task_started: not attributable, skipped entirely
+      tokenRow(0, { total_token_usage: usage({ total_tokens: 5 }) }, 1),
+      msg("task_started", 0, "t1"),
+      // repeated last_token_usage rows prove a naive sum would double-count
+      tokenRow(1, {
+        total_token_usage: usage({ input_tokens: 100, cached_input_tokens: 40, output_tokens: 12, reasoning_output_tokens: 3, total_tokens: 112 }),
+        last_token_usage: usage({ input_tokens: 100, output_tokens: 12, total_tokens: 112 }),
+      }),
+      tokenRow(2, {
+        total_token_usage: usage({ input_tokens: 100, cached_input_tokens: 40, output_tokens: 12, reasoning_output_tokens: 3, total_tokens: 112 }),
+        last_token_usage: usage({ input_tokens: 100, output_tokens: 12, total_tokens: 112 }),
+      }),
+      msg("task_complete", 2, "t1"),
+      msg("task_started", 3, "t2"),
+      tokenRow(4, {
+        total_token_usage: usage({ input_tokens: 300, cached_input_tokens: 90, cache_write_input_tokens: 7, output_tokens: 62, reasoning_output_tokens: 9, total_tokens: 362 }),
+      }),
+      // snapshot diffs: reasoning in t2 is 9 - 3 = 6, cached is 90 - 40 = 50
+      msg("task_complete", 5, "t2"),
+      msg("task_started", 6, "t3"), // no token rows at all
+      msg("task_complete", 7, "t3"),
+    ]),
+  );
+  assert.deepEqual(
+    result.tokens.map((t) => [t.turn_id, t.input_tokens, t.cached_input_tokens, t.cache_write_input_tokens, t.output_tokens, t.reasoning_output_tokens, t.total_tokens]),
+    [
+      ["t1", 100, 40, 0, 12, 3, 112],
+      ["t2", 200, 50, 7, 50, 6, 250],
+    ],
+  );
+});
+
+test("token rows with null info or malformed usage are skipped without failing", () => {
+  const { dir } = setup();
+  const result = parse(
+    file(dir, [
+      meta(),
+      msg("task_started", 0, "t1"),
+      tokenRow(0, null, 10),
+      tokenRow(0, {}, 20),
+      tokenRow(0, { total_token_usage: { input_tokens: "x", total_tokens: 42 } }, 30),
+      tokenRow(0, { total_token_usage: usage({ input_tokens: 20, output_tokens: 4, total_tokens: 24 }) }, 40),
+      msg("task_complete", 1, "t1"),
+    ]),
+  );
+  assert.deepEqual(
+    result.tokens.map((t) => [t.turn_id, t.total_tokens]),
+    [["t1", 24]],
+  );
+});
+
+test("sessions surface per-turn and per-session token totals; absence stays null", () => {
+  const { dir, store } = setup();
+  store.importFile(
+    file(
+      dir,
+      [
+        meta("s1"),
+        msg("task_started", 0, "t1"),
+        tokenRow(1, { total_token_usage: usage({ input_tokens: 100, cached_input_tokens: 40, output_tokens: 12, total_tokens: 112 }) }),
+        msg("task_complete", 2, "t1"),
+        msg("task_started", 3, "t2"),
+        tokenRow(4, { total_token_usage: usage({ input_tokens: 300, cached_input_tokens: 90, output_tokens: 62, total_tokens: 362 }) }),
+        msg("task_complete", 5, "t2"),
+      ],
+      "tokens.jsonl",
+    ),
+  );
+  store.importFile(
+    file(
+      dir,
+      [meta("s2"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")],
+      "notokens.jsonl",
+    ),
+  );
+  const byId = new Map(store.sessions().map((s) => [s.id, s]));
+  const s1 = byId.get("s1")!;
+  assert.equal(s1.turns[0].tokens?.total_tokens, 112);
+  assert.equal(s1.turns[0].tokens?.cached_input_tokens, 40);
+  assert.equal(s1.turns[1].tokens?.total_tokens, 250);
+  assert.equal(s1.tokens?.total_tokens, 362);
+  assert.equal(s1.tokens?.input_tokens, 300);
+  const s2 = byId.get("s2")!;
+  assert.equal(s2.tokens, null);
+  assert.equal(s2.turns[0].tokens ?? null, null);
+  const rep = report([...byId.values()], "2026-10-21", "2026-10-21", "UTC", "Codex");
+  const r1 = rep.sessions.find((s) => s.id === "s1")!;
+  assert.equal(r1.tokens?.total_tokens, 362);
+  assert.equal(r1.turns[0].tokens?.total_tokens, 112);
+  const r2 = rep.sessions.find((s) => s.id === "s2")!;
+  assert.equal(r2.tokens ?? null, null);
+});
+
+test("token_usage rows are rewritten idempotently per source", () => {
+  const { dir, store } = setup();
+  const p = file(dir, [
+    meta("s1"),
+    msg("task_started", 0, "t1"),
+    tokenRow(1, { total_token_usage: usage({ input_tokens: 100, output_tokens: 12, total_tokens: 112 }) }),
+    msg("task_complete", 2, "t1"),
+  ]);
+  store.importFile(p);
+  store.importFile(p);
+  assert.equal(
+    store.db.prepare("SELECT count(*) n FROM token_usage").get()!.n,
+    1,
+  );
+});

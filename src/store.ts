@@ -14,6 +14,7 @@ import {
   type Session,
   type Status,
   type SubagentSummary,
+  type TokenUsage,
   type Turn,
   type TurnBreakdown,
 } from "./types.js";
@@ -223,7 +224,8 @@ export class Store {
       );
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
-    const data = adapter === "claude" ? parseClaude(p) : parse(p),
+    const codex = adapter === "codex" ? parse(p) : null,
+      data = codex ?? parseClaude(p),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -235,6 +237,7 @@ export class Store {
       adapter === "codex" && configRoot
         ? (readSessionIndex(configRoot).get(m.id)?.name ?? "").slice(0, 100) || null
         : null;
+    const tokens = codex ? codex.tokens : [];
     this.transaction(() => {
       this.db
         .prepare(
@@ -251,22 +254,39 @@ export class Store {
           topic,
           m.agent,
         );
-      this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
-      const put = this.db.prepare(
-        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
-      );
-      for (const e of data.events)
-        put.run(
-          sid,
-          e.key,
-          e.turn_id,
-          e.kind,
-          e.at_ms,
-          e.model,
-          e.agent_id ?? null,
-          e.tool_id ?? null,
+    this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
+    this.db.prepare("DELETE FROM token_usage WHERE source_id=?").run(sid);
+    const put = this.db.prepare(
+      "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
+    );
+    for (const e of data.events)
+      put.run(
+        sid,
+        e.key,
+        e.turn_id,
+        e.kind,
+        e.at_ms,
+        e.model,
+        e.agent_id ?? null,
+        e.tool_id ?? null,
           e.tool_name ?? null,
+      );
+    if (tokens.length) {
+      const putTokens = this.db.prepare(
+        "INSERT INTO token_usage(source_id,turn_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens) VALUES(?,?,?,?,?,?,?,?)",
+      );
+      for (const t of tokens)
+        putTokens.run(
+          sid,
+          t.turn_id,
+          t.input_tokens,
+          t.cached_input_tokens,
+          t.cache_write_input_tokens,
+          t.output_tokens,
+          t.reasoning_output_tokens,
+          t.total_tokens,
         );
+    }
     });
     return { events: data.events.length, issues: data.issues };
   }
@@ -369,7 +389,7 @@ export class Store {
     };
   }
   sessions(): Session[] {
-    const { sources, events } = this.transaction(() => ({
+    const { sources, events, tokenRows } = this.transaction(() => ({
       sources: this.db
         .prepare("SELECT * FROM source ORDER BY id")
         .all() as unknown as Source[],
@@ -378,7 +398,28 @@ export class Store {
           "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
         )
         .all() as unknown as (Event & { session_id: string })[],
+      tokenRows: this.db
+        .prepare(
+          "SELECT s.session_id,t.turn_id,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens FROM token_usage t JOIN source s ON s.id=t.source_id ORDER BY t.total_tokens",
+        )
+        .all() as unknown as (TokenUsage & { session_id: string; turn_id: string })[],
     }));
+    // The same session may be registered from two paths (e.g. .jsonl and
+    // .jsonl.zst); keep the widest snapshot per session/turn.
+    const turnTokens = new Map<string, TokenUsage>();
+    for (const r of tokenRows) {
+      const key = JSON.stringify([r.session_id, r.turn_id]);
+      const prev = turnTokens.get(key);
+      if (!prev || r.total_tokens > prev.total_tokens)
+        turnTokens.set(key, {
+          input_tokens: r.input_tokens,
+          cached_input_tokens: r.cached_input_tokens,
+          cache_write_input_tokens: r.cache_write_input_tokens,
+          output_tokens: r.output_tokens,
+          reasoning_output_tokens: r.reasoning_output_tokens,
+          total_tokens: r.total_tokens,
+        });
+    }
     const sessions = new Map<string, Session>();
     for (const s of sources) {
       const item = sessions.get(s.session_id) ?? {
@@ -519,6 +560,7 @@ export class Store {
         response_gap_ms: null,
         subagents: turnSubagents.length ? turnSubagents : undefined,
         breakdown,
+        tokens: turnTokens.get(JSON.stringify([sid, tid])) ?? null,
       });
     }
     for (const s of sessions.values()) {
@@ -543,6 +585,33 @@ export class Store {
         : null;
       s.standby_ms = s.turns.some((t) => t.standby_ms !== null)
         ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
+        : null;
+
+      const tokened = s.turns.filter((t) => t.tokens);
+      s.tokens = tokened.length
+        ? tokened.reduce<TokenUsage>(
+          (acc, t) => {
+            const u = t.tokens!;
+            return {
+              input_tokens: acc.input_tokens + u.input_tokens,
+              cached_input_tokens: acc.cached_input_tokens + u.cached_input_tokens,
+              cache_write_input_tokens:
+                acc.cache_write_input_tokens + u.cache_write_input_tokens,
+              output_tokens: acc.output_tokens + u.output_tokens,
+              reasoning_output_tokens:
+                acc.reasoning_output_tokens + u.reasoning_output_tokens,
+              total_tokens: acc.total_tokens + u.total_tokens,
+            };
+          },
+          {
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 0,
+          },
+        )
         : null;
 
       const sessionSubagents = groupSubagents(

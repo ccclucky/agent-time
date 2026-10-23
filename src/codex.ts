@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { join, posix } from "node:path";
 import { TextDecoder } from "node:util";
 import zlib from "node:zlib";
-import { ValidationError, type Event, type Kind } from "./types.js";
+import { ValidationError, type Event, type Kind, type TokenUsage } from "./types.js";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 // Match the previous Python JSON serialization so existing snapshots deduplicate.
 export function legacyJSON(value: unknown): string {
@@ -33,6 +33,27 @@ const kinds: Record<string, Kind> = {
 };
 // Turns imported from other agents carry synthetic import-moment timestamps.
 const EXTERNAL_IMPORT_TURN = "external-import-turn-";
+// token_count rows are cumulative session snapshots, not events: several rows
+// share the same last_token_usage (measured 2,994 repeated pairs locally), so
+// a turn's usage is the diff between its final snapshot and the previous
+// turn's final snapshot — never a sum of last_token_usage.
+const TOKEN_FIELDS = [
+  "input_tokens",
+  "cached_input_tokens",
+  "cache_write_input_tokens",
+  "output_tokens",
+  "reasoning_output_tokens",
+  "total_tokens",
+] as const;
+type TokenSnapshot = readonly number[];
+const tokenSnapshot = (v: unknown): TokenSnapshot | null => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const r = v as Record<string, unknown>;
+  return TOKEN_FIELDS.map((f) => {
+    const x = r[f];
+    return typeof x === "number" && Number.isFinite(x) ? x : 0;
+  });
+};
 const validId = (v: unknown): v is string =>
   typeof v === "string" && ID.test(v);
 export function timestamp(value: unknown): number {
@@ -155,7 +176,14 @@ export function readSessionIndex(
   return map;
 }
 
-export function parse(path: string) {
+export interface ParseResult {
+  session: { id: string; agent: string; project: string; client: string };
+  events: Event[];
+  tokens: ({ turn_id: string } & TokenUsage)[];
+  issues: string[];
+}
+
+export function parse(path: string): ParseResult {
   let meta: {
       id: string;
       agent: string;
@@ -172,6 +200,9 @@ export function parse(path: string) {
   const turnStart = new Map<string, number>(),
     agentDone = new Map<string, number>(),
     modelSeen = new Set<string>();
+  // turn -> {start: snapshot before the turn's first token row, end: latest}
+  const turnTokens = new Map<string, { start: TokenSnapshot | null; end: TokenSnapshot }>();
+  let prevSnapshot: TokenSnapshot | null = null;
   const add = (
     turn_id: string,
     kind: Kind,
@@ -247,6 +278,22 @@ export function parse(path: string) {
               : timestamp(row.timestamp);
           const prev = agentDone.get(p.turn_id);
           if (prev === undefined || anchor > prev) agentDone.set(p.turn_id, anchor);
+        }
+        continue;
+      }
+      if (row.type === "event_msg" && p.type === "token_count") {
+        // info:null rows (88 locally, all imported sessions) carry nothing.
+        const snap = tokenSnapshot(
+          p.info && typeof p.info === "object" && !Array.isArray(p.info)
+            ? (p.info as Record<string, unknown>).total_token_usage
+            : null,
+        );
+        if (snap && currentTurn) {
+          const entry = turnTokens.get(currentTurn);
+          if (!entry)
+            turnTokens.set(currentTurn, { start: prevSnapshot, end: snap });
+          else entry.end = snap;
+          prevSnapshot = snap;
         }
         continue;
       }
@@ -345,9 +392,23 @@ export function parse(path: string) {
     const key = hash(legacyJSON([meta.id, e]));
     unique.set(key, { ...e, key });
   }
+  // Field order mirrors TOKEN_FIELDS: input, cached, cache_write, output,
+  // reasoning, total.
+  const tokens = [...turnTokens.entries()].map(
+    ([turn_id, { start, end }]): { turn_id: string } & TokenUsage => ({
+      turn_id,
+      input_tokens: Math.max(0, end[0] - (start?.[0] ?? 0)),
+      cached_input_tokens: Math.max(0, end[1] - (start?.[1] ?? 0)),
+      cache_write_input_tokens: Math.max(0, end[2] - (start?.[2] ?? 0)),
+      output_tokens: Math.max(0, end[3] - (start?.[3] ?? 0)),
+      reasoning_output_tokens: Math.max(0, end[4] - (start?.[4] ?? 0)),
+      total_tokens: Math.max(0, end[5] - (start?.[5] ?? 0)),
+    }),
+  );
   return {
     session: meta,
     events: [...unique.values()],
+    tokens,
     issues: [...issues].sort(),
   };
 }
