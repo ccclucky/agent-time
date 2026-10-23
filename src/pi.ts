@@ -190,7 +190,7 @@ export function parsePi(path: string) {
         else if (issuing) {
           at = issuing.end;
           issues.add(
-            "部分工具结果缺少 durationMs；工具开始时刻回退为发起响应结束，可能包含审批等待",
+            "部分工具结果缺少 durationMs；工具开始时刻回退为发起响应结束，可能包含等待人审阅时长",
           );
         } else {
           at = iso(r.timestamp);

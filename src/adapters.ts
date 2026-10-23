@@ -21,7 +21,7 @@ export const SOURCES = [
     agent: "Pi",
     status: "只读导入 · 事件流三态切分",
     supported: true,
-    note: "读取 sessions/<编码项目> 的事件流，按模型响应与工具执行时长切分纯工作；审批等待仅在时间戳可测时计入，未落盘的明细不额外拆分。",
+    note: "读取 sessions/<编码项目> 的事件流，按模型推理与工具执行耗时切分纯工作；等待人审阅仅在时间戳可测时计入，未落盘的明细不额外拆分。",
   },
   {
     agent: "Oh-My-Pi",
