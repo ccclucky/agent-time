@@ -30,6 +30,7 @@ import {
   type Status,
   type SubagentSummary,
   type TokenUsage,
+  type TranscriptTurn,
   type Turn,
   type TurnBreakdown,
 } from "./types.js";
@@ -38,6 +39,19 @@ import {
 // repeated imports under the same root (799 files locally) reuse one parsed
 // Map instead of re-reading the index for every file.
 type SessionIndexCache = Map<string, Map<string, IndexedThread>>;
+
+// On-demand transcript extractor dispatch (agent name → extractor). Unknown
+// agent names fall back to the Codex extractor, matching the previous
+// ternary chain; nothing here is persisted.
+const TRANSCRIPT_EXTRACTORS: Record<
+  string,
+  (path: string) => TranscriptTurn[]
+> = {
+  "Claude Code": extractClaudeTranscript,
+  Pi: extractPiTranscript,
+  Codex: extractCodexTranscript,
+};
+
 function sessionIndex(
   configRoot: string,
   cache: SessionIndexCache,
@@ -811,12 +825,7 @@ export class Store {
     if (!rows.length) return null;
     const { path: p, agent } = rows[0];
     try {
-      const turns =
-        agent === "Claude Code"
-          ? extractClaudeTranscript(p)
-          : agent === "Pi"
-            ? extractPiTranscript(p)
-            : extractCodexTranscript(p);
+      const turns = (TRANSCRIPT_EXTRACTORS[agent] ?? extractCodexTranscript)(p);
       const missing: string[] = [];
       const overLimit = (s: string | null) =>
         s !== null && Array.from(s).length >= TRANSCRIPT_TEXT_LIMIT;
