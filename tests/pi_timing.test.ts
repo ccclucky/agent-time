@@ -488,3 +488,89 @@ test("Pi timing: parsePi no longer tells users the three-state split is coming",
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test("Pi timing: marker events without end_ms and invalid spans contribute zero, never fabricate", () => {
+  // Unit seam, mirroring calculateClaudeTiming's direct testability.
+  const ev = (e: Partial<Event>): Event => ({
+    key: JSON.stringify(e),
+    turn_id: "u1",
+    kind: "model",
+    at_ms: 0,
+    model: null,
+    ...e,
+  } as Event);
+  const timing = calculatePiTiming(
+    [
+      // model_change marker: a point in time, no duration evidence.
+      ev({ kind: "model", at_ms: 1000, model: "dp-llm/qwen" }),
+      // Real response span: 3000ms.
+      ev({ kind: "model", at_ms: 2000, end_ms: 5000, model: "z-ai/glm-5.3" }),
+      // Tool result with no issuing tool_use: duration still counts, no wait.
+      ev({ kind: "tool_result", at_ms: 5000, end_ms: 9000, tool_name: "bash" }),
+      // Inverted span (end before start): treated as missing evidence, 0ms.
+      ev({ kind: "tool_result", at_ms: 6000, end_ms: 5900, tool_id: "x", tool_name: "bash" }),
+    ],
+    0,
+    9000,
+    9000,
+  );
+  assert.equal(timing.work_ms, 7000);
+  assert.equal(timing.review_wait_ms, 0);
+  assert.equal(timing.breakdown.model_api_ms, 3000);
+  assert.equal(timing.breakdown.tool_execution_ms, 4000);
+  assert.deepEqual(timing.breakdown.tools, [
+    { name: "bash", count: 2, duration_ms: 4000 },
+  ]);
+  assert.deepEqual(timing.breakdown.model_api_breakdown, [
+    { model: "z-ai/glm-5.3", duration_ms: 3000 },
+  ]);
+  assert.deepEqual(timing.breakdown.thinking_breakdown, []);
+});
+
+test("Pi timing: open turns keep null timing instead of guessing", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
+  const p = writeSession(tmpDir, "open-turn.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "pit-0000-0000-0000-000000000006",
+      timestamp: iso(B),
+      cwd: "/work/demo_app",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: iso(B),
+      message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: B },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: iso(B + 3000),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+        model: "z-ai/glm-5.3",
+        stopReason: "toolUse",
+        timestamp: B + 1000,
+        durationMs: 2000,
+      },
+    },
+    // No tool result, no terminal event: the turn is still open.
+  ]);
+  const store = new Store(path.join(tmpDir, "test.db"));
+  store.importFile(p, null, "pi");
+  const turn = store.sessions()[0].turns[0];
+  assert.equal(turn.status, "open");
+  assert.equal(turn.work_ms, null);
+  assert.equal(turn.review_wait_ms, null);
+  assert.equal(turn.breakdown, null);
+  const sessions = store.sessions();
+  assert.equal(sessions[0].work_ms, null);
+  assert.equal(sessions[0].review_wait_ms, null);
+
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
