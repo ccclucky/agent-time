@@ -102,3 +102,103 @@ test("Pi timing: terminated turns fill work/review_wait from duration evidence (
   store.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test("Pi timing: parallel calls share one approval gap (interval union, not sum) and tools[] aggregates by name", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
+  // One assistant response [B+1000, B+3000) issues two parallel calls; both
+  // hang on the same approval until B+6000, then run in parallel:
+  // bash [B+6000, B+10000) = 4000ms, read [B+6000, B+9000) = 3000ms, final
+  // model [B+10000, B+11600) = 1600ms. Both waits are [B+3000, B+6000), so
+  // the union is 3000ms (a naive sum would double-count 6000ms).
+  const p = writeSession(tmpDir, "parallel-gap.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "pit-0000-0000-0000-000000000002",
+      timestamp: iso(B),
+      cwd: "/work/demo_app",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: iso(B),
+      message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: B },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: iso(B + 3001),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-A", name: "bash", arguments: {} },
+          { type: "toolCall", id: "call-B", name: "read", arguments: {} },
+        ],
+        model: "z-ai/glm-5.3",
+        stopReason: "toolUse",
+        timestamp: B + 1000,
+        durationMs: 2000,
+        thinkingLevel: "high",
+      },
+    },
+    {
+      type: "message",
+      id: "tB",
+      parentId: "a1",
+      timestamp: iso(B + 9001),
+      message: {
+        role: "toolResult",
+        toolCallId: "call-B",
+        toolName: "read",
+        content: ["ok"],
+        durationMs: 3000,
+        timestamp: B + 9000,
+      },
+    },
+    {
+      type: "message",
+      id: "tA",
+      parentId: "a1",
+      timestamp: iso(B + 10001),
+      message: {
+        role: "toolResult",
+        toolCallId: "call-A",
+        toolName: "bash",
+        content: ["ok"],
+        durationMs: 4000,
+        timestamp: B + 10000,
+      },
+    },
+    {
+      type: "message",
+      id: "a2",
+      parentId: "tA",
+      timestamp: iso(B + 11600),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        model: "z-ai/glm-5.3",
+        stopReason: "stop",
+        timestamp: B + 10000,
+        durationMs: 1600,
+      },
+    },
+  ]);
+
+  const store = new Store(path.join(tmpDir, "test.db"));
+  store.importFile(p, null, "pi");
+  const turn = store.sessions()[0].turns[0];
+  assert.equal(turn.elapsed_ms, 11600);
+  assert.equal(turn.review_wait_ms, 3000);
+  // Machine accumulation: 2000 + 4000 + 3000 + 1600 = 10600.
+  assert.equal(turn.work_ms, 10600);
+  assert.deepEqual(turn.breakdown?.tools, [
+    { name: "bash", count: 1, duration_ms: 4000 },
+    { name: "read", count: 1, duration_ms: 3000 },
+  ]);
+
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

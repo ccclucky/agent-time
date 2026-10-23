@@ -173,10 +173,12 @@ export function calculatePiTiming(
   // Model events without end_ms (model_change / thinking_level_change
   // markers) carry no duration evidence and contribute zero.
   for (const e of entries) {
-    if (e.end_ms == null || e.end_ms < e.at_ms) continue;
-    if (e.kind === "model") modelApiMs += e.end_ms - e.at_ms;
-    else if (e.kind === "tool_result") toolMs += e.end_ms - e.at_ms;
+    if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
+    modelApiMs += e.end_ms - e.at_ms;
   }
+  // Tools aggregate from tool_result events, where Pi's duration evidence
+  // lives (at_ms = tool start, end_ms = result creation).
+  const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
   // Approval suspension: positive interval from the issuing response end
   // (tool_use.at_ms = tool ready) to the actual tool start (tool_result.at_ms),
   // unioned across parallel calls. Fallback results start exactly at the
@@ -188,7 +190,16 @@ export function calculatePiTiming(
   const usedUses = new Set<number>();
   const waitIntervals: [number, number][] = [];
   for (const r of entries) {
-    if (r.kind !== "tool_result" || r.tool_id == null) continue;
+    if (r.kind !== "tool_result") continue;
+    const dur =
+      r.end_ms != null && r.end_ms >= r.at_ms ? r.end_ms - r.at_ms : 0;
+    toolMs += dur;
+    const tname = r.tool_name || "tool";
+    const agg = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+    agg.count += 1;
+    agg.duration_ms += dur;
+    toolsMap.set(tname, agg);
+    if (r.tool_id == null) continue;
     const uIdx = toolUses.findIndex(
       (u, idx) => !usedUses.has(idx) && u.tool_id === r.tool_id && r.at_ms > u.at_ms,
     );
@@ -205,7 +216,7 @@ export function calculatePiTiming(
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
       review_wait_ms: reviewWaitMs,
-      tools: [],
+      tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
     },
   };
 }
