@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { parse, hash, readSessionIndex, type IndexedThread } from "./codex.js";
 import { parseClaude } from "./claude.js";
+import { parsePi } from "./pi.js";
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
@@ -13,6 +14,7 @@ import {
   mapUsage,
   ValidationError,
   zeroUsage,
+  type AdapterName,
   type Event,
   type Session,
   type Status,
@@ -46,8 +48,8 @@ interface Source {
   issues: string;
   last_error: string | null;
   config_root: string | null;
-  topic: string | null;
   imported_at: string;
+  title: string | null;
 }
 
 export function groupSubagents(
@@ -176,6 +178,96 @@ export function calculateEventTiming(
   };
 }
 
+/** Pi three-state timing split (ADR-0001 semantics adapted to Pi evidence).
+ * work_ms is machine-time accumulation of first-hand duration evidence:
+ * model response spans (end_ms - at_ms) plus tool execution spans on
+ * tool_result events. It is independent of the wall-clock elapsed span, so
+ * parallel tools may legitimately push it above elapsed_ms.
+ */
+export function calculatePiTiming(
+  entries: Event[],
+  start: number,
+  end: number,
+  elapsed: number,
+): {
+  work_ms: number;
+  review_wait_ms: number | null;
+  breakdown: TurnBreakdown;
+} {
+  let modelApiMs = 0;
+  let toolMs = 0;
+  const modelTotals = new Map<string, number>();
+  const thinkingTotals = new Map<string, number>();
+  // Model events without end_ms (model_change / thinking_level_change
+  // markers) carry no duration evidence and contribute zero.
+  for (const e of entries) {
+    if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
+    const dur = e.end_ms - e.at_ms;
+    modelApiMs += dur;
+    // Response spans recorded without a model name (message.model absent)
+    // still carry timing evidence; bucket them instead of dropping.
+    const modelKey = e.model ?? "未知模型";
+    modelTotals.set(modelKey, (modelTotals.get(modelKey) ?? 0) + dur);
+    if (e.thinking_level)
+      thinkingTotals.set(
+        e.thinking_level,
+        (thinkingTotals.get(e.thinking_level) ?? 0) + dur,
+      );
+  }
+  // Tools aggregate from tool_result events, where Pi's duration evidence
+  // lives (at_ms = tool start, end_ms = result creation).
+  const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+  // Unclassified delay: positive interval from the issuing response end
+  // (tool_use.at_ms = tool ready) to the actual tool start (tool_result.at_ms),
+  // unioned across parallel calls. Pi persists no approval/permission events,
+  // so this gap cannot be attributed to human review — it may equally be
+  // scheduling, extension work, or rate limiting. It is reported separately
+  // and never counted as review wait. Fallback results start exactly at the
+  // issuing response end, contributing zero naturally.
+  const toolUses = entries.filter(
+    (e) => e.kind === "tool_use" && e.tool_id != null,
+  );
+  const usedUses = new Set<number>();
+  const delayIntervals: [number, number][] = [];
+  for (const r of entries) {
+    if (r.kind !== "tool_result") continue;
+    const dur =
+      r.end_ms != null && r.end_ms >= r.at_ms ? r.end_ms - r.at_ms : 0;
+    toolMs += dur;
+    const tname = r.tool_name || "tool";
+    const agg = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+    agg.count += 1;
+    agg.duration_ms += dur;
+    toolsMap.set(tname, agg);
+    if (r.tool_id == null) continue;
+    const uIdx = toolUses.findIndex(
+      (u, idx) => !usedUses.has(idx) && u.tool_id === r.tool_id && r.at_ms > u.at_ms,
+    );
+    if (uIdx !== -1) {
+      usedUses.add(uIdx);
+      delayIntervals.push([toolUses[uIdx].at_ms, r.at_ms]);
+    }
+  }
+  const unclassifiedDelayMs = unionMs(delayIntervals);
+  return {
+    work_ms: modelApiMs + toolMs,
+    // Pi sources carry no approval evidence; review wait stays unknown.
+    review_wait_ms: null,
+    breakdown: {
+      model_api_ms: modelApiMs,
+      tool_execution_ms: toolMs,
+      unclassified_delay_ms: unclassifiedDelayMs,
+      tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      model_api_breakdown: [...modelTotals.entries()]
+        .map(([model, duration_ms]) => ({ model, duration_ms }))
+        .sort((a, b) => a.model.localeCompare(b.model)),
+      thinking_breakdown: [...thinkingTotals.entries()]
+        .map(([level, duration_ms]) => ({ level, duration_ms }))
+        .sort((a, b) => a.level.localeCompare(b.level)),
+    },
+  };
+}
+
 export class Store {
   readonly path: string;
   readonly db: DatabaseSync;
@@ -185,6 +277,9 @@ export class Store {
     this.db = new DatabaseSync(this.path);
     this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;");
     this.db.exec(SCHEMA);
+    try {
+      this.db.prepare("ALTER TABLE source ADD COLUMN title TEXT").run();
+    } catch {}
     const columns = this.db
       .prepare("PRAGMA table_info(source)")
       .all()
@@ -193,16 +288,22 @@ export class Store {
       this.db.exec(
         "ALTER TABLE source ADD COLUMN agent TEXT NOT NULL DEFAULT 'Codex'",
       );
-    for (const col of ["last_error", "config_root", "topic"])
+    for (const col of ["last_error", "config_root"])
       if (!columns.includes(col))
         this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
     const eventCols = this.db
       .prepare("PRAGMA table_info(event)")
       .all()
       .map((r) => (r as { name: string }).name);
-    for (const col of ["agent_id", "tool_id", "tool_name"])
+    for (const [col, type] of [
+      ["agent_id", "TEXT"],
+      ["tool_id", "TEXT"],
+      ["tool_name", "TEXT"],
+      ["end_ms", "INTEGER"],
+      ["thinking_level", "TEXT"],
+    ] as const)
       if (!eventCols.includes(col))
-        this.db.exec(`ALTER TABLE event ADD COLUMN ${col} TEXT`);
+        this.db.exec(`ALTER TABLE event ADD COLUMN ${col} ${type}`);
     try {
       chmodSync(this.path, 0o600);
     } catch {}
@@ -224,7 +325,7 @@ export class Store {
   async importFile(
     filename: string,
     configRoot: string | null = null,
-    adapter: "codex" | "claude" = "codex",
+    adapter: AdapterName = "codex",
     indexCache: SessionIndexCache = new Map(),
   ): Promise<{
     events: number;
@@ -244,7 +345,9 @@ export class Store {
     // The file-change guard spans the awaited parse: stat before and after, so
     // a file rewritten mid-import is rejected instead of half-ingested.
     const codex = adapter === "codex" ? await parse(p) : null,
-      data = codex ?? parseClaude(p),
+      data =
+        codex ??
+        (adapter === "claude" ? parseClaude(p) : parsePi(p)),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -252,20 +355,20 @@ export class Store {
       m = data.session;
     // session_index.jsonl lives under the config root the file was discovered
     // in (CODEX_HOME-aware); CLI imports without a config root stay untitled.
-    // The topic is recomputed on every import, so an entry dropped from the
-    // index clears the stored topic rather than leaving a stale one.
-    const topic =
+    // The title is recomputed on every import, so an entry dropped from the
+    // index clears the stored title rather than leaving a stale one.
+    const title =
       adapter === "codex" && configRoot
         ? (sessionIndex(configRoot, indexCache).get(m.id)?.name ?? "").slice(
             0,
             100,
           ) || null
-        : null;
+        : ((m as { title?: string | null }).title ?? null);
     const tokens = codex ? codex.tokens : [];
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,topic,agent) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,topic=excluded.topic,agent=excluded.agent,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
+          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent,title) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,title=excluded.title,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
         )
         .run(
           sid,
@@ -275,13 +378,13 @@ export class Store {
           m.client,
           JSON.stringify(data.issues),
           configRoot,
-          topic,
           m.agent,
+          title,
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
       this.db.prepare("DELETE FROM token_usage WHERE source_id=?").run(sid);
       const put = this.db.prepare(
-        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name,end_ms,thinking_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
       );
       for (const e of data.events)
         put.run(
@@ -294,6 +397,8 @@ export class Store {
           e.agent_id ?? null,
           e.tool_id ?? null,
           e.tool_name ?? null,
+          e.end_ms ?? null,
+          e.thinking_level ?? null,
         );
       if (tokens.length) {
         const putTokens = this.db.prepare(
@@ -353,13 +458,16 @@ export class Store {
           throw new ValidationError(
             "原会话文件已移动或不再位于启用目录；旧快照保留",
           );
+        const savedAgent = saved.find((s) => s.path === p)?.agent;
         await this.importFile(
           p,
           r,
           agents.get(p) ??
-            (saved.find((s) => s.path === p)?.agent === "Claude Code"
+            (savedAgent === "Claude Code"
               ? "claude"
-              : "codex"),
+              : savedAgent === "Pi"
+                ? "pi"
+                : "codex"),
           indexCache,
         );
         ok++;
@@ -427,7 +535,7 @@ export class Store {
         .all() as unknown as Source[],
       events: this.db
         .prepare(
-          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
+          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name,e.end_ms,e.thinking_level FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
         )
         .all() as unknown as (Event & { session_id: string })[],
       tokenRows: this.db
@@ -454,12 +562,10 @@ export class Store {
         id: s.session_id,
         agent: s.agent,
         project: s.project,
-        topic: null,
         issues: [],
         turns: [],
         imported_at: s.imported_at,
       };
-      if (s.topic && !item.topic) item.topic = s.topic;
       item.issues = [
         ...new Set([
           ...item.issues,
@@ -468,6 +574,7 @@ export class Store {
         ]),
       ].sort();
       if (s.imported_at > item.imported_at) item.imported_at = s.imported_at;
+      if (s.title && !item.title) item.title = s.title;
       sessions.set(s.session_id, item);
     }
     const seen = new Set<string>(),
@@ -553,6 +660,15 @@ export class Store {
       let work_ms: number | null = null;
       let review_wait_ms: number | null = null;
       let breakdown: Turn["breakdown"] = null;
+      const applyTiming = (
+        timing:
+          | ReturnType<typeof calculateEventTiming>
+          | ReturnType<typeof calculatePiTiming>,
+      ) => {
+        work_ms = timing.work_ms;
+        review_wait_ms = timing.review_wait_ms;
+        breakdown = timing.breakdown;
+      };
 
       if (
         elapsed !== null &&
@@ -560,10 +676,14 @@ export class Store {
         end !== null &&
         (sessionObj.agent === "Claude Code" || sessionObj.agent === "Codex")
       ) {
-        const timing = calculateEventTiming(entries, start, end, elapsed);
-        work_ms = timing.work_ms;
-        review_wait_ms = timing.review_wait_ms;
-        breakdown = timing.breakdown;
+        applyTiming(calculateEventTiming(entries, start, end, elapsed));
+      } else if (
+        elapsed !== null &&
+        start !== null &&
+        end !== null &&
+        sessionObj.agent === "Pi"
+      ) {
+        applyTiming(calculatePiTiming(entries, start, end, elapsed));
       }
 
       const turnSubagents = groupSubagents(entries);

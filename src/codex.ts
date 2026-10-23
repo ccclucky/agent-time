@@ -35,7 +35,7 @@ export function legacyJSON(value: unknown): string {
     (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
   );
 }
-const ID = /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/;
+export const ID = /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/;
 const kinds: Record<string, Kind> = {
   task_started: "start",
   turn_started: "start",

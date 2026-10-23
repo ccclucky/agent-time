@@ -19,9 +19,9 @@ export const SOURCES = [
   },
   {
     agent: "Pi",
-    status: "已调研 · 尚未接入",
-    supported: false,
-    note: "模型循环不是用户交互轮次，需验证完成边界。",
+    status: "只读导入 · 事件流三态切分",
+    supported: true,
+    note: "读取 sessions/<编码项目> 的事件流，按模型推理与工具执行耗时切分纯工作；等待人审阅仅在时间戳可测时计入，未落盘的明细不额外拆分。",
   },
   {
     agent: "Oh-My-Pi",
