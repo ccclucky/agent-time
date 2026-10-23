@@ -68,8 +68,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "Verifying npm identity with token..."
-          npm whoami
+          echo "Token length: ${#NODE_AUTH_TOKEN}"
+          echo "Token prefix: ${NODE_AUTH_TOKEN:0:4}"
+          echo -n "Direct registry curl HTTP code: "
+          curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $NODE_AUTH_TOKEN" https://registry.npmjs.org/-/whoami
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
           npm publish --access public --provenance
 
       - name: Post-publish install smoke test
