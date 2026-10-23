@@ -21,6 +21,7 @@ import { locate } from "../src/locations.js";
 import { bounds, report, unionMs } from "../src/metrics.js";
 import { legacyJSON, hash, timestamp } from "../src/codex.js";
 import { makeServer } from "../src/server.js";
+import { extractProjectFromCwd } from "../src/claude.js";
 const resources: { dir: string; store: Store }[] = [];
 function setup() {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "agenttime-test-"))),
@@ -746,6 +747,22 @@ test("Claude extracts session title from ai-title and custom-title events", () =
   store.importFile(p2, null, "claude");
   const sessions2 = store.sessions();
   assert.equal(sessions2[0].title, "用户自定义分析任务");
+});
+test("Claude normalizes worktree directory paths to parent project name", () => {
+  assert.equal(
+    extractProjectFromCwd(
+      "/path/to/my-project/.claude/worktrees/quizzical-chatterjee-fa46ff",
+    ),
+    "my-project",
+  );
+  assert.equal(
+    extractProjectFromCwd("/path/to/my-project/.worktree/feat-123"),
+    "my-project",
+  );
+  assert.equal(
+    extractProjectFromCwd("/path/to/regular-project"),
+    "regular-project",
+  );
 });
 test("Claude tool results, metadata and compact summaries are not new submissions", () => {
   const { store, dir } = setup();

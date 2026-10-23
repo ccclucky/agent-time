@@ -17,6 +17,15 @@ interface ContentBlock {
   content?: unknown;
 }
 
+export function extractProjectFromCwd(cwd: string): string {
+  const normalized = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
+  const worktreeMatch = normalized.match(
+    /^(.*?)(?:\/\.claude\/worktrees|\/\.worktrees?)\/[^/]+$/,
+  );
+  const projectRoot = worktreeMatch ? worktreeMatch[1] : normalized;
+  return posix.basename(projectRoot).slice(0, 100) || "未知项目";
+}
+
 export function parseClaude(path: string) {
   let sid: string | null = null,
     project = "未知项目",
@@ -106,8 +115,7 @@ export function parseClaude(path: string) {
       }
       sid = r.sessionId;
       if (typeof r.cwd === "string")
-        project =
-          posix.basename(r.cwd.replaceAll("\\", "/")).slice(0, 100) || project;
+        project = extractProjectFromCwd(r.cwd);
       if (
         r.type !== "user" &&
         r.type !== "assistant" &&
