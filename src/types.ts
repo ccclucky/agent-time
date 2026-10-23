@@ -49,6 +49,8 @@ export interface Event {
   agent_id?: string | null;
   tool_id?: string | null;
   tool_name?: string | null;
+  end_ms?: number | null;
+  thinking_level?: string | null;
 }
 
 export interface Turn {
