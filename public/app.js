@@ -591,7 +591,10 @@ function timeline(model) {
 // 左：会话耗时 TOP 3 榜 · 右：当前视口 Operations Breakdown
 // 聚合口径：仅统计当前热力图视口 (zoomStartPct..zoomEndPct) 内可见的会话
 // ========================================================
-function sessionWallMs(s) {
+// 本期分摊口径：period_ms 是逐轮"裁剪到统计日期范围"的时长相加
+// （/api/report 对越界轮次做裁剪）。命名必须暴露"裁剪分摊"语义，
+// 与详情页的首末轮次物理壁钟跨度 (sessionWallSpan) 严格区分，不得混用。
+function sessionClippedPeriodMs(s) {
   return s.measured_turns ? s.period_ms || 0 : 0;
 }
 
@@ -600,9 +603,12 @@ function zoomedViewport() {
 }
 
 function topSessionsCard(model) {
+  // 口径对齐：榜值与详情页「总壁钟时长 (WALL TIME)」KPI 同源 ——
+  // 均为会话首末轮次的物理壁钟跨度 (sessionWallSpan)，
+  // 保证任一会话的首页 TOP 3 榜值恒等于其详情页 WALL TIME
   const top = model.visibleSessions
     .map((item) => item.session)
-    .map((s) => ({ s, duration: sessionWallMs(s) }))
+    .map((s) => ({ s, duration: sessionWallSpan(s).wallMs || 0 }))
     .filter((x) => x.duration > 0)
     .sort((a, b) => b.duration - a.duration)
     .slice(0, 3);
@@ -635,26 +641,49 @@ function topSessionsCard(model) {
   `;
 }
 
+// Operations Breakdown 四维配置（维度键 + 短标签 + 分段色）的唯一真理源：
+// 首页视口分段条 (VIEWPORT_SEGMENTS)、详情页明细行 (DETAIL_BREAKDOWN_ROWS)、
+// 轮次胶囊条与会话流迷你条均由此派生，杜绝同一维度在多个视图漂移出两种颜色
+const BREAKDOWN_DIMENSIONS = [
+  { key: "tool", label: "本地工具", color: "var(--color-mcp)" },
+  { key: "model", label: "模型推理", color: "var(--color-system)" },
+  { key: "wait", label: "等待人审阅", color: "var(--color-skills)" },
+  { key: "standby", label: "待命", color: "var(--state-standby)" },
+];
+
+const breakdownColor = (key) =>
+  BREAKDOWN_DIMENSIONS.find((d) => d.key === key)?.color ??
+  "var(--state-standby)";
+
+// 四维耗时累加器（键序与 BREAKDOWN_DIMENSIONS 一致）：
+// Codex 会话 breakdown 为 null，天然按 0 贡献并优雅降级
+function addTurnBreakdown(agg, t) {
+  agg.tool += t.breakdown?.tool_execution_ms ?? 0;
+  agg.model += t.breakdown?.model_api_ms ?? 0;
+  agg.wait += t.review_wait_ms ?? 0;
+  agg.standby += t.standby_ms ?? 0;
+}
+
+function sumBreakdown(agg) {
+  return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
+}
+
 // 多维操作分段条 (Operations Breakdown Sparkline) 的四个维度
 const VIEWPORT_SEGMENTS = [
-  { key: "tool", label: "本地代码工具执行 (Bash / Edit / 其他本地操作)", color: "var(--color-mcp)" },
-  { key: "model", label: "AI 模型推理耗时", color: "var(--color-system)" },
-  { key: "wait", label: "等待人类审阅卡点 (Review Wait)", color: "var(--color-skills)" },
-  { key: "standby", label: "静默就绪与待命 (Standby)", color: "var(--state-standby)" },
+  { key: "tool", label: "本地代码工具执行 (Bash / Edit / 其他本地操作)", color: breakdownColor("tool") },
+  { key: "model", label: "AI 模型推理耗时", color: breakdownColor("model") },
+  { key: "wait", label: "等待人类审阅卡点 (Review Wait)", color: breakdownColor("wait") },
+  { key: "standby", label: "静默就绪与待命 (Standby)", color: breakdownColor("standby") },
 ];
 
 function aggregateViewportBreakdown(visibleSessions) {
   const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
   for (const item of visibleSessions) {
     for (const t of item.session.turns) {
-      // Codex 会话没有 breakdown，天然按 0 贡献并优雅降级
-      agg.tool += t.breakdown?.tool_execution_ms ?? 0;
-      agg.model += t.breakdown?.model_api_ms ?? 0;
-      agg.wait += t.review_wait_ms ?? 0;
-      agg.standby += t.standby_ms ?? 0;
+      addTurnBreakdown(agg, t);
     }
   }
-  return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
+  return sumBreakdown(agg);
 }
 
 function viewportBreakdownCard(model) {
@@ -706,10 +735,35 @@ function viewportBreakdownCard(model) {
 // 首页最小原子是会话 (Session)，绝不在首页平铺每一轮次；
 // 点击卡片写入 #session/:id 哈希，独立详情页由后续切片落地
 // ========================================================
+// 迷你条：以列表内最长会话为基准的相对时长占比条（原型 SSOT 的 迷你条），
+// 分段色沿用 BREAKDOWN_DIMENSIONS 四维令牌，与首页/详情页同一套颜色；
+// 无 breakdown 的来源（Codex）诚实退化为单色待命条
+function streamMiniBarHtml(s, maxDuration) {
+  const duration = sessionClippedPeriodMs(s);
+  if (!duration || !(maxDuration > 0)) return "";
+  const b = sessionBreakdown(s);
+  const fill =
+    b.total > 0
+      ? BREAKDOWN_DIMENSIONS.filter((d) => b[d.key] > 0)
+          .map(
+            (d) =>
+              `<div style="width:${((b[d.key] / b.total) * 100).toFixed(1)}%; background:${d.color};" title="${d.label}: ${fmt(b[d.key])}"></div>`,
+          )
+          .join("")
+      : `<div style="width:100%; background:var(--state-standby);" title="该会话无细分耗时数据（来源不提供 breakdown）"></div>`;
+  // 最短可见宽度 2%：避免极短会话被压成不可感知的 0px 细线
+  const widthPct = Math.max(2, (duration / maxDuration) * 100);
+  return `
+    <div class="stream-mini-bar" role="img" aria-label="相对最长会话的耗时迷你条">
+      <div class="stream-mini-bar-fill" style="width:${widthPct.toFixed(1)}%;">${fill}</div>
+    </div>`;
+}
+
 function sessionStream() {
   const rows = (state.report.sessions || [])
     .slice()
-    .sort((a, b) => sessionWallMs(b) - sessionWallMs(a));
+    .sort((a, b) => sessionClippedPeriodMs(b) - sessionClippedPeriodMs(a));
+  const maxDuration = Math.max(0, ...rows.map(sessionClippedPeriodMs));
 
   return `
     <div class="session-stream-head">
@@ -726,9 +780,10 @@ function sessionStream() {
           <span class="stream-turns-pill">${s.turns.length} 轮交互</span>
         </div>
         <div class="stream-right">
-          <span class="stream-duration">${fmt(sessionWallMs(s) || null)}</span>
+          <span class="stream-duration">${fmt(sessionClippedPeriodMs(s) || null)}</span>
           <span class="stream-enter-chip">进入会话详情页 →</span>
         </div>
+        ${streamMiniBarHtml(s, maxDuration)}
       </div>
     `,
       )
@@ -829,12 +884,9 @@ function sessionWallSpan(s) {
 function sessionBreakdown(s) {
   const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
   for (const t of s.turns) {
-    agg.tool += t.breakdown?.tool_execution_ms ?? 0;
-    agg.model += t.breakdown?.model_api_ms ?? 0;
-    agg.wait += t.review_wait_ms ?? 0;
-    agg.standby += t.standby_ms ?? 0;
+    addTurnBreakdown(agg, t);
   }
-  return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
+  return sumBreakdown(agg);
 }
 
 // 配对 review_wait_start / review_wait_end 形成等待区间（与后端口径一致）
@@ -900,8 +952,11 @@ function perCallToolTimings(turn) {
   return calls;
 }
 
+// 慢操作阈值：单次工具调用超过 15 秒即视为慢瓶颈（用户可见文案统一写作 "15s"）
+const SLOW_OP_THRESHOLD_MS = 15000;
+
 // 慢操作（单次 >15s）跨轮收集，按耗时倒序
-function slowToolCalls(s, threshold = 15000) {
+function slowToolCalls(s, threshold = SLOW_OP_THRESHOLD_MS) {
   const calls = [];
   s.turns.forEach((t, i) => {
     for (const c of perCallToolTimings(t)) {
@@ -987,10 +1042,10 @@ function detailKpiCard(label, val, sub, tone = "") {
 }
 
 const DETAIL_BREAKDOWN_ROWS = [
-  { key: "tool", label: "本地工具 (Tool Execution)", color: "var(--color-mcp)" },
-  { key: "model", label: "模型推理 (Model API)", color: "var(--color-system)" },
-  { key: "wait", label: "等待人审阅 (Review Wait)", color: "var(--color-skills)" },
-  { key: "standby", label: "待命 (Standby)", color: "var(--state-standby)" },
+  { key: "tool", label: "本地工具 (Tool Execution)", color: breakdownColor("tool") },
+  { key: "model", label: "模型推理 (Model API)", color: breakdownColor("model") },
+  { key: "wait", label: "等待人审阅 (Review Wait)", color: breakdownColor("wait") },
+  { key: "standby", label: "待命 (Standby)", color: breakdownColor("standby") },
 ];
 
 function sessionDetail() {
@@ -1161,7 +1216,9 @@ function capsuleTitle(t) {
 
 function turnCapsuleSection(s) {
   const rows = s.turns.map((t, i) => {
-    const hasSlow = perCallToolTimings(t).some((c) => c.duration_ms > 15000);
+    const hasSlow = perCallToolTimings(t).some(
+      (c) => c.duration_ms > SLOW_OP_THRESHOLD_MS,
+    );
     return `
       <div class="turn-capsule${state.selectedTurnId === t.id ? " active" : ""}" data-turn-capsule="${h(t.id)}" role="button" tabindex="0" aria-label="检视轮次 #${i + 1}">
         <span class="capsule-no">轮次 #${i + 1}</span>
@@ -1382,7 +1439,7 @@ function openDrawer(turn, session) {
 
   const toolsHtml = perCallStack.length
     ? perCallStack.map((c) => {
-        const isSlow = c.duration_ms > 15000;
+        const isSlow = c.duration_ms > SLOW_OP_THRESHOLD_MS;
         return `
           <div class="tool-exec-card${isSlow ? " slow" : ""}">
             <div class="tool-exec-head">
@@ -1520,7 +1577,7 @@ function renderDrawerTranscript(entry, session, turn) {
   const cotEl = $("#drawerThinking");
   if (!promptEl || !cotEl) return;
 
-  if (entry.status === "loading") return; // innerHTML 占位已是加载中
+  // 缓存只存 ok/error 两种终态（loading 占位由 innerHTML 直接给出）
   if (entry.status === "error") {
     promptEl.innerHTML = drawerHint(
       `无法按需读取本机源文件（${entry.message || "未知错误"}）。原始会话文件可能已被移动或删除；耗时统计不受影响。`,

@@ -61,7 +61,14 @@ test("Slice 5 Homepage: style.css ports Plan-A prototype classes and segment col
   assert.ok(css.includes("--state-standby"), "CSS must define --state-standby token");
   assert.ok(css.includes("#2563EB"), "CSS must carry the prototype 本地工具 blue");
   assert.ok(css.includes("#EA580C"), "CSS must carry the prototype 模型推理 orange");
-  assert.ok(css.includes("#D97706"), "CSS must carry the prototype 等待人审阅 amber");
+  // 等待人审阅 is ONE hue across heatmap (--state-wait) and breakdown
+  // (--color-skills): both converge on the canonical amber #C68A4C so the
+  // same dimension never renders two colors in the same view.
+  assert.match(
+    css,
+    /--color-skills:\s*#C68A4C/i,
+    "CSS must unify 等待人审阅 breakdown hue with the heatmap amber (--state-wait #C68A4C)",
+  );
 
   // Plan-A module styles
   assert.ok(css.includes(".s1-grid"), "CSS must style the two-column Plan-A grid");
@@ -75,6 +82,57 @@ test("Slice 5 Homepage: style.css ports Plan-A prototype classes and segment col
   assert.ok(
     /height:\s*140px/.test(brush.slice(0, 300)),
     "brush strip must keep its 140px golden height",
+  );
+});
+
+test("Slice 5 Homepage: stream cards carry a mini duration bar relative to the largest session", () => {
+  const js = read("../public/app.js");
+
+  assert.ok(
+    js.includes("stream-mini-bar"),
+    "session-stream cards must render a mini duration bar (prototype 迷你条)",
+  );
+  // The bar visualizes each session's duration relative to the largest
+  // visible session: a max-relative width computation must exist.
+  assert.match(
+    js,
+    /streamMiniBar[\s\S]*?maxDuration/,
+    "mini bar width must be computed relative to the largest session duration",
+  );
+  // Segment colors come from the existing breakdown tokens (never hard-coded).
+  assert.match(
+    js,
+    /BREAKDOWN_DIMENSIONS[\s\S]*?stream-mini-bar|stream-mini-bar[\s\S]*?BREAKDOWN_DIMENSIONS/,
+    "mini bar must consume the shared breakdown dimension tokens",
+  );
+
+  const css = read("../public/style.css");
+  assert.ok(css.includes(".stream-mini-bar"), "CSS must style the mini bar track");
+  assert.ok(
+    css.includes(".stream-mini-bar-fill"),
+    "CSS must style the mini bar fill",
+  );
+});
+
+test("Slice 5 Homepage: TOP 3 rank value equals the detail page WALL TIME (first-to-last wall span)", () => {
+  const js = read("../public/app.js");
+
+  // The homepage TOP3 must rank by the same first-to-last wall span the
+  // detail page's 总壁钟时长 KPI uses (sessionWallSpan), not by the per-turn
+  // clipped period sum (period_ms).
+  assert.match(
+    js,
+    /function topSessionsCard\([\s\S]*?sessionWallSpan/,
+    "topSessionsCard must rank and display by sessionWallSpan (detail WALL TIME 口径)",
+  );
+  // period_ms is the sum of per-turn CLIPPED durations — the name must say so.
+  assert.ok(
+    js.includes("sessionClippedPeriodMs"),
+    "the period_ms-based helper must be renamed to reveal clipped-period semantics",
+  );
+  assert.ok(
+    !js.includes("sessionWallMs"),
+    "the misleading sessionWallMs name must be gone (renamed or removed)",
   );
 });
 

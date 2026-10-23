@@ -45,10 +45,13 @@
   --state-idle: #7A7268;        /* 深亚麻灰 - 待命时长 */
   --state-idle-light: #EEEAE2;  /* 亚麻浅底 */
 
-  /* 4.1 方案 A 多维操作分段色 (SSOT: prototypes/session-first-detail-view.html) */
+  /* 4.1 方案 A 多维操作分段色 (SSOT: prototypes/session-first-detail-view.html)
+     等待人审阅统一口径：--color-skills 与 --state-wait 收敛为同一琥珀金
+     #C68A4C（评审决策：热力图/漏斗已大面积使用该色，收敛到它对已评审
+     原型的整体视觉偏移最小；原型中的 #D97706 弃用），同一维度绝不出两色 */
   --color-mcp: #2563EB;         /* 本地工具执行 (Bash / Edit / Playwright) */
   --color-system: #EA580C;      /* AI 模型推理耗时 */
-  --color-skills: #D97706;      /* 等待人审阅卡点 */
+  --color-skills: #C68A4C;      /* 等待人审阅卡点 (= --state-wait 琥珀金) */
   --state-standby: #9E968B;     /* 静默就绪待命 */
   --state-token: #5E7A8B;       /* 石板蓝灰 - Token 用量下钻 */
 
@@ -861,9 +864,10 @@ h1#title {
   padding: 14px 18px;
   margin-bottom: 10px;
   display: flex;
+  flex-wrap: wrap; /* 迷你条 flex-basis:100% 独占第二行 */
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 4px 14px;
   cursor: pointer;
   transition: all 0.15s ease;
   min-width: 0;
@@ -940,6 +944,26 @@ h1#title {
   padding: 4px 10px;
   border-radius: 4px;
   white-space: nowrap;
+}
+
+/* 会话流迷你条：以列表内最长会话为基准的相对时长占比条；
+   独占整行、min-width:0、fill 保底 2% 可见宽度，杜绝 Flex 挤压成 0px 细线 */
+.stream-mini-bar {
+  flex-basis: 100%;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--line-subtle);
+  overflow: hidden;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.stream-mini-bar-fill {
+  height: 100%;
+  min-width: 2%;
+  display: flex;
+  border-radius: 9999px;
+  overflow: hidden;
 }
 
 @media (max-width: 960px) {

@@ -131,7 +131,7 @@ test("Slice 7 Turn Inspector: index.html bumps the cache-busting stamp and adds 
   assert.equal(cssV, jsV, "both assets must share one version stamp");
   assert.equal(
     cssV,
-    "20261025-3",
+    "20261025-4",
     "version stamp must be bumped past main's 20261025-2 after the PR #19 merge",
   );
   assert.ok(
