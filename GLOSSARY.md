@@ -23,3 +23,20 @@ _Avoid_: 外部耗时
 **待命时长 (Standby Duration)**:
 上一轮 Agent 答复交割完毕至人类下达下一条任务之间的时间跨度。此期间 Agent 处于零消耗的静默待命状态，终端保持挂载等待人类下一次唤醒。
 _Avoid_: 轮次间空闲, 轮次间阅读, 响应间隙, 人工思考时间
+
+**惰性完成时间戳 (Lazy Completion Timestamp)**:
+部分 Agent 写入器（如 Codex CLI/旧版）把轮次完成记录滞留到下一条用户消息落盘时才写出，导致完成行时间戳包含人工阅读与思考间隔，不能直接当作 Agent 真正干完的时刻。
+_Avoid_: 完成时刻, 结束时间戳
+
+**完成锚点 (Completion Anchor)**:
+轮内最后一个非用户消息内容项的完成时刻（如 Codex 的 `item_completed.completed_at_ms`），用于校准惰性完成时间戳，还原 Agent 真正答完的边界。
+_Avoid_: 结束锚点, 答复时间
+
+**外部导入轮次 (External-Import Turn)**:
+从其他 Agent 会话导入的历史轮次（turn_id 带 `external-import-turn-` 前缀）。其行时间戳是导入瞬间而非真实对话时刻，不参与耗时计量；Token 累计快照仍然真实有效。
+_Avoid_: 导入会话, 迁移轮次
+
+**Token 用量（快照差分） (Token Usage by Snapshot Diff)**:
+基于源记录中的会话级累计 Token 快照，按"轮末快照减去前轮末快照"差分得到的轮次用量；各轮差分之和精确等于会话最后快照。缺失快照时不计入，绝不以 0 冒充。
+_Avoid_: Token 求和, 单次响应用量
+

@@ -1,9 +1,9 @@
 export const SOURCES = [
   {
     agent: "Codex",
-    status: "首批适配 · 只读导入",
+    status: "只读导入 · 三态耗时与 Token 下钻",
     supported: true,
-    note: "读取明确的开始与结束事件；等待确认或补充的时间无法单独恢复。",
+    note: "基于 task_started/task_complete 轮次边界、call_id 工具配对与 item_completed 完成锚点的三态切分；本地格式无审批事件，等待人工未单独计量（记 0）。",
   },
   {
     agent: "Claude Code",

@@ -140,7 +140,7 @@ export function report(
       statuses: counts,
     },
     basis:
-      "Codex：基于 task_started/task_complete 轮次边界、call_id 工具调用配对与 item_completed 完成锚点的三态耗时切分；本地语料无审批事件，等待人工未单独计量（记 0）。Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。",
+      "Codex：基于 task_started/task_complete 轮次边界、call_id 工具调用配对与 item_completed 完成锚点的三态耗时切分；本地语料无审批事件，等待人工未单独计量（记 0）。Token 用量为 event_msg/token_count 累计快照的轮次差分实测，无快照时不计入。Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。",
     sessions: included,
   };
 }
