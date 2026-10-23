@@ -401,7 +401,7 @@ test("missing directories are saved without creation and unsupported adapters ca
   dirs.save("codex", p, true);
   assert(!existsSync(p));
   assert.equal(dirs.get("codex").status, "missing");
-  assert.throws(() => dirs.save("pi", null, true));
+  assert.throws(() => dirs.save("opencode", null, true));
   for (const raw of ["", home, "/", "relative", "~someone/x", 123])
     assert.throws(() => dirs.save("codex", raw, false));
 });

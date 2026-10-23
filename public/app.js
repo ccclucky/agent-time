@@ -207,7 +207,7 @@ function render() {
 }
 
 function noData() {
-  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex 或 Claude Code 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
+  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code 或 Pi 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
 
 function stats() {
@@ -573,8 +573,9 @@ function timeline() {
         <div class="session-card-header" role="button" tabindex="0" aria-expanded="${isExpanded}">
           <div class="session-header-left">
             <span class="session-expand-icon">${isExpanded ? "▼" : "▶"}</span>
-            <span class="session-project-pill" title="${h(s.project)}">${h(s.project)}</span>
-            <span class="session-title-anchor" title="${h(sessionTitleAnchor)}">${h(sessionTitleAnchor)}</span>
+            ${s.title
+              ? `<span class="session-project-pill" title="${h(s.project)}">${h(s.project)}</span><span class="session-title-anchor" title="${h(s.title)}">${h(s.title)}</span>`
+              : `<span class="session-title-anchor" title="${h(s.project)}">${h(s.project)}</span>`}
             <span class="session-turns-pill">${turnsCount} 轮</span>
           </div>
           <div class="session-track-col">
@@ -808,6 +809,57 @@ function openDrawer(turn, session) {
   // 耗时倒序排序
   toolsList.sort((a, b) => b.duration_ms - a.duration_ms);
 
+  // 可选分项（如 Pi 的事件流切分）：仅在数据落盘存在时渲染该小节
+  const unclassifiedMs = turn.breakdown?.unclassified_delay_ms ?? null;
+  const waitCaption = unclassifiedMs !== null
+    ? "来源未落盘审批事件 · 无法归因"
+    : "授权审批与决策对齐卡点";
+  const modelBreakdown = (turn.breakdown?.model_api_breakdown ?? [])
+    .slice()
+    .sort((a, b) => b.duration_ms - a.duration_ms);
+  const thinkingBreakdown = (turn.breakdown?.thinking_breakdown ?? [])
+    .slice()
+    .sort((a, b) => b.duration_ms - a.duration_ms);
+  const breakdownRow = (label, ms) => `
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 12px; border-top:1px solid var(--line-subtle);">
+      <span style="font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg-title);">${h(label)}</span>
+      <span class="tool-time">${fmt(ms)}</span>
+    </div>
+  `;
+  const breakdownHtml = modelBreakdown.length || thinkingBreakdown.length
+    ? `
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">模型与思考等级分项</span>
+        <span style="font-size:var(--text-xs); color:var(--fg-muted);">仅统计已落盘的事件耗时</span>
+      </div>
+      <div style="border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        ${modelBreakdown.length ? `
+          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title);">模型推理耗时分布</div>
+          ${modelBreakdown.map((m) => breakdownRow(m.model, m.duration_ms)).join("")}
+        ` : ""}
+        ${thinkingBreakdown.length ? `
+          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid var(--line);">思考等级耗时分布</div>
+          ${thinkingBreakdown.map((t) => breakdownRow(`思考等级 ${t.level}`, t.duration_ms)).join("")}
+        ` : ""}
+      </div>
+    </div>
+  `
+    : "";
+
+  const unclassifiedHtml =
+    unclassifiedMs !== null && unclassifiedMs > 0
+      ? `
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid var(--line); border-radius:8px; padding:7px 12px;">
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">未分类延迟 (Unclassified)</span>
+        <span class="tool-time">${fmt(unclassifiedMs)}</span>
+      </div>
+      <div style="font-size:var(--text-xs); color:var(--fg-muted); margin-top:4px;">工具就绪至实际开始的间隔；来源未落盘审批事件，可能含审批等待、调度或限流，不计入等待人审阅。</div>
+    </div>
+  `
+      : "";
+
   const toolsHtml = toolsList.length
     ? toolsList.map((t, idx) => {
         const isSlow = idx === 0 && t.duration_ms > 2000;
@@ -856,7 +908,7 @@ function openDrawer(turn, session) {
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);">
           <div class="drawer-kpi-title">等待人审阅 (Review Wait)</div>
           <div class="drawer-kpi-val">${wait !== null ? fmt(wait) : "—"}</div>
-          <div class="drawer-kpi-sub">授权审批与决策对齐卡点</div>
+          <div class="drawer-kpi-sub">${waitCaption}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);">
           <div class="drawer-kpi-title">单轮壁钟时长 (Wall Time)</div>
@@ -865,6 +917,12 @@ function openDrawer(turn, session) {
         </div>
       </div>
     </div>
+
+    <!-- 模型与思考等级可选分项（仅数据存在时渲染） -->
+    ${breakdownHtml}
+
+    <!-- Pi 未分类延迟（工具就绪到实际开始，无法归因为人审） -->
+    ${unclassifiedHtml}
 
     <!-- 详细脚本与慢工具清单 -->
     <div>
@@ -930,9 +988,7 @@ function table(rows) {
           .map((s) => {
             const lastAt = Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0));
             const displayTitle = s.title ? h(s.title) : h(s.project);
-            const subTitle = s.title
-              ? `${h(s.project)} · ${h(s.id.slice(0, 16))}`
-              : h(s.id.slice(0, 16));
+            const subTitle = `${h(s.project)} · ${h(s.id.slice(0, 16))}`;
             return `
               <tr>
                 <td>
@@ -1011,7 +1067,7 @@ function compare() {
   return `
     <div class="demo" style="margin-bottom:16px;">
       <strong>口径提示</strong>
-      <span>当前接入 Codex 和 Claude Code，按模型上下文分组，耗时更短不等于质量更优。</span>
+      <span>当前接入 Codex、Claude Code 与 Pi，按模型上下文分组，耗时更短不等于质量更优。</span>
     </div>
     <section class="panel">
       <div class="panelhead"><h2>按模型上下文汇总</h2></div>

@@ -1,3 +1,10 @@
+/** Adapter ids with an implemented read-only importer — the single list both
+ * the CLI/directory surfaces and Store.importFile dispatch on. */
+export const ADAPTERS = ["codex", "claude", "pi"] as const;
+export type AdapterName = (typeof ADAPTERS)[number];
+export const isAdapterName = (v: string): v is AdapterName =>
+  (ADAPTERS as readonly string[]).includes(v);
+
 export type Kind =
   | "start"
   | "complete"
@@ -26,8 +33,14 @@ export interface ToolExecutionDetail {
 export interface TurnBreakdown {
   model_api_ms: number;
   tool_execution_ms: number;
-  review_wait_ms: number;
+  /** Claude: measured permission wait. Pi: absent (source has no approval events). */
+  review_wait_ms?: number;
+  /** Pi: positive tool-ready → tool-start gaps the source cannot attribute
+   *  (may contain approval waits, scheduling, rate limiting). */
+  unclassified_delay_ms?: number;
   tools: ToolExecutionDetail[];
+  model_api_breakdown?: { model: string; duration_ms: number }[];
+  thinking_breakdown?: { level: string; duration_ms: number }[];
 }
 
 export interface SubagentSummary {
@@ -49,6 +62,8 @@ export interface Event {
   agent_id?: string | null;
   tool_id?: string | null;
   tool_name?: string | null;
+  end_ms?: number | null;
+  thinking_level?: string | null;
 }
 
 export interface Turn {

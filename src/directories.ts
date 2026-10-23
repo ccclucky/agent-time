@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import { RULES } from "./rules.js";
 import { locate, expand, type Agent } from "./locations.js";
-import { ValidationError } from "./types.js";
+import {
+  ValidationError,
+  type AdapterName,
+  isAdapterName,
+} from "./types.js";
 import type { Store } from "./store.js";
 export const NAMES: Record<Agent, string> = {
   codex: "Codex",
@@ -92,7 +96,7 @@ export class Directories {
       source,
       enabled: !!saved?.enabled,
       status,
-      supported: a === "codex" || a === "claude",
+      supported: isAdapterName(a),
       history_subdirectories: RULES[a].logs,
       location_note: inferred.note,
       evidence_url: inferred.evidence_url,
@@ -113,7 +117,7 @@ export class Directories {
       typeof enabled !== "boolean"
     )
       throw new ValidationError("请选择有效工具和接入状态");
-    if (enabled && !["codex", "claude"].includes(agent))
+    if (enabled && !isAdapterName(agent))
       throw new ValidationError(
         "此工具适配器尚未实现，只能保存目录，不能启用接入",
       );
@@ -137,7 +141,7 @@ export class Directories {
   collect() {
     const files = new Map<string, string>(),
       notices: string[] = [];
-    const agents = new Map<string, "codex" | "claude">();
+    const agents = new Map<string, AdapterName>();
     for (const item of this.list()) {
       if (!item.enabled || !item.supported) continue;
       if (item.status !== "directory") {
@@ -171,7 +175,7 @@ export class Directories {
             )
               continue;
             files.set(real, root);
-            agents.set(real, item.agent as "codex" | "claude");
+            agents.set(real, item.agent as AdapterName);
             count++;
             if (files.size > 5000)
               throw new ValidationError(

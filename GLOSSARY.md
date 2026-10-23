@@ -16,6 +16,10 @@ _Avoid_: 墙钟耗时, 任务总跨度
 Agent 构造 Prompt 发往大模型 API 至接收完整返回（或流式结束）的纯网络与生成耗时。
 _Avoid_: 执行耗时, 处理耗时
 
+**思考等级 (Thinking Level)**:
+assistant 响应请求的推理深度档位（off/low/medium/high）。
+_Avoid_: 思考模式, 推理等级
+
 **工具执行耗时 (Tool Execution Duration)**:
 Agent 发出工具调用指令至本地操作系统或环境返回执行结果（`tool_result`）的纯系统执行耗时。
 _Avoid_: 外部耗时

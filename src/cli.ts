@@ -6,7 +6,7 @@ import os from "node:os";
 import { Store } from "./store.js";
 import { makeServer } from "./server.js";
 import { expand } from "./locations.js";
-import { ValidationError } from "./types.js";
+import { ValidationError, type AdapterName, isAdapterName } from "./types.js";
 export function defaultDb() {
   return path.join(
     process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
@@ -27,7 +27,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令）\n默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude|pi FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
@@ -43,11 +43,10 @@ async function main() {
     throw new ValidationError("端口应在 0–65535 之间");
   if (
     command === "import" &&
-    (!["codex", "claude"].includes(values.agent ?? "") ||
-      positionals.length !== 2)
+    (!isAdapterName(values.agent ?? "") || positionals.length !== 2)
   )
     throw new ValidationError(
-      "使用 import --agent codex|claude FILE_OR_DIRECTORY",
+      "使用 import --agent codex|claude|pi FILE_OR_DIRECTORY",
     );
   if (command !== "import" && positionals.length > 1)
     throw new ValidationError("参数过多；使用 --help 查看用法");
@@ -107,7 +106,7 @@ async function main() {
         const result = store.importFile(
           p,
           null,
-          values.agent as "codex" | "claude",
+          values.agent as AdapterName,
         );
         good++;
         warnings += result.issues.length;
