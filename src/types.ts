@@ -28,6 +28,8 @@ export interface TurnBreakdown {
   tool_execution_ms: number;
   review_wait_ms: number;
   tools: ToolExecutionDetail[];
+  model_api_breakdown?: { model: string; duration_ms: number }[];
+  thinking_breakdown?: { level: string; duration_ms: number }[];
 }
 
 export interface SubagentSummary {

@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { parsePi } from "../src/pi.js";
 import { ValidationError } from "../src/types.js";
+import { Store } from "../src/store.js";
 
 const writeSession = (dir: string, name: string, rows: object[]) => {
   const p = path.join(dir, name);
@@ -730,5 +731,189 @@ test("Pi: missing cwd falls back to decoding the encoded directory name with an 
     "cwd fallback must be flagged as lossy-decoded",
   );
 
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: imports through Store.importFile into sessions() with end_ms/thinking_level columns", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  const p = writeSession(tmpDir, "store-import.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000041",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    {
+      type: "model_change",
+      id: "mc1",
+      parentId: null,
+      timestamp: "2026-10-09T22:03:00.500Z",
+      provider: "dp-llm",
+      modelId: "Qwen3.6-35B-A3B",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: "mc1",
+      timestamp: "2026-10-09T22:03:05.000Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "q" }],
+        timestamp: T("2026-10-09T22:03:05.000Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-10-09T22:03:17.363Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+        model: "z-ai/glm-5.3",
+        stopReason: "toolUse",
+        timestamp: T("2026-10-09T22:03:15.458Z"),
+        durationMs: 1904,
+        thinkingLevel: "high",
+      },
+    },
+    {
+      type: "message",
+      id: "t1",
+      parentId: "a1",
+      timestamp: "2026-10-09T22:03:17.394Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "bash",
+        content: ["ok"],
+        durationMs: 27,
+        timestamp: T("2026-10-09T22:03:17.394Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a2",
+      parentId: "t1",
+      timestamp: "2026-10-09T22:03:20.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        model: "z-ai/glm-5.3",
+        stopReason: "stop",
+        timestamp: T("2026-10-09T22:03:17.400Z"),
+        durationMs: 2600,
+        thinkingLevel: "high",
+      },
+    },
+  ]);
+
+  const store = new Store(path.join(tmpDir, "test.db"));
+  const result = store.importFile(p, null, "pi");
+  assert.ok(result.events > 0);
+
+  const sessions = store.sessions();
+  assert.equal(sessions.length, 1);
+  const s = sessions[0];
+  assert.equal(s.id, "pi/aaaabbbb-cccc-dddd-eeee-ffff00000041");
+  assert.equal(s.agent, "Pi");
+  assert.equal(s.project, "my_project");
+  assert.equal(s.turns.length, 1);
+
+  const turn = s.turns[0];
+  assert.equal(turn.id, "u1");
+  assert.equal(turn.status, "completed");
+  assert.equal(turn.start_ms, T("2026-10-09T22:03:05.000Z"));
+  assert.equal(turn.end_ms, T("2026-10-09T22:03:20.000Z"));
+  // Timing split lands in the next ticket; this ticket must not fake it.
+  assert.equal(turn.work_ms, null);
+  assert.deepEqual(turn.models.sort(), ["dp-llm/Qwen3.6-35B-A3B", "z-ai/glm-5.3"]);
+
+  const model = turn.events.find(
+    (e) => e.kind === "model" && e.model === "z-ai/glm-5.3" && e.at_ms === T("2026-10-09T22:03:15.458Z"),
+  )!;
+  assert.equal(model.end_ms, T("2026-10-09T22:03:17.362Z"));
+  assert.equal(model.thinking_level, "high");
+
+  const toolResult = turn.events.find((e) => e.kind === "tool_result")!;
+  assert.equal(toolResult.end_ms, T("2026-10-09T22:03:17.394Z"));
+
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: Store migrates a legacy event table by adding end_ms and thinking_level", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const dbPath = path.join(tmpDir, "legacy.db");
+  const { DatabaseSync } = await import("node:sqlite");
+  const raw = new DatabaseSync(dbPath);
+  raw.exec(`
+    CREATE TABLE source (
+      id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL,
+      project TEXT NOT NULL, client TEXT NOT NULL, issues TEXT NOT NULL, last_error TEXT, config_root TEXT,
+      imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE event (
+      source_id TEXT NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+      key TEXT NOT NULL, turn_id TEXT NOT NULL, kind TEXT NOT NULL,
+      at_ms INTEGER NOT NULL, model TEXT, agent_id TEXT, tool_id TEXT, tool_name TEXT,
+      PRIMARY KEY(source_id,key)
+    );
+  `);
+  raw.close();
+
+  // Constructing Store on the legacy DB must add the new columns in place.
+  const store = new Store(dbPath);
+  const cols = store.db
+    .prepare("PRAGMA table_info(event)")
+    .all()
+    .map((r) => (r as { name: string }).name);
+  assert.ok(cols.includes("end_ms"));
+  assert.ok(cols.includes("thinking_level"));
+
+  const T = (s: string) => Date.parse(s);
+  const p = writeSession(tmpDir, "migrate-import.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000042",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: "2026-10-09T22:03:05.000Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "q" }],
+        timestamp: T("2026-10-09T22:03:05.000Z"),
+      },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-10-09T22:03:07.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        model: "m",
+        stopReason: "stop",
+        timestamp: T("2026-10-09T22:03:05.200Z"),
+        durationMs: 1800,
+      },
+    },
+  ]);
+  store.importFile(p, null, "pi");
+  const sessions = store.sessions();
+  assert.equal(sessions.length, 1);
+  const model = sessions[0].turns[0].events.find((e) => e.kind === "model")!;
+  assert.equal(model.end_ms, T("2026-10-09T22:03:07.000Z"));
+
+  store.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

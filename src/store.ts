@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { parse, hash } from "./codex.js";
 import { parseClaude } from "./claude.js";
+import { parsePi } from "./pi.js";
 import { SCHEMA } from "./schema.js";
 import { Directories } from "./directories.js";
 import { expand } from "./locations.js";
@@ -175,9 +176,15 @@ export class Store {
       .prepare("PRAGMA table_info(event)")
       .all()
       .map((r) => (r as { name: string }).name);
-    for (const col of ["agent_id", "tool_id", "tool_name"])
+    for (const [col, type] of [
+      ["agent_id", "TEXT"],
+      ["tool_id", "TEXT"],
+      ["tool_name", "TEXT"],
+      ["end_ms", "INTEGER"],
+      ["thinking_level", "TEXT"],
+    ] as const)
       if (!eventCols.includes(col))
-        this.db.exec(`ALTER TABLE event ADD COLUMN ${col} TEXT`);
+        this.db.exec(`ALTER TABLE event ADD COLUMN ${col} ${type}`);
     try {
       chmodSync(this.path, 0o600);
     } catch {}
@@ -199,7 +206,7 @@ export class Store {
   importFile(
     filename: string,
     configRoot: string | null = null,
-    adapter: "codex" | "claude" = "codex",
+    adapter: "codex" | "claude" | "pi" = "codex",
   ) {
     const p = realpathSync(expand(filename, os.homedir())),
       before = statSync(p, { bigint: true });
@@ -207,7 +214,12 @@ export class Store {
       throw new ValidationError("请选择支持的 Agent .jsonl 会话文件");
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
-    const data = adapter === "claude" ? parseClaude(p) : parse(p),
+    const data =
+        adapter === "claude"
+          ? parseClaude(p)
+          : adapter === "pi"
+            ? parsePi(p)
+            : parse(p),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -230,7 +242,7 @@ export class Store {
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
       const put = this.db.prepare(
-        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name,end_ms,thinking_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
       );
       for (const e of data.events)
         put.run(
@@ -243,6 +255,8 @@ export class Store {
           e.agent_id ?? null,
           e.tool_id ?? null,
           e.tool_name ?? null,
+          e.end_ms ?? null,
+          e.thinking_level ?? null,
         );
     });
     return { events: data.events.length, issues: data.issues };
@@ -279,13 +293,16 @@ export class Store {
           throw new ValidationError(
             "原会话文件已移动或不再位于启用目录；旧快照保留",
           );
+        const savedAgent = saved.find((s) => s.path === p)?.agent;
         this.importFile(
           p,
           r,
           agents.get(p) ??
-            (saved.find((s) => s.path === p)?.agent === "Claude Code"
+            (savedAgent === "Claude Code"
               ? "claude"
-              : "codex"),
+              : savedAgent === "Pi"
+                ? "pi"
+                : "codex"),
         );
         ok++;
       } catch (error) {
@@ -352,7 +369,7 @@ export class Store {
         .all() as unknown as Source[],
       events: this.db
         .prepare(
-          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
+          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name,e.end_ms,e.thinking_level FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
         )
         .all() as unknown as (Event & { session_id: string })[],
     }));

@@ -222,6 +222,9 @@ export function parsePi(path: string) {
     project = last ? Array.from(last).slice(0, 100).join("") : "未知项目";
     issues.add("会话头缺少 cwd；项目名由编码目录名有损解码，可能不准确");
   }
+  issues.add(
+    "Pi 已导入含 end_ms 计时证据的事件流（模型请求、工具执行、思考等级）；三态耗时切分将由后续版本提供，当前耗时暂不显示。",
+  );
   const unique = new Map(events.map((e) => [e.key, e]));
   return {
     session: {
