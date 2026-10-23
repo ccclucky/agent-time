@@ -386,6 +386,48 @@ test("partial archive copy retains unique historical events", async () => {
   assert.equal(result.failed, 1);
   assert.equal(summary(store).processing_ms, 600000);
 });
+
+test("host-delete tombstone retires the snapshot instead of failing forever", async () => {
+  const { store, dirs, home } = setup(),
+    root = path.join(home, ".codex"),
+    p = file(path.join(root, "sessions"), rows());
+  dirs.save("codex", null, true);
+  assert.equal((await store.refresh(dirs)).updated, 1);
+  assert.equal(store.sessions().length, 1);
+
+  // The desktop host deletes the session file and leaves its release tombstone.
+  rmSync(p);
+  writeFileSync(
+    p.replace(/\.jsonl$/, ".desktop-released.json"),
+    JSON.stringify({ v: 1, releasedAt: "2026-10-24T00:00:00Z", reason: "delete" }),
+  );
+
+  const r = await store.refresh(dirs);
+  assert.equal(r.failed, 0, "a host-released file must not read as a sync failure");
+  assert.equal(store.sessions().length, 0, "statistics for the deleted session are cleaned up");
+  assert.equal(store.sourceInfo().registered_files, 0, "the stale source row is retired");
+  assert.ok(
+    r.notices.some((n) => n.includes("宿主删除")),
+    "the retirement is surfaced as a notice, not a failure",
+  );
+});
+
+test("missing file without a tombstone still fails, and the failure names the file", async () => {
+  const { store, dirs, home } = setup(),
+    root = path.join(home, ".codex"),
+    p = file(path.join(root, "sessions"), rows());
+  dirs.save("codex", null, true);
+  await store.refresh(dirs);
+  rmSync(p);
+
+  const r = await store.refresh(dirs);
+  assert.equal(r.failed, 1, "plain missing files keep the existing failure behavior");
+  assert.equal(store.sessions().length, 1, "old snapshot retained");
+  assert.ok(
+    (r.failures[0].files || []).includes("a.jsonl"),
+    "failure groups carry basenames so the UI toast can name the file",
+  );
+});
 test("only known log folders are traversed, without symlink escape", async () => {
   const { store, dirs, home, dir } = setup(),
     root = path.join(home, ".codex");

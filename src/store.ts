@@ -1,5 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  chmodSync,
+  realpathSync,
+  statSync,
+  readFileSync,
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
@@ -455,6 +461,24 @@ export class Store {
           .filter((i) => i.enabled && i.supported && i.resolved_path)
           .map((i) => i.resolved_path),
       );
+    // Desktop hosts (e.g. Claude Desktop) delete session files they release and
+    // leave a sibling <stem>.desktop-released.json tombstone. Such files fail
+    // every future sync ("file moved away") forever unless retired here.
+    const hostReleased = (p: string): boolean => {
+      try {
+        const stem = p.replace(/\.jsonl(\.zst)?$/, "");
+        const row = JSON.parse(
+          readFileSync(stem + ".desktop-released.json", "utf8"),
+        );
+        return (
+          !!row &&
+          typeof row === "object" &&
+          (row as Record<string, unknown>).reason === "delete"
+        );
+      } catch {
+        return false;
+      }
+    };
     const saved = this.db
       .prepare("SELECT path,config_root,agent FROM source")
       .all() as unknown as Pick<Source, "path" | "config_root" | "agent">[];
@@ -480,13 +504,22 @@ export class Store {
     let ok = 0,
       failed = 0,
       excluded = 0,
-      retired = 0;
+      retired = 0,
+      hostDeleted = 0;
     for (const [p, r] of [...paths].sort(([a], [b]) => a.localeCompare(b))) {
       try {
-        if (missing.has(p))
+        if (missing.has(p)) {
+          if (hostReleased(p)) {
+            // Released by the host on purpose: retire the snapshot (events
+            // cascade via FK) and surface a notice — never a failure.
+            this.db.prepare("DELETE FROM source WHERE path=?").run(p);
+            hostDeleted++;
+            continue;
+          }
           throw new ValidationError(
             "原会话文件已移动或不再位于启用目录；旧快照保留",
           );
+        }
         const savedAgent = saved.find((s) => s.path === p)?.agent;
         await this.importFile(
           p,
@@ -525,6 +558,11 @@ export class Store {
           .run("最近同步失败；显示上次成功导入的快照", p);
       }
     }
+    if (hostDeleted > 0) {
+      notices.push(
+        `${hostDeleted} 个会话已被宿主删除（desktop-released 墓碑），已同步清理其统计`,
+      );
+    }
     this.transaction(() => {
       for (const p of missing) {
         const old = this.db
@@ -553,11 +591,21 @@ export class Store {
       failed: failed - retired,
       excluded,
       discovered: files.size,
-      failures: [...new Set(failures.values())].map((reason) => ({
-        reason,
-        count: [...failures.values()].filter((value) => value === reason)
-          .length,
-      })),
+      failures: [...new Set(failures.values())].map((reason) => {
+        const group = [...failures.entries()].filter(
+          ([, value]) => value === reason,
+        );
+        // Basenames (≤3, "等 N 个" in the UI) so the failure toast can name
+        // the offending files instead of a faceless count.
+        return {
+          reason,
+          count: group.length,
+          files: group
+            .map(([p]) => path.basename(p))
+            .sort((a, b) => a.localeCompare(b))
+            .slice(0, 3),
+        };
+      }),
       exclusions: [...new Set(exclusions.values())].map((reason) => ({
         reason,
         count: [...exclusions.values()].filter((value) => value === reason)
