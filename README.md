@@ -41,6 +41,8 @@ Open **配置与接入 (Configuration & sources)** in the interface. Codex defau
 
 The default listener is `127.0.0.1:8765`, accessible only on this machine. A custom port is available with `npm run dev -- serve --port 8766`. `Ctrl+C` stops the server.
 
+For an automated headless-render smoke (isolated db + port, opens the UI in headless Chromium and checks heatmap height, layout overflow, TOP3/WALL-TIME consistency and the drawer), run `node scripts/verify-render.mjs`. It skips gracefully (exit 0) when playwright is not installed in the environment.
+
 By default, metadata is stored at `$XDG_DATA_HOME/agenttime/agenttime.sqlite3`, or `~/.local/share/agenttime/agenttime.sqlite3` when the variable is unset. To choose a different location, use the same `--db` path for every command:
 
 ```sh
