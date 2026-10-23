@@ -269,18 +269,36 @@ export class Store {
       grouped.set(key, g);
     }
     for (const { sid, tid, entries } of grouped.values()) {
-      const starts = [
+      let starts = [
         ...new Set(
-          entries.filter((e) => e.kind === "start").map((e) => e.at_ms),
+          entries.filter((e) => e.kind === "start" && !e.agent_id).map((e) => e.at_ms),
         ),
       ].sort((a, b) => a - b);
-      const endings = [
+      if (starts.length === 0) {
+        starts = [
+          ...new Set(
+            entries.filter((e) => e.kind === "start").map((e) => e.at_ms),
+          ),
+        ].sort((a, b) => a - b);
+      }
+
+      let endings = [
         ...new Map(
           entries
-            .filter((e) => ["complete", "abort", "fail"].includes(e.kind))
+            .filter((e) => ["complete", "abort", "fail"].includes(e.kind) && !e.agent_id)
             .map((e) => [`${e.at_ms}:${e.kind}`, e]),
         ).values(),
       ];
+      if (endings.length === 0) {
+        endings = [
+          ...new Map(
+            entries
+              .filter((e) => ["complete", "abort", "fail"].includes(e.kind))
+              .map((e) => [`${e.at_ms}:${e.kind}`, e]),
+          ).values(),
+        ];
+      }
+
       const start = starts.length === 1 ? starts[0] : null,
         end = endings.length === 1 ? endings[0].at_ms : null,
         endKind = endings.length === 1 ? endings[0].kind : null;
@@ -388,6 +406,32 @@ export class Store {
         };
       }
 
+      // Check subagents in turn
+      const turnSubagentEvents = new Map<string, Event[]>();
+      for (const e of entries) {
+        if (e.agent_id) {
+          const list = turnSubagentEvents.get(e.agent_id) ?? [];
+          list.push(e);
+          turnSubagentEvents.set(e.agent_id, list);
+        }
+      }
+      const turnSubagents: Turn["subagents"] = [];
+      if (turnSubagentEvents.size > 0) {
+        for (const [subId, sEvents] of turnSubagentEvents.entries()) {
+          sEvents.sort((a, b) => a.at_ms - b.at_ms);
+          const subStart = sEvents[0].at_ms;
+          const subEnd = sEvents[sEvents.length - 1].at_ms;
+          turnSubagents.push({
+            agent_id: subId,
+            start_ms: subStart,
+            end_ms: subEnd,
+            work_ms: Math.max(0, subEnd - subStart),
+            review_wait_ms: 0,
+            turns: [],
+          });
+        }
+      }
+
       sessionObj.turns.push({
         id: tid,
         start_ms: start,
@@ -406,6 +450,7 @@ export class Store {
         standby_ms: null,
         human_ms: review_wait_ms,
         response_gap_ms: null,
+        subagents: turnSubagents.length ? turnSubagents : undefined,
         breakdown,
       });
     }
@@ -432,6 +477,34 @@ export class Store {
       s.standby_ms = s.turns.some((t) => t.standby_ms !== null)
         ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
         : null;
+
+      // Build session-level subagents summary
+      const sessionSubagentMap = new Map<string, Event[]>();
+      for (const t of s.turns) {
+        for (const e of t.events) {
+          if (e.agent_id) {
+            const list = sessionSubagentMap.get(e.agent_id) ?? [];
+            list.push(e);
+            sessionSubagentMap.set(e.agent_id, list);
+          }
+        }
+      }
+      if (sessionSubagentMap.size > 0) {
+        s.subagents = [];
+        for (const [subId, sEvents] of sessionSubagentMap.entries()) {
+          sEvents.sort((a, b) => a.at_ms - b.at_ms);
+          const subStart = sEvents[0].at_ms;
+          const subEnd = sEvents[sEvents.length - 1].at_ms;
+          s.subagents.push({
+            agent_id: subId,
+            start_ms: subStart,
+            end_ms: subEnd,
+            work_ms: Math.max(0, subEnd - subStart),
+            review_wait_ms: 0,
+            turns: s.turns.filter((t) => t.events.some((e) => e.agent_id === subId)),
+          });
+        }
+      }
     }
     return [...sessions.values()];
   }

@@ -11,6 +11,7 @@ export function parseClaude(path: string) {
   let sid: string | null = null,
     project = "未知项目",
     current: string | null = null,
+    lastTurnId: string | null = null,
     excluded = false;
   const events: Event[] = [],
     issues = new Set<string>(),
@@ -49,10 +50,14 @@ export function parseClaude(path: string) {
         )
       )
         continue;
-      if (r.isSidechain === true || r.teamName || r.agentId) {
-        excluded = true;
-        continue;
-      }
+      const agentId =
+        typeof r.agentId === "string"
+          ? r.agentId
+          : r.isSidechain === true
+            ? "sidechain"
+            : r.teamName
+              ? String(r.teamName)
+              : null;
       if (!validId(r.sessionId)) continue;
       if (sid && sid !== r.sessionId) {
         excluded = true;
@@ -80,12 +85,14 @@ export function parseClaude(path: string) {
       const at = timestamp(r.timestamp),
         content = r.message?.content;
 
+      const activeTurn = current || (agentId ? lastTurnId : null);
+
       if (r.type === "permission_request" || r.subtype === "permission_request") {
-        if (current) add(current, "review_wait_start", at);
+        if (activeTurn) add(activeTurn, "review_wait_start", at, null, agentId);
         continue;
       }
       if (r.type === "permission_response" || r.subtype === "permission_response") {
-        if (current) add(current, "review_wait_end", at);
+        if (activeTurn) add(activeTurn, "review_wait_end", at, null, agentId);
         continue;
       }
 
@@ -101,16 +108,16 @@ export function parseClaude(path: string) {
             ));
 
         if (isToolResult) {
-          if (current) {
+          if (activeTurn) {
             if (Array.isArray(content)) {
               for (const b of content) {
                 if (b && typeof b === "object" && (b as any).type === "tool_result") {
                   const tid = typeof (b as any).tool_use_id === "string" ? (b as any).tool_use_id : null;
-                  add(current, "tool_result", at, null, null, tid, null);
+                  add(activeTurn, "tool_result", at, null, agentId, tid, null);
                 }
               }
             } else {
-              add(current, "tool_result", at);
+              add(activeTurn, "tool_result", at, null, agentId);
             }
           }
           continue;
@@ -136,39 +143,38 @@ export function parseClaude(path: string) {
           userParents.set(r.parentUuid, r.uuid);
         }
         current = r.uuid as string;
-        add(current, "start", at);
+        lastTurnId = current;
+        add(current, "start", at, null, agentId);
         continue;
       }
-      if (!current) continue;
+      if (!activeTurn) continue;
       if (r.type === "assistant") {
         if (typeof r.message?.model === "string")
           add(
-            current,
+            activeTurn,
             "model",
             at,
             Array.from(r.message.model as string)
               .slice(0, 120)
               .join(""),
+            agentId,
           );
         if (Array.isArray(content)) {
           for (const b of content) {
             if (b && typeof b === "object" && (b as any).type === "tool_use") {
               const tid = typeof (b as any).id === "string" ? (b as any).id : null;
               const tname = typeof (b as any).name === "string" ? (b as any).name : "tool";
-              add(current, "tool_use", at, null, null, tid, tname);
+              add(activeTurn, "tool_use", at, null, agentId, tid, tname);
             }
           }
         }
-        // A tool-use completion is not a completed user interaction. Null or
-        // missing stop_reason never implies completion from the last file line.
         if (["end_turn", "stop_sequence"].includes(r.message?.stop_reason)) {
-          add(current, "complete", at);
-          current = null;
+          add(activeTurn, "complete", at, null, agentId);
+          if (!agentId) current = null;
         }
       } else if (r.type === "system" && r.subtype === "turn_duration") {
-        // Use its observed timestamp, not timestamp-durationMs as an invented start.
-        add(current, "complete", at);
-        current = null;
+        add(activeTurn, "complete", at, null, agentId);
+        if (!agentId) current = null;
       }
     } catch {
       issues.add("存在无法解析的记录；只保留可验证的元数据，请检查源文件");
@@ -180,7 +186,7 @@ export function parseClaude(path: string) {
     );
   if (excluded)
     throw new ValidationError(
-      "Claude Code 子 Agent、混合会话或分支记录暂不支持；未导入",
+      "Claude Code 混合会话或分支记录暂不支持；未导入",
     );
   issues.add(
     "Claude Code 已支持基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。缺少明确结束标记时不计时。",
