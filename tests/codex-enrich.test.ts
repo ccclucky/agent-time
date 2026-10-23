@@ -365,3 +365,51 @@ CREATE TABLE event (
   const old = all.find((s) => s.id === "oldsess")!;
   assert.equal(old.project, "旧项目");
 });
+
+// ---------------------------------------------------------------- slice E: frontend
+
+test("/api/report carries topic and tokens; app.js and index.html render them with a cache stamp", async () => {
+  const { dir, store } = setup();
+  const configRoot = path.join(dir, "codex-home");
+  sessionIndex(configRoot, [{ id: "s1", thread_name: "前端联调主题", updated_at: "2026-05-01T08:00:00Z" }]);
+  store.importFile(
+    file(
+      dir,
+      [
+        meta("s1"),
+        msg("task_started", 0, "t1"),
+        tokenRow(1, { total_token_usage: usage({ input_tokens: 900, cached_input_tokens: 300, output_tokens: 60, total_tokens: 960 }) }),
+        msg("task_complete", 2, "t1"),
+      ],
+    ),
+    configRoot,
+  );
+  const { makeServer } = await import("../src/server.js");
+  const server = makeServer(store);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const get = (p: string) =>
+    fetch(`http://127.0.0.1:${port}${p}`).then((r) => {
+      assert.equal(r.status, 200);
+      return r.text();
+    });
+  try {
+    const reportJson = JSON.parse(await get("/api/report?start=2026-10-21&end=2026-10-21&timezone=UTC"));
+    const session = reportJson.sessions.find((s: { id: string }) => s.id === "s1");
+    assert.equal(session.topic, "前端联调主题");
+    assert.equal(session.tokens.total_tokens, 960);
+    assert.equal(session.turns[0].tokens.cached_input_tokens, 300);
+
+    const js = await get("/app.js");
+    assert(js.includes("fmtTokens"), "token formatter exists");
+    assert(js.includes("本轮 Token 用量"), "turn token KPI box exists");
+    assert(js.includes("会话累计 Token"), "session token KPI box exists");
+    assert(js.includes("session.topic"), "topic is consumed");
+    assert(js.includes("源记录未携带 Token 快照"), "absent tokens render as absent, never zero");
+    const html = await get("/");
+    assert(html.includes("/style.css?v="), "style.css carries an explicit cache stamp");
+    assert(html.includes("/app.js?v="), "app.js carries an explicit cache stamp");
+  } finally {
+    server.close();
+  }
+});

@@ -105,6 +105,19 @@ const stamp = (ms) =>
         hour12: false,
       }).format(ms);
 
+// Token 数量紧凑格式：<1k 原样，<1M 保留一位小数的 k，再往上 M
+function fmtTokens(n) {
+  if (n === null || n === undefined) return "—";
+  if (n < 1000) return String(n);
+  if (n < 1000000) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return `${(n / 1000000).toFixed(2)}M`;
+}
+
+const tokenSub = (t) =>
+  t
+    ? `输入 ${fmtTokens(t.input_tokens)} · 缓存 ${fmtTokens(t.cached_input_tokens)} · 输出 ${fmtTokens(t.output_tokens)}`
+    : "源记录未携带 Token 快照";
+
 const statuses = {
   completed: "已完成",
   aborted: "已中止",
@@ -411,7 +424,7 @@ function timeline() {
     const waitSubPct = (wait / sum) * 100;
     const standbySubPct = (standby / sum) * 100;
 
-    const desc = turn.models[0] || session.project || "任务执行";
+    const desc = turn.models[0] || session.topic || session.project || "任务执行";
     const isSelected = state.selectedTurnId === turn.id;
 
     return `
@@ -542,7 +555,10 @@ function openDrawer(turn, session) {
 
   const titleEl = $("#drawerTurnTitle");
   if (titleEl) {
-    titleEl.textContent = `会话 ${session.project} · 轮次详情`;
+    titleEl.textContent = session.topic
+      ? `${session.topic} · 轮次详情`
+      : `会话 ${session.project} · 轮次详情`;
+    titleEl.title = titleEl.textContent;
   }
 
   const work = turn.work_ms;
@@ -624,7 +640,7 @@ function openDrawer(turn, session) {
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
           <div class="drawer-kpi-title">模型推理耗时 (API)</div>
           <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : (work !== null ? fmt(work) : "—")}</div>
-          <div class="drawer-kpi-sub">${h(turn.models[0] || "模型上下文未知")}</div>
+          <div class="drawer-kpi-sub">${h(turn.models.join(" / ") || "模型上下文未知")}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
           <div class="drawer-kpi-title">工具执行耗时 (Tools)</div>
@@ -640,6 +656,19 @@ function openDrawer(turn, session) {
           <div class="drawer-kpi-title">单轮壁钟时长 (Wall Time)</div>
           <div class="drawer-kpi-val">${fmt(wall)}</div>
           <div class="drawer-kpi-sub">有效工作率: ${workRate !== null ? `${workRate}%` : "—"}</div>
+        </div>
+      </div>
+      <!-- Token / 模型下钻：与三态并排呈现；无快照如实留空，绝不 0 断言 -->
+      <div class="drawer-kpi-grid" style="margin-top:10px;">
+        <div class="drawer-kpi-box" style="border-top:3px solid #5E7A8B;">
+          <div class="drawer-kpi-title">本轮 Token 用量</div>
+          <div class="drawer-kpi-val">${fmtTokens(turn.tokens ? turn.tokens.total_tokens : null)}</div>
+          <div class="drawer-kpi-sub">${h(tokenSub(turn.tokens))}</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid #5E7A8B;">
+          <div class="drawer-kpi-title">会话累计 Token</div>
+          <div class="drawer-kpi-val">${fmtTokens(session.tokens ? session.tokens.total_tokens : null)}</div>
+          <div class="drawer-kpi-sub">${session.tokens ? "全部轮次快照差分累计" : "源记录未携带 Token 快照"}</div>
         </div>
       </div>
     </div>
@@ -712,6 +741,7 @@ function table(rows) {
                 <td>
                   <button class="textbtn" data-session="${h(s.id)}">
                     <strong>${h(s.project)}</strong>
+                    ${s.topic ? `<span style="display:block; font-size:11px; color:var(--fg-body);">${h(s.topic)}</span>` : ""}
                     <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">${h(s.id.slice(0, 16))}</span>
                   </button>
                 </td>
@@ -734,7 +764,7 @@ function table(rows) {
 function filtered() {
   const needle = state.query.trim().toLowerCase();
   const rows = state.report.sessions.filter((s) =>
-    (s.project + " " + s.id + " " + s.agent).toLowerCase().includes(needle),
+    (s.project + " " + (s.topic || "") + " " + s.id + " " + s.agent).toLowerCase().includes(needle),
   );
   return state.sort === "duration"
     ? rows.sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
@@ -985,7 +1015,7 @@ function details(id) {
   }).join("");
 
   open(
-    `${head(s.project, `${s.agent} · ${s.id}`)}
+    `${head(s.topic ? `${s.topic} · ${s.project}` : s.project, `${s.agent} · ${s.id}`)}
      <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
      <div style="max-height:60vh; overflow-y:auto;">
        ${turnsHtml}
