@@ -28,7 +28,7 @@ The web dashboard opens at `http://127.0.0.1:8765`. Press `Ctrl+C` to stop the s
 
 ## Run from source
 
-Requires **Node.js 22.13+** (Node 24 LTS recommended) and npm. SQLite is provided by Node; there is no Python runtime or native-addon build requirement. Node 22 may print its built-in SQLite experimental warning. The browser interface uses native HTML/CSS/JavaScript and the backend uses TypeScript. An account or API key is not needed.
+Requires **Node.js 22.15+** (Node 24 LTS recommended) and npm. Node's built-in zstd support (needed to read Codex `.jsonl.zst` sessions) ships from v22.15.0 and v23.8.0, which is why 22.13/22.14 are not sufficient. SQLite is provided by Node; there is no Python runtime or native-addon build requirement. Node 22 may print its built-in SQLite experimental warning. The browser interface uses native HTML/CSS/JavaScript and the backend uses TypeScript. An account or API key is not needed.
 
 From this checkout:
 
