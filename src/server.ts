@@ -74,7 +74,13 @@ export function makeServer(store: Store, directories = new Directories(store)) {
           else if (url.pathname === "/api/sources")
             json(res, { adapters: SOURCES, ...store.sourceInfo() });
           else if (
-            ["/", "/index.html", "/app.js", "/style.css"].includes(url.pathname)
+            [
+              "/",
+              "/index.html",
+              "/app.js",
+              "/style.css",
+              "/logo.jpg",
+            ].includes(url.pathname)
           ) {
             const file =
                 url.pathname === "/" ? "index.html" : url.pathname.slice(1),
@@ -82,11 +88,13 @@ export function makeServer(store: Store, directories = new Directories(store)) {
                 ? "text/html"
                 : file.endsWith(".js")
                   ? "text/javascript"
-                  : "text/css";
+                  : file.endsWith(".css")
+                    ? "text/css"
+                    : "image/jpeg";
             respond(
               res,
               readFileSync(new URL(file, WEB)),
-              mime + "; charset=utf-8",
+              file.endsWith(".jpg") ? mime : mime + "; charset=utf-8",
             );
           } else json(res, { error: "未找到页面" }, 404);
         } else if (req.method === "POST") {

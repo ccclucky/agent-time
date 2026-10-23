@@ -10,46 +10,74 @@
   </head>
   <body>
     <div class="app">
-      <aside>
-        <div class="brand">
-          <span class="brandmark" aria-hidden="true"></span>AgentTime
+      <!-- 1. 左侧极窄侧边栏 (68px, 挂载官方品牌 Logo，全量使用 1.8px 矢量 SVG 线框图标，杜绝 Emoji) -->
+      <aside class="sidebar">
+        <div class="brand-logo-container" title="AgentTime · 本地时间账本" data-page="overview" tabindex="0" role="button" aria-label="回到首页">
+          <img src="/logo.jpg" alt="AgentTime Logo" class="brand-logo-img" />
         </div>
-        <nav id="nav" aria-label="主导航"></nav>
-        <div class="asidefoot">
-          <span class="dot"></span>本机存储 · 无遥测<br />只读接入 / Codex · Claude Code<br /><span
-            style="color: #7e8da8"
-            >v0.1 · Local-first</span
-          >
+        <nav id="nav" class="nav-group" aria-label="主导航"></nav>
+        <div class="nav-bottom">
+          <button class="nav-btn" data-page="sources" title="配置与接入" aria-label="配置与接入">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+          <div class="asidefoot-mini" title="本机存储 · 无遥测 · 只读接入">
+            <span class="live-dot" title="本地服务在线"></span>
+          </div>
         </div>
       </aside>
-      <main class="workspace">
-        <header>
-          <div>
-            <h1 id="title">时间总览</h1>
-            <p class="sub" id="subtitle">你的本地 Agent 时间账本。</p>
+
+      <!-- 2. 主工作区与顶部应用栏 -->
+      <div class="workspace-wrapper">
+        <header class="top-appbar">
+          <div class="app-title-area">
+            <div>
+              <div class="brand-title-row">
+                <h1 id="title">时间总览</h1>
+                <span class="session-pill"><span class="live-dot"></span><span id="liveStatus">本机存储 · 无遥测</span></span>
+              </div>
+              <p class="sub" id="subtitle">你的本地 Agent 时间账本。</p>
+            </div>
           </div>
           <div class="toolbar">
             <div class="seg" id="ranges" aria-label="日期范围"></div>
-            <button class="btn" data-action="dates">自选日期</button
-            ><button class="btn primary" data-action="refresh" id="refresh">
-              同步记录
-            </button>
+            <button class="btn" data-action="dates">自选日期</button>
+            <button class="btn primary" data-action="refresh" id="refresh">同步记录</button>
           </div>
         </header>
-        <div class="demo">
-          <strong>本地数据</strong><span id="rangetext"></span
-          ><button class="textbtn" data-action="definitions">
-            这些时间怎么算？
-          </button>
+
+        <main class="workspace">
+          <div class="demo">
+            <strong>本地数据</strong><span id="rangetext"></span>
+            <button class="textbtn" data-action="definitions">这些时间怎么算？</button>
+          </div>
+          <div id="error" role="alert"></div>
+          <div id="content"><div class="empty">正在读取本地统计记录…</div></div>
+          <footer class="footer">
+            <span>AgentTime · 只保存统计所需元数据</span>
+            <span id="updated"></span>
+          </footer>
+        </main>
+      </div>
+
+      <!-- 3. 两段式弹性下钻抽屉 (480px, 上总账 + 下慢工具清单, 支持 ESC 随手收起) -->
+      <aside class="drawer-panel collapsed" id="detailDrawer" aria-label="轮次明细抽屉">
+        <div class="drawer-header">
+          <div class="drawer-title">
+            <span class="drawer-badge-dot">●</span>
+            <span id="drawerTurnTitle">轮次耗时深度剖析</span>
+          </div>
+          <button class="drawer-close" data-action="close-drawer" aria-label="关闭抽屉 (ESC)">×</button>
         </div>
-        <div id="error" role="alert"></div>
-        <div id="content"><div class="empty">正在读取本地统计记录…</div></div>
-        <footer class="footer">
-          <span>AgentTime · 只保存统计所需元数据</span
-          ><span id="updated"></span>
-        </footer>
-      </main>
+        <div class="drawer-body" id="drawerBody">
+          <!-- 动态渲染抽屉总账与工具明细 -->
+        </div>
+      </aside>
     </div>
+
+    <!-- 弹层容器 (对话框/遮罩) -->
     <div id="layer"></div>
     <div id="live" role="status" aria-live="polite"></div>
   </body>

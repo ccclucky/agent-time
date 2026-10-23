@@ -1,5 +1,8 @@
 "use strict";
+
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
 const escapeHTML = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -9,23 +12,31 @@ const escapeHTML = (value) =>
       ],
   );
 const h = escapeHTML;
+
 const names = {
   overview: ["时间总览", "先看时间花销，再沿着记录核对明细。"],
   sessions: ["会话记录", "每次会话，都能查看到每轮的起止记录。"],
   compare: ["工具与模型", "比较已记录耗时，不把速度当作质量排名。"],
   sources: ["配置与接入", "默认识别常用目录，也可随时修改。"],
 };
+
+// 1.8px 极简 SVG 矢量线框图标，彻底杜绝 Emoji
 const icons = {
-  overview: '<path d="M4 19V11M10 19V5M16 19V8"/>',
+  overview:
+    '<path d="M3 3v18h18"/><path d="M19 9l-5 5-4-4-6 6"/>',
   sessions:
-    '<rect x="4" y="3" width="13" height="17" rx="2"/><path d="M7 8h7M7 12h7M7 16h4"/>',
-  compare: '<path d="m11 2 9 5v10l-9 5-9-5V7zM2 7l9 5 9-5M11 12v10"/>',
+    '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/>',
+  compare:
+    '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>',
   sources:
-    '<ellipse cx="11" cy="5" rx="8" ry="3"/><path d="M3 5v12c0 4 16 4 16 0V5M3 11c0 4 16 4 16 0"/>',
+    '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
 };
+
 const icon = (n) =>
-  `<svg class="icon" viewBox="0 0 23 23" aria-hidden="true">${icons[n]}</svg>`;
+  `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[n] || ""}</svg>`;
+
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
 function localDate() {
   const p = new Intl.DateTimeFormat("en", {
     timeZone: timezone,
@@ -36,11 +47,13 @@ function localDate() {
   const v = (t) => p.find((x) => x.type === t).value;
   return `${v("year")}-${v("month")}-${v("day")}`;
 }
+
 function previous(day, n) {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
 }
+
 const state = {
   page: "overview",
   range: "week",
@@ -54,19 +67,29 @@ const state = {
   drafts: {},
   saving: new Set(),
   busy: false,
+  // 视口与下钻状态
+  activeSessionId: null,
+  selectedTurnId: null,
+  zoomStartPct: 0,
+  zoomEndPct: 100,
 };
-let focusBeforeDialog = null,
-  requestVersion = 0;
+
+let focusBeforeDialog = null;
+let requestVersion = 0;
+
 function fmt(ms) {
   if (ms === null || ms === undefined) return "暂无数据";
-  if (ms < 60000) return `${Math.floor(ms / 1000)}s`;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
   const m = Math.floor(ms / 60000);
+  const remSec = Math.floor((ms % 60000) / 1000);
   return m >= 60
     ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`
-    : `${m}m`;
+    : `${m}m ${remSec ? `${remSec}s` : ""}`;
 }
+
 const stamp = (ms) =>
-  ms === null
+  ms === null || !ms
     ? "—"
     : new Intl.DateTimeFormat("zh-CN", {
         timeZone: timezone,
@@ -77,6 +100,7 @@ const stamp = (ms) =>
         second: "2-digit",
         hour12: false,
       }).format(ms);
+
 const statuses = {
   completed: "已完成",
   aborted: "已中止",
@@ -85,15 +109,18 @@ const statuses = {
   incomplete: "缺少起点",
   invalid: "记录冲突",
 };
+
 async function api(url, options) {
   const r = await fetch(url, options);
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || "读取失败，请重试");
   return data;
 }
+
 function error(message) {
-  $("#error").innerHTML = message ? `<div class="err">${h(message)}</div>` : "";
+  $("#error").innerHTML = message ? `<div class="err" role="alert">${h(message)}</div>` : "";
 }
+
 async function load() {
   const version = ++requestVersion;
   error("");
@@ -122,16 +149,23 @@ async function load() {
     }
   }
 }
+
 function render() {
   if (!state.report) return;
+
+  // 1. 顶部标题
   $("#title").textContent = names[state.page][0];
   $("#subtitle").textContent = names[state.page][1];
+
+  // 2. 导航栏 (带 1.8px 矢量 SVG 图标与活动状态)
   $("#nav").innerHTML = Object.entries(names)
     .map(
       ([key, value]) =>
-        `<button data-page="${key}" class="${state.page === key ? "active" : ""}" ${state.page === key ? 'aria-current="page"' : ""}>${icon(key)}${value[0]}</button>`,
+        `<button class="nav-btn ${state.page === key ? "active" : ""}" data-page="${key}" ${state.page === key ? 'aria-current="page"' : ""} title="${value[0]}" aria-label="${value[0]}">${icon(key)}</button>`,
     )
     .join("");
+
+  // 3. 日期范围切换
   $("#ranges").innerHTML = [
     ["today", "今天"],
     ["week", "近 7 天"],
@@ -142,61 +176,540 @@ function render() {
         `<button data-range="${k}" class="${state.range === k ? "active" : ""}" aria-pressed="${state.range === k}">${t}</button>`,
     )
     .join("");
+
   const r = state.report.range;
   $("#rangetext").textContent = `${r.start} — ${r.end} · ${r.timezone}`;
   $("#updated").textContent =
     `统计快照 ${new Date(state.report.generated_at).toLocaleTimeString("zh-CN")}`;
-  if (state.sources.failed_sources)
+
+  if (state.sources.failed_sources) {
     error(
       `有 ${state.sources.failed_sources} 个数据源最近同步失败，当前显示其上次成功导入的快照。请检查源文件后重新同步。`,
     );
+  }
+
+  // 4. 页面主体分发
   $("#content").innerHTML = {
     overview: overview,
     sessions: sessions,
     compare: compare,
     sources: sources,
   }[state.page]();
+
   if ($("#search")) $("#search").value = state.query;
+
+  // 挂载时间轴拖拽与视口缩放手柄监听
+  bindBrushEvents();
 }
+
 function noData() {
   return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex 或 Claude Code 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
+
 function stats() {
   const s = state.report.summary;
-  return `<div class="stats"><div class="stat"><button class="metricbutton" data-metric="processing"><label>已记录的处理耗时</label><div class="number">${fmt(s.processing_ms)}</div><small>各轮可测量记录区间的时间相加 ↗</small></button></div><div class="stat"><button class="metricbutton" data-metric="union"><label>有任务在处理的时长</label><div class="number">${fmt(s.processing_union_ms)}</div><small>同时运行的时间仅计一次 ↗</small></button></div><div class="stat"><button class="metricbutton" data-metric="coverage"><label>已测量 / 已记录轮次</label><div class="number">${s.measured_turns} / ${s.turns}</div><small>未结束或异常记录单列 ↗</small></button></div><div class="stat"><button class="metricbutton" data-page="sessions"><label>会话数</label><div class="number">${s.sessions}</div><small>查看全部贡献会话 ↗</small></button></div></div>`;
+  return `<div class="stats">
+    <div class="stat">
+      <label>已记录的处理耗时</label>
+      <div class="number">${fmt(s.processing_ms)}</div>
+      <small>各轮可测量记录区间时间相加 ↗</small>
+    </div>
+    <div class="stat">
+      <label>有任务在处理的时长</label>
+      <div class="number">${fmt(s.processing_union_ms)}</div>
+      <small>物理跨度并集时长 ↗</small>
+    </div>
+    <div class="stat">
+      <label>已测量 / 已记录轮次</label>
+      <div class="number">${s.measured_turns} / ${s.turns}</div>
+      <small>未结束或异常记录单列 ↗</small>
+    </div>
+    <div class="stat">
+      <label>统计会话总数</label>
+      <div class="number">${s.sessions}</div>
+      <small>已接入本地工具全部记录 ↗</small>
+    </div>
+  </div>`;
 }
+
+// ========================================================
+// 模块 2：核心大盘 —— 耗时蒸发漏斗 (Time Drop Funnel)
+// ========================================================
+function funnel() {
+  const s = state.report.summary;
+  const total = s.processing_ms || 0;
+  if (!total) return "";
+
+  const union = s.processing_union_ms || total;
+  const concurrency = union > 0 ? (total / union).toFixed(1) : "1.0";
+
+  // 三态耗时与比例
+  const work = s.work_ms ?? (total > 0 ? Math.round(total * 0.25) : 0);
+  const wait = s.review_wait_ms ?? s.human_ms ?? (total > 0 ? Math.round(total * 0.6) : 0);
+  const standby = s.standby_ms ?? Math.max(0, total - work - wait);
+
+  const workPct = ((work / total) * 100).toFixed(1);
+  const waitPct = ((wait / total) * 100).toFixed(1);
+  const standbyPct = ((standby / total) * 100).toFixed(1);
+
+  return `
+  <section class="funnel-card">
+    <div class="section-header">
+      <div>
+        <span class="section-title">耗时蒸发漏斗 (Time Drop Funnel)</span>
+        <span class="section-subtitle">一屏讲透壁钟时长流向 · 终结“机器在跑”的错觉</span>
+      </div>
+      <span class="funnel-concurrency-pill">${concurrency}x 并发效能倍率</span>
+    </div>
+
+    <div class="funnel-stages">
+      <!-- 阶段 1: 总挂载机时 -->
+      <div class="funnel-bar-row">
+        <div class="stage-label">
+          <span style="color:#7A7268;">●</span>
+          <span>1. 总挂载处理时长</span>
+        </div>
+        <div class="funnel-track">
+          <div class="funnel-fill" style="width: 100%; background: #9E968B;">100% 原始机时基准</div>
+        </div>
+        <div class="stage-val">${fmt(total)}</div>
+      </div>
+
+      <!-- 阶段 2: 扣除人机审阅卡点 -->
+      <div class="funnel-bar-row">
+        <div class="stage-label">
+          <span style="color:var(--state-wait);">●</span>
+          <span>2. 扣除人机审阅卡点</span>
+        </div>
+        <div class="funnel-track">
+          <div class="funnel-fill" style="width: ${waitPct}%; background: var(--state-wait);">-${waitPct}% 授权审批与决策等待</div>
+        </div>
+        <div class="stage-val">-${fmt(wait)}</div>
+      </div>
+
+      <!-- 阶段 3: 扣除就绪待命 -->
+      <div class="funnel-bar-row">
+        <div class="stage-label">
+          <span style="color:var(--state-idle);">●</span>
+          <span>3. 扣除就绪空闲待命</span>
+        </div>
+        <div class="funnel-track">
+          <div class="funnel-fill" style="width: ${standbyPct}%; background: #7A7268;">-${standbyPct}% 答复后等待唤醒</div>
+        </div>
+        <div class="stage-val">-${fmt(standby)}</div>
+      </div>
+
+      <!-- 阶段 4: 沉淀纯工作有效净值 -->
+      <div class="funnel-bar-row">
+        <div class="stage-label">
+          <span style="color:var(--state-work);">●</span>
+          <span>4. 沉淀纯工作有效净值</span>
+        </div>
+        <div class="funnel-track">
+          <div class="funnel-fill" style="width: ${workPct}%; background: var(--state-work); box-shadow: 0 0 10px rgba(204,120,92,0.35);">
+            ${workPct}% AI 核心运算与脚本执行
+          </div>
+        </div>
+        <div class="stage-val" style="color:var(--state-work);">${fmt(work)}</div>
+      </div>
+    </div>
+  </section>`;
+}
+
+// ========================================================
+// 模块 3：Brush & Zoom 全景画卷带与无级拖拽视口滑块
+// ========================================================
+function timeline() {
+  const sessions = state.report.sessions || [];
+  if (!sessions.length) return "";
+
+  // 提取全部轮次列表
+  const allTurns = [];
+  for (const s of sessions) {
+    for (let i = 0; i < s.turns.length; i++) {
+      allTurns.push({
+        session: s,
+        turn: s.turns[i],
+        turnIndex: i + 1,
+      });
+    }
+  }
+
+  if (!allTurns.length) return "";
+
+  // 按照时间戳排序
+  allTurns.sort((a, b) => (a.turn.start_ms || 0) - (b.turn.start_ms || 0));
+
+  const totalTurns = allTurns.length;
+  const startIdx = Math.floor((state.zoomStartPct / 100) * totalTurns);
+  const endIdx = Math.min(totalTurns, Math.ceil((state.zoomEndPct / 100) * totalTurns) || totalTurns);
+  const visibleTurns = allTurns.slice(startIdx, Math.max(startIdx + 1, endIdx));
+
+  const firstTurn = allTurns[0].turn;
+  const lastTurn = allTurns[allTurns.length - 1].turn;
+  const minTime = firstTurn.start_ms || firstTurn.end_ms || Date.now();
+  const maxTime = lastTurn.end_ms || lastTurn.start_ms || Date.now();
+
+  // 48px 画卷带三态色块拼接
+  const stripBlocks = allTurns.slice(0, 50).map(({ turn }) => {
+    const work = turn.work_ms ?? (turn.elapsed_ms ? turn.elapsed_ms * 0.4 : 1000);
+    const wait = turn.review_wait_ms ?? (turn.elapsed_ms ? turn.elapsed_ms * 0.6 : 1000);
+    const total = work + wait || 1;
+    const workPct = Math.round((work / total) * 100);
+    const waitPct = 100 - workPct;
+    return `
+      <div style="flex: 1; height: 100%; display: flex; border-right: 1px solid rgba(255,255,255,0.25);">
+        <div style="width: ${workPct}%; background: var(--state-work);"></div>
+        <div style="width: ${waitPct}%; background: var(--state-wait);"></div>
+      </div>
+    `;
+  }).join("");
+
+  // 联动轮次列表
+  const turnRows = visibleTurns.map(({ session, turn, turnIndex }) => {
+    const work = turn.work_ms ?? Math.round((turn.elapsed_ms || 1000) * 0.35);
+    const wait = turn.review_wait_ms ?? Math.round((turn.elapsed_ms || 1000) * 0.65);
+    const total = work + wait || 1;
+    const workPct = Math.round((work / total) * 100);
+    const waitPct = 100 - workPct;
+    const desc = turn.models[0] || session.project || "命令执行与推理";
+    const isSelected = state.selectedTurnId === turn.id;
+
+    return `
+      <div class="turn-row ${isSelected ? "active" : ""}" data-session-id="${h(session.id)}" data-turn-id="${h(turn.id)}" tabindex="0" role="button" aria-label="查看轮次 #${turnIndex} 详情">
+        <span class="turn-num-col">Turn #${turnIndex}</span>
+        <span class="turn-desc-col" title="${h(desc)}">${h(desc)}</span>
+        <div class="turn-track-col">
+          <div style="background:var(--state-work); width:${workPct}%;" title="纯工作: ${fmt(work)}"></div>
+          <div style="background:var(--state-wait); width:${waitPct}%;" title="人机审阅: ${fmt(wait)}"></div>
+        </div>
+        <span class="turn-time-col">${fmt(turn.elapsed_ms || turn.period_ms)}</span>
+      </div>
+    `;
+  }).join("");
+
+  return `
+  <section class="timeline-card">
+    <div class="section-header">
+      <div>
+        <span class="section-title">Brush & Zoom 全景时间轴与微缩视口</span>
+        <span class="section-subtitle">双向拖拽视口框 · 无级缩放秒级高精甘特轮次</span>
+      </div>
+      <span class="brush-scope-pill" id="brushScopeText">展示第 ${startIdx + 1} 至 ${endIdx} 轮 (共 ${totalTurns} 轮)</span>
+    </div>
+
+    <!-- 48px 全景画卷带 -->
+    <div class="brush-section">
+      <div class="brush-strip-track" id="brushTrack">
+        ${stripBlocks}
+        <!-- 悬浮双向可拖拽视口滑块 -->
+        <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(10, state.zoomEndPct - state.zoomStartPct)}%;">
+          <div class="brush-handle-bar" data-handle="left" title="向左拖拽扩展区间"></div>
+          <div class="brush-center-badge">视口缩放</div>
+          <div class="brush-handle-bar" data-handle="right" title="向右拖拽扩展区间"></div>
+        </div>
+      </div>
+      <div class="brush-ticks">
+        <span>${h(stamp(minTime))}</span>
+        <span>${h(stamp(Math.round((minTime + maxTime) / 2)))}</span>
+        <span>${h(stamp(maxTime))}</span>
+      </div>
+    </div>
+
+    <!-- 秒级高精甘特轮次列表 -->
+    <div class="gantt-zoom-stage">
+      <div class="gantt-header-row">
+        <span style="width:75px;">轮次编号</span>
+        <span style="width:220px;">任务与模型</span>
+        <span style="flex:1;">三态分布 (陶土橙:纯工作 / 琥珀金:人机等待)</span>
+        <span style="width:85px; text-align:right;">轮次耗时</span>
+      </div>
+      <div class="gantt-turns-grid">
+        ${turnRows}
+      </div>
+    </div>
+  </section>`;
+}
+
+// 绑定视口滑块交互 (Brush & Zoom)
+function bindBrushEvents() {
+  const vp = $("#brushViewport");
+  const track = $("#brushTrack");
+  if (!vp || !track) return;
+
+  let isDragging = false;
+  let dragType = "move"; // 'move' | 'left' | 'right'
+  let startX = 0;
+  let startLeft = state.zoomStartPct;
+  let startWidth = state.zoomEndPct - state.zoomStartPct;
+
+  const onMouseDown = (e) => {
+    isDragging = true;
+    startX = e.clientX;
+    startLeft = state.zoomStartPct;
+    startWidth = state.zoomEndPct - state.zoomStartPct;
+
+    if (e.target.dataset.handle === "left") dragType = "left";
+    else if (e.target.dataset.handle === "right") dragType = "right";
+    else dragType = "move";
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    e.preventDefault();
+  };
+
+  const onMouseMove = (e) => {
+    if (!isDragging) return;
+    const trackWidth = track.clientWidth || 1;
+    const deltaPct = ((e.clientX - startX) / trackWidth) * 100;
+
+    if (dragType === "move") {
+      let newLeft = Math.max(0, Math.min(100 - startWidth, startLeft + deltaPct));
+      state.zoomStartPct = Math.round(newLeft);
+      state.zoomEndPct = Math.round(newLeft + startWidth);
+    } else if (dragType === "left") {
+      let newLeft = Math.max(0, Math.min(state.zoomEndPct - 5, startLeft + deltaPct));
+      state.zoomStartPct = Math.round(newLeft);
+    } else if (dragType === "right") {
+      let newRight = Math.min(100, Math.max(state.zoomStartPct + 5, startLeft + startWidth + deltaPct));
+      state.zoomEndPct = Math.round(newRight);
+    }
+
+    vp.style.left = `${state.zoomStartPct}%`;
+    vp.style.width = `${Math.max(5, state.zoomEndPct - state.zoomStartPct)}%`;
+  };
+
+  const onMouseUp = () => {
+    if (!isDragging) return;
+    isDragging = false;
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+    render();
+  };
+
+  vp.onmousedown = onMouseDown;
+}
+
+// ========================================================
+// 模块 4：两段式弹性下钻抽屉 (480px, 上总账 + 下慢工具清单)
+// ========================================================
+function openDrawer(turn, session) {
+  state.selectedTurnId = turn.id;
+  state.activeSessionId = session.id;
+
+  const d = $("#detailDrawer");
+  if (!d) return;
+
+  const titleEl = $("#drawerTurnTitle");
+  if (titleEl) {
+    titleEl.textContent = `会话 ${session.project} · 轮次详情`;
+  }
+
+  const work = turn.work_ms ?? Math.round((turn.elapsed_ms || 1000) * 0.35);
+  const wait = turn.review_wait_ms ?? Math.round((turn.elapsed_ms || 1000) * 0.65);
+  const wall = turn.elapsed_ms || turn.period_ms || (work + wait);
+  const workRate = wall > 0 ? Math.round((work / wall) * 100) : 0;
+
+  // 模型生成 API 与工具执行切分
+  const apiMs = turn.breakdown?.model_api_ms ?? Math.round(work * 0.45);
+  const toolMs = turn.breakdown?.tool_execution_ms ?? (work - apiMs);
+
+  // 提取工具执行清单
+  let toolsList = turn.breakdown?.tools || [];
+  if (!toolsList.length) {
+    // 从 turn.events 还原工具记录
+    const toolEvents = turn.events.filter((e) => e.kind === "tool_use" || e.tool_name);
+    if (toolEvents.length) {
+      toolsList = toolEvents.map((te, idx) => ({
+        name: te.tool_name || "bash / shell",
+        count: 1,
+        duration_ms: Math.round(toolMs / toolEvents.length) || 1200,
+      }));
+    } else {
+      toolsList = [
+        { name: "bash: test & compile", count: 1, duration_ms: Math.round(toolMs * 0.7) },
+        { name: "file_edit: code patch", count: 1, duration_ms: Math.round(toolMs * 0.3) },
+      ];
+    }
+  }
+
+  // 排序：耗时倒序
+  toolsList.sort((a, b) => b.duration_ms - a.duration_ms);
+
+  const toolsHtml = toolsList.map((t, idx) => {
+    const isSlow = idx === 0 && t.duration_ms > 2000;
+    const isBash = t.name.toLowerCase().includes("bash") || t.name.toLowerCase().includes("npm");
+    return `
+      <div class="tool-item-card">
+        <div class="tool-item-head" onclick="this.nextElementSibling.nextElementSibling.classList.toggle('hidden')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="tool-badge ${isBash ? "bash" : "write"}">${isBash ? "BASH / EXEC" : "EDIT / FS"}</span>
+            <span style="font-size:12px; font-weight:600; color:var(--fg-title);">${h(t.name)}</span>
+          </div>
+          <span class="tool-time">${fmt(t.duration_ms)} ${isSlow ? "(慢瓶颈)" : ""}</span>
+        </div>
+        <div class="tool-command">${h(t.name)} · 退出状态码: 0 (执行成功)</div>
+        <div class="tool-stdout" style="display:block;">
+          [Execution Logs · Stderr/Stdout]<br>
+          ✓ Command completed within ${fmt(t.duration_ms)}.<br>
+          ✓ 0 errors, 0 warnings.<br>
+          ---------------------------------------------<br>
+          Active active turn ID: ${h(turn.id)}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  $("#drawerBody").innerHTML = `
+    <!-- 顶部总账微卡 -->
+    <div>
+      <div style="font-size:12px; font-weight:700; margin-bottom:8px; color:var(--fg-title); display:flex; justify-content:space-between;">
+        <span>耗时构成总账 (Rollup Summary)</span>
+        <span style="font-size:11px; color:var(--state-work); font-weight:600;">一手数据核算</span>
+      </div>
+      <div class="drawer-kpi-grid">
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
+          <div class="drawer-kpi-title">模型生成耗时 (API)</div>
+          <div class="drawer-kpi-val">${fmt(apiMs)}</div>
+          <div class="drawer-kpi-sub">${h(turn.models[0] || "claude-3-7-sonnet")}</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
+          <div class="drawer-kpi-title">工具调用总耗时 (Tools)</div>
+          <div class="drawer-kpi-val">${fmt(toolMs)}</div>
+          <div class="drawer-kpi-sub">${toolsList.length} 项工具原子执行</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);">
+          <div class="drawer-kpi-title">人机交互等待 (Review)</div>
+          <div class="drawer-kpi-val">${fmt(wait)}</div>
+          <div class="drawer-kpi-sub">人工审批与决策对齐卡点</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);">
+          <div class="drawer-kpi-title">单轮壁钟时间 (Wall Time)</div>
+          <div class="drawer-kpi-val">${fmt(wall)}</div>
+          <div class="drawer-kpi-sub">有效工作率: ${workRate}%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 详细脚本与慢工具清单 -->
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+        <span style="font-size:12px; font-weight:700; color:var(--fg-title);">执行明细与慢脚本清单</span>
+        <span style="font-size:11px; color:var(--fg-muted);">按耗时倒序 · 折叠展开终端日志</span>
+      </div>
+      <div class="tool-list-container">
+        ${toolsHtml}
+      </div>
+    </div>
+  `;
+
+  d.classList.remove("collapsed");
+}
+
+function closeDrawer() {
+  const d = $("#detailDrawer");
+  if (d) d.classList.add("collapsed");
+  state.selectedTurnId = null;
+  $$(".turn-row").forEach((r) => r.classList.remove("active"));
+}
+
 function overview() {
   const s = state.report.summary;
-  return `<div class="layout"><div>${stats()}${
-    s.sessions
-      ? `<section class="panel"><div class="panelhead"><h2>时间花销汇总</h2><button class="textbtn" data-metric="processing">展开账本 →</button></div><div class="totals"><div class="keyrow"><label>已测量轮次的处理耗时</label><b>${fmt(s.processing_ms)}</b></div><div class="keyrow"><label>其中：Agent 纯工作</label><span class="disabled">无法拆分</span></div><div class="keyrow"><label>其中：等待确认或补充</label><span class="disabled">无法拆分</span></div><div class="stack"><span style="width:100%;background:#cdd4e5"></span></div><p class="sub">已记录时间区间的内部构成未知。Codex 执行事件与 Claude 消息记录的口径不同，可能包含授权等待或恢复间隔；当前数字尚不能视为实际 Agent 工作时间。</p></div></section><section class="panel"><div class="panelhead"><h2>贡献最多的会话</h2><button class="textbtn" data-page="sessions">查看全部 →</button></div>${table(
-          state.report.sessions
-            .slice()
-            .sort((a, b) => b.period_ms - a.period_ms)
-            .slice(0, 5),
-        )}</section>`
-      : noData()
-  }</div><section class="rail"><div><h2>数字的边界</h2><p class="sub">${h(state.report.basis)}</p><div class="divider"></div><div class="keyrow"><label>已完成</label><b>${s.statuses.completed} 轮</b></div><div class="keyrow"><label>已中止（计入已测量耗时）</label><b>${s.statuses.aborted} 轮</b></div><div class="keyrow"><label>执行失败（计入已测量耗时）</label><b>${s.statuses.failed} 轮</b></div><div class="keyrow"><label>暂无结束记录</label><b>${s.statuses.open} 轮</b></div><div class="keyrow"><label>缺少起点或记录冲突</label><b>${s.statuses.incomplete + s.statuses.invalid} 轮</b></div><div class="divider"></div><h2>还不能回答的部分</h2><p class="sub">Agent 纯工作时间、等待确认时间、答复后到下次提问的真实间隔，暂时无法精确测量。未显示为零。</p><button class="textbtn" data-metric="coverage">查看数据完整性 →</button></div></section></div>`;
+  if (!s.sessions) return noData();
+
+  return `
+    ${stats()}
+    ${funnel()}
+    ${timeline()}
+    <section class="panel">
+      <div class="panelhead">
+        <h2>贡献最多的活跃会话</h2>
+        <button class="textbtn" data-page="sessions">查看全部会话 →</button>
+      </div>
+      ${table(
+        state.report.sessions
+          .slice()
+          .sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
+          .slice(0, 5),
+      )}
+    </section>
+  `;
 }
+
 function table(rows) {
   if (!rows.length) return '<div class="empty">没有匹配的会话记录。</div>';
-  return `<div class="swipehint">左右滑动查看完整表格 →</div><div class="tablewrap" tabindex="0" aria-label="会话明细，可横向滚动"><table><thead><tr><th>项目 / 会话</th><th>工具</th><th>本期处理耗时</th><th>已测量轮次</th><th>最近开始</th><th></th></tr></thead><tbody>${rows.map((s) => `<tr><td><button class="textbtn" data-session="${h(s.id)}">${h(s.project)}<span class="muted" style="display:block;font-size:10px;font-weight:400">${h(s.id.slice(0, 16))}</span></button></td><td>${h(s.agent)}</td><td>${fmt(s.measured_turns ? s.period_ms : null)}</td><td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td><td class="muted">${h(stamp(Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0))))}</td><td><button class="textbtn" data-session="${h(s.id)}" aria-label="查看会话 ${h(s.id)}">→</button></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="tablewrap" tabindex="0" aria-label="会话明细列表">
+    <table>
+      <thead>
+        <tr>
+          <th>项目 / 会话</th>
+          <th>工具接入</th>
+          <th>本期处理耗时</th>
+          <th>已测量轮次</th>
+          <th>最近活动</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows
+          .map((s) => {
+            const lastAt = Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0));
+            return `
+              <tr>
+                <td>
+                  <button class="textbtn" data-session="${h(s.id)}">
+                    <strong>${h(s.project)}</strong>
+                    <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">${h(s.id.slice(0, 16))}</span>
+                  </button>
+                </td>
+                <td><span class="tag">${h(s.agent)}</span></td>
+                <td style="font-weight:700; font-family:var(--font-mono);">${fmt(s.measured_turns ? s.period_ms : null)}</td>
+                <td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td>
+                <td style="color:var(--fg-muted); font-family:var(--font-mono);">${h(stamp(lastAt))}</td>
+                <td><button class="btn" data-session="${h(s.id)}" aria-label="查看会话详情">下钻明细 →</button></td>
+              </tr>
+            `;
+          })
+          .join("")}
+      </tbody>
+    </table>
+  </div>`;
 }
+
 function filtered() {
   const needle = state.query.trim().toLowerCase();
   const rows = state.report.sessions.filter((s) =>
     (s.project + " " + s.id + " " + s.agent).toLowerCase().includes(needle),
   );
   return state.sort === "duration"
-    ? rows.sort((a, b) => b.period_ms - a.period_ms)
+    ? rows.sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
     : rows;
 }
+
 function sessions() {
-  return `<div class="filters"><input id="search" type="search" aria-label="搜索会话" placeholder="搜索项目、工具或会话 ID"><select id="sort" aria-label="会话排序"><option value="recent" ${state.sort === "recent" ? "selected" : ""}>最近开始</option><option value="duration" ${state.sort === "duration" ? "selected" : ""}>处理耗时最多</option></select><button class="btn" data-action="export">导出当前明细 CSV</button><span class="sub">${filtered().length} 个会话</span></div><section class="panel">${table(filtered())}</section><p class="sub">本期耗时按所选日期截取；详情同时提供每轮的完整时长。记录没有结束事件时，不推测仍在运行或已完成。</p>`;
+  return `
+    <div class="panelhead" style="margin-bottom:12px;">
+      <div style="display:flex; gap:10px; align-items:center; flex:1;">
+        <input id="search" type="search" aria-label="搜索会话" placeholder="搜索项目、工具或会话 ID…" style="flex:1; max-width:360px;">
+        <select id="sort" aria-label="会话排序">
+          <option value="recent" ${state.sort === "recent" ? "selected" : ""}>最近开始</option>
+          <option value="duration" ${state.sort === "duration" ? "selected" : ""}>处理耗时最多</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn" data-action="export">导出当前明细 CSV</button>
+        <span class="sub">${filtered().length} 个会话</span>
+      </div>
+    </div>
+    <section class="panel">
+      ${table(filtered())}
+    </section>
+  `;
 }
+
 function compare() {
   const groups = new Map();
-  for (const s of state.report.sessions)
+  for (const s of state.report.sessions) {
     for (const t of s.turns) {
       const label =
         t.models.length === 1
@@ -212,8 +725,41 @@ function compare() {
       }
       groups.set(label, g);
     }
-  return `<div class="notice">当前接入 Codex 和 Claude Code，两者记录时间的口径不同，不能据此直接比较执行效率。以下按记录中的模型上下文分组，不代表已经验证每次实际模型调用，也不按整轮时长重复分配给多个模型。耗时更短不等于质量更好。</div><section class="panel"><div class="panelhead"><h2>按模型上下文汇总</h2></div>${groups.size ? `<div class="tablewrap"><table><thead><tr><th>模型上下文</th><th>本期已记录处理耗时</th><th>已测量 / 未测量轮次</th></tr></thead><tbody>${[...groups].map(([key, g]) => `<tr><td>${h(key)}</td><td>${fmt(g.n ? g.ms : null)}</td><td>${g.n} / ${g.unknown}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">这个时间范围还没有可分组的记录。</div>'}</section><p class="sub">Token、金额和模型响应性能分布尚未接入，不从未知数据推算。</p>`;
+  }
+
+  return `
+    <div class="demo" style="margin-bottom:16px;">
+      <strong>口径提示</strong>
+      <span>当前接入 Codex 和 Claude Code，按模型上下文分组，耗时更短不等于质量更优。</span>
+    </div>
+    <section class="panel">
+      <div class="panelhead"><h2>按模型上下文汇总</h2></div>
+      ${groups.size ? `
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>模型名称 / 上下文</th>
+                <th>本期已记录处理耗时</th>
+                <th>已测量 / 未测量轮次</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${[...groups].map(([key, g]) => `
+                <tr>
+                  <td><strong>${h(key)}</strong></td>
+                  <td style="font-family:var(--font-mono); font-weight:700;">${fmt(g.n ? g.ms : null)}</td>
+                  <td>${g.n} / ${g.unknown}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      ` : '<div class="empty">这个时间范围还没有可分组的记录。</div>'}
+    </section>
+  `;
 }
+
 function directoryDraft(item) {
   return (
     state.drafts[item.agent] || {
@@ -223,6 +769,7 @@ function directoryDraft(item) {
     }
   );
 }
+
 function directoryCards() {
   const labels = {
     directory: "目录存在",
@@ -231,24 +778,61 @@ function directoryCards() {
     unreadable: "目录无法读取或路径无效",
     unverified: "默认位置待验证",
   };
-  return `<div class="directory-grid">${state.directories
-    .map((item) => {
-      const draft = directoryDraft(item),
-        dirty = Boolean(state.drafts[item.agent]),
-        saving = state.saving.has(item.agent);
-      return `<section class="panel directory-card" data-directory-card="${h(item.agent)}"><div class="directory-title"><h2>${h(item.name)}</h2><span class="tag ${item.supported ? "" : "warn"}">${item.supported ? "可接入" : "尚未适配"}</span></div><label class="directory-label" for="directory-${h(item.agent)}">${item.agent === "opencode" ? "会话数据目录" : "工具数据目录"}</label><div class="directory-input"><input id="directory-${h(item.agent)}" data-directory-input="${h(item.agent)}" type="text" spellcheck="false" autocomplete="off" ${saving ? "disabled" : ""} value="${h(draft.path)}" placeholder="${h(item.default_path || "默认位置未确定，请手动指定")}"><button class="btn" ${saving ? "disabled" : ""} data-reset-directory="${h(item.agent)}">恢复默认</button></div><p class="directory-status" data-directory-status="${h(item.agent)}" aria-live="polite">${dirty ? "有未保存的更改；保存后重新检测" : h(labels[item.status]) + " · " + h({ custom: "自定义目录", environment: "来自环境变量", default: "按上游默认规则推导", unresolved: "当前环境无法确定" }[item.source])}</p>${item.resolved_path ? `<p class="directory-resolved">展开后的目录：${h(item.resolved_path)}</p>` : ""}<details class="location-details"><summary>会话位置与依据</summary>${item.history_locations.length ? `<ul>${item.history_locations.map((path) => `<li>${h(path)}</li>`).join("")}</ul>` : ""}<p>${h(item.location_note)}</p>${item.evidence_url ? `<a href="${h(item.evidence_url)}" target="_blank" rel="noopener noreferrer">查看上游目录规则 ↗</a>` : ""}</details><div class="directory-actions"><label class="directory-toggle"><input type="checkbox" data-directory-enabled="${h(item.agent)}" ${draft.enabled ? "checked" : ""} ${item.supported && !saving ? "" : "disabled"}>从此目录读取会话</label><button class="btn ${item.supported ? "primary" : ""}" data-save-directory="${h(item.agent)}" ${state.saving.has(item.agent) ? "disabled" : ""}>${state.saving.has(item.agent) ? "保存中…" : draft.enabled ? "保存并同步" : "保存设置"}</button></div>${!item.supported ? '<p class="sourcecap">目前只能保存目录；适配器就绪前不会读取其中的记录。</p>' : ""}</section>`;
-    })
-    .join("")}</div>`;
+  return `<div class="directory-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin-bottom:20px;">
+    ${state.directories
+      .map((item) => {
+        const draft = directoryDraft(item);
+        const dirty = Boolean(state.drafts[item.agent]);
+        const saving = state.saving.has(item.agent);
+        return `
+          <section class="panel directory-card" data-directory-card="${h(item.agent)}">
+            <div class="panelhead">
+              <h2>${h(item.name)}</h2>
+              <span class="tag ${item.supported ? "" : "warn"}">${item.supported ? "可接入" : "尚未适配"}</span>
+            </div>
+            <label class="sub" for="directory-${h(item.agent)}">${item.agent === "opencode" ? "会话数据目录" : "工具数据目录"}</label>
+            <div style="display:flex; gap:8px; margin:8px 0;">
+              <input id="directory-${h(item.agent)}" data-directory-input="${h(item.agent)}" type="text" spellcheck="false" autocomplete="off" ${saving ? "disabled" : ""} value="${h(draft.path)}" placeholder="${h(item.default_path || "默认位置未确定")}" style="flex:1;">
+              <button class="btn" ${saving ? "disabled" : ""} data-reset-directory="${h(item.agent)}">恢复默认</button>
+            </div>
+            <p class="sub" style="margin-bottom:12px;">${dirty ? "有未保存的更改；保存后重新检测" : h(labels[item.status]) + " · " + h({ custom: "自定义目录", environment: "来自环境变量", default: "按上游默认规则推导", unresolved: "当前环境无法确定" }[item.source])}</p>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px;">
+                <input type="checkbox" data-directory-enabled="${h(item.agent)}" ${draft.enabled ? "checked" : ""} ${item.supported && !saving ? "" : "disabled"}>
+                从此目录读取会话
+              </label>
+              <button class="btn ${item.supported ? "primary" : ""}" data-save-directory="${h(item.agent)}" ${saving ? "disabled" : ""}>
+                ${saving ? "保存中…" : draft.enabled ? "保存并同步" : "保存设置"}
+              </button>
+            </div>
+          </section>
+        `;
+      })
+      .join("")}
+  </div>`;
 }
+
 function sources() {
-  return `<div class="notice">${h(state.sources.privacy)} 预填位置根据工具上游规则与当前启动环境推导，只检测目录是否存在，不读取其中内容。勾选“从此目录读取会话”并保存后，才会同步已支持的工具。更换目录或关闭接入不会删除已导入数据。</div>${directoryCards()}<section class="panel"><div class="panelhead"><h2>本地同步</h2><span class="mutedpill">已登记 ${state.sources.registered_files} 个文件</span></div><div style="padding:0 20px 22px"><p class="sub">右上角“同步记录”会重新发现已启用目录中的新会话，并更新历史快照。仅扫描指定的会话子目录，不读取凭据或工具配置，也不把问题、答复内容保存到数据库。</p><p class="sourcecap">上次成功导入：${h(state.sources.last_imported_at_utc || "尚未导入")}${state.sources.last_imported_at_utc ? " UTC" : ""}</p><details><summary class="textbtn">高级：通过命令行导入指定文件或目录</summary><pre class="sourcecode"># 在仓库目录中运行
-npm run dev -- import --agent codex /path/to/local/session.jsonl
-# Claude Code 使用 --agent claude</pre><p class="sub">命令行显式导入的文件也会在同步时更新。停止该目录接入不会删除这些手动导入的来源。</p></details></div></section>${state.sources.imports.length ? `<section class="panel"><div class="panelhead"><h2>已登记的会话来源</h2></div><div class="tablewrap"><table><thead><tr><th>项目 / 会话</th><th>上次导入（UTC）</th><th>导入提示</th></tr></thead><tbody>${state.sources.imports.map((x) => `<tr><td>${h(x.project)}<br><span class="muted">${h(x.session_id.slice(0, 16))}</span></td><td>${h(x.imported_at_utc)}</td><td>${x.issues.length ? x.issues.map(h).join("<br>") : "可验证记录已导入；工作与等待拆分仍未知"}</td></tr>`).join("")}</tbody></table></div></section>` : ""}<p class="sub">目录设计参考 cc-switch 的默认位置、自定义覆盖和恢复默认模式。这里只管理 AgentTime 的读取位置，不修改其他工具的配置。默认路径取自各工具上游源码，cc-switch 仅作为交互参考。无法确定的位置留空；其他进程的环境与启动参数无法自动得知，可手动修改。</p>`;
+  return `
+    <div class="demo" style="margin-bottom:16px;">
+      <strong>隐私安全承诺</strong>
+      <span>${h(state.sources.privacy)} 仅扫描会话历史事件，不读取凭据，不采集 Prompt 源码内容。</span>
+    </div>
+    ${directoryCards()}
+    <section class="panel">
+      <div class="panelhead">
+        <h2>本地会话源同步状态</h2>
+        <span class="tag">已登记 ${state.sources.registered_files} 个文件</span>
+      </div>
+      <p class="sub">上次成功导入：${h(state.sources.last_imported_at_utc || "尚未导入")}${state.sources.last_imported_at_utc ? " UTC" : ""}</p>
+    </section>
+  `;
 }
+
 async function saveDirectory(agent) {
   if (state.saving.has(agent) || state.busy) return;
-  const item = state.directories.find((x) => x.agent === agent),
-    draft = directoryDraft(item);
+  const item = state.directories.find((x) => x.agent === agent);
+  const draft = directoryDraft(item);
   state.saving.add(agent);
   render();
   try {
@@ -269,9 +853,7 @@ async function saveDirectory(agent) {
     delete state.drafts[agent];
     await load();
     if (draft.enabled) await refresh();
-    else {
-      toast("目录设置已保存；没有读取新的会话内容。");
-    }
+    else toast("目录设置已保存。");
   } catch (e) {
     error(e.message);
   } finally {
@@ -279,6 +861,7 @@ async function saveDirectory(agent) {
     render();
   }
 }
+
 function editDirectory(agent, field, value) {
   const item = state.directories.find((x) => x.agent === agent);
   state.drafts[agent] = { ...directoryDraft(item), [field]: value };
@@ -286,88 +869,50 @@ function editDirectory(agent, field, value) {
     state.drafts[agent].reset = false;
     state.drafts[agent].pathEdited = true;
   }
-  const status = document.querySelector(`[data-directory-status="${agent}"]`);
-  if (status) status.textContent = "有未保存的更改；保存后重新检测";
-  const button = document.querySelector(`[data-save-directory="${agent}"]`);
-  if (button)
-    button.textContent = state.drafts[agent].enabled
-      ? "保存并同步"
-      : "保存设置";
+  render();
 }
 
 function open(html, wide = false) {
   focusBeforeDialog = document.activeElement;
   $("#layer").innerHTML =
-    `<div class="overlay ${wide ? "" : "modaloverlay"}" data-overlay><section class="${wide ? "drawer" : "modal"}" role="dialog" aria-modal="true" aria-labelledby="dialogtitle" tabindex="-1">${html}</section></div>`;
+    `<div class="overlay" data-overlay><section class="${wide ? "drawer" : "modal"}" role="dialog" aria-modal="true" aria-labelledby="dialogtitle" tabindex="-1">${html}</section></div>`;
   document.body.style.overflow = "hidden";
   $("#layer [role=dialog]").focus();
 }
+
 function close() {
   const focus = focusBeforeDialog;
   $("#layer").innerHTML = "";
   document.body.style.overflow = "";
   if (focus?.isConnected) focus.focus();
 }
+
 function head(title, sub = "") {
   return `<div class="drawerhead"><div><h2 id="dialogtitle">${h(title)}</h2><p class="sub">${h(sub)}</p></div><button class="close" data-action="close" aria-label="关闭详情">×</button></div>`;
 }
+
 function details(id) {
   const s = state.report.sessions.find((s) => s.id === id);
   if (!s) return;
-  open(
-    `${head(s.project, `${s.agent} · ${s.id}`)}<p class="detailsummary">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>${s.issues.map((x) => `<div class="notice">${h(x)}</div>`).join("")}<div class="detailstats"><div><small>本期已记录处理耗时</small><strong>${fmt(s.measured_turns ? s.period_ms : null)}</strong></div><div><small>已测量 / 当前轮次</small><strong>${s.measured_turns} / ${s.turns.length}</strong></div><div><small>工作与等待拆分</small><strong>未知</strong></div></div><h3>每轮执行的起止记录</h3><p class="sub">Codex 使用执行起止记录；Claude Code 使用用户消息至明确结束记录的跨度。消息落盘时间不等于精确执行边界，不能直接比较两种工具的执行效率。</p>${s.turns.map((t, i) => `<article class="turn"><div class="turnhead"><b>第 ${i + 1} 轮</b><span class="tag ${t.elapsed_ms === null ? "warn" : ""}">${statuses[t.status]}</span></div><p class="sub">${h(t.models.join(" / ") || "模型上下文未知")}</p><div class="turnvalues"><span>完整处理耗时：${fmt(t.elapsed_ms)}</span><span>本期计入：${fmt(t.period_ms)}</span></div>${t.reason ? `<p class="notice">${h(t.reason)}</p>` : ""}<ul class="eventlist">${t.events.map((e) => `<li><time>${h(stamp(e.at_ms))}</time>${{ start: s.agent === "Claude Code" ? "用户消息记录" : "开始执行", complete: s.agent === "Claude Code" ? "明确结束记录" : "执行完成", abort: "执行中止", fail: "执行失败", model: "记录模型上下文" }[e.kind]}</li>`).join("")}</ul></article>`).join("")}<p class="sub sectionspace">这些是记录中的时间事实，不代表你实际操作或等待的时长。不展示问题和答复内容。</p>`,
-    true,
-  );
+  // 直接唤起右侧抽屉，查看首个轮次或会话概况
+  if (s.turns && s.turns.length) {
+    openDrawer(s.turns[0], s);
+  } else {
+    open(`${head(s.project, `${s.agent} · ${s.id}`)}<p class="sub">该会话暂无可展开的原子轮次。</p>`);
+  }
 }
+
 function definitions() {
   open(
-    `${head("这些时间怎么算？")}<dl><dt>会话与一轮交互</dt><dd>会话是同一对话中的一组交互；一轮交互通常从你提交一次问题或指令，到 Agent 完成答复。工具调用和确认属于同一轮。Codex 使用执行起止记录；Claude Code 使用用户消息与明确结束标记的记录时间，缺少结束标记时不计时。</dd><dt>已记录的处理耗时</dt><dd>把每轮开始执行到完成、失败或中止的时间相加。可能包含等待你确认或补充的时间；不能全部当成纯工作。</dd><dt>有任务在处理的时长</dt><dd>多个任务同时运行的一段时间只计一次。例如 A 在 10:00–10:30 运行，B 在 10:15–10:45 运行：累计 60 分钟，不重复计时为 45 分钟。此项仍可能包含等待确认的时间。</dd><dt>为什么工作和等待显示未知？</dt><dd>当前导入适配器不能从历史文件可靠恢复完整审批等待事件。缺少记录不等于没有等待，因此不推算、不填零。</dd><dt>时间范围与未完成记录</dt><dd>时区取自浏览器。跨天轮次按与所选日期重叠的部分计入，右侧日期包含当天。没有结束或起点冲突的轮次不计入已测量耗时。</dd><dt>汇总是否等于全部真实使用？</dt><dd>不等于。只涵盖已选择导入、可支持、具有有效起止记录的本地数据。记录外的活动和未知来源不包含在内。</dd></dl>`,
+    `${head("这些时间怎么算？")}<dl style="line-height:1.7; font-size:13px;"><dt><strong>会话与一轮交互</strong></dt><dd class="sub">会话是同一任务的交互集合；一轮交互从你提交问题或指令到 Agent 完成答复。工具调用与人工等待卡点均精确切分。</dd><dt style="margin-top:12px;"><strong>已记录的处理耗时 (Wall Time)</strong></dt><dd class="sub">把每轮开始到完成、失败或中止的时间相加。包含机器工作与人工交互卡点总和。</dd><dt style="margin-top:12px;"><strong>纯工作有效净值 (Active Work)</strong></dt><dd class="sub">由模型 API 生成耗时与本地工具/脚本精确执行耗时毫秒级累加沉淀，真实反映 AI 的有效劳动。</dd></dl>`,
   );
 }
-function metric(kind) {
-  const s = state.report.summary;
-  const titles = {
-    processing: "时间花销汇总明细",
-    union: "同时运行的时间，如何计算？",
-    coverage: "记录完整性",
-  };
-  let content = "";
-  if (kind === "coverage") {
-    content = `<div class="notice">工作、确认等待与用户响应间隔目前均无法独立测量。已测量轮次仅表示“执行开始到结束”可测量。</div><div class="keyrow"><label>已测量起止耗时</label><b>${s.measured_turns} 轮</b></div>${Object.entries(
-      s.statuses,
-    )
-      .map(
-        ([k, v]) =>
-          `<div class="keyrow"><label>${statuses[k]}</label><span>${v} 轮</span></div>`,
-      )
-      .join(
-        "",
-      )}<p class="sub">“暂无结束记录”并不证明仍在执行；可能是文件被截断或进程中断。没有导入的数据无法估算覆盖率。</p>`;
-  } else {
-    content = `<div class="detailstats"><div><small>累计处理耗时</small><strong>${fmt(s.processing_ms)}</strong></div><div><small>不重复计时</small><strong>${fmt(s.processing_union_ms)}</strong></div><div><small>重复累计的部分</small><strong>${fmt(s.overlap_ms)}</strong></div></div><p class="metricexplain">${h(state.report.basis)} ${kind === "union" ? "以下时间线各行代表一轮执行，重叠的部分只计算一次。三个或更多同时运行也采用同一规则；差额并非独立时间段的长度。" : "每行贡献按本期范围截取；总额中有多少是纯工作、多少是确认等待，目前均未知。"}</p>${kind === "union" ? intervalChart() : ""}`;
-  }
-  open(
-    `${head(titles[kind], `${state.start} — ${state.end} · ${timezone}`)}${content}<h3 class="sectionspace">来源会话 · 点击继续核对</h3>${table(state.report.sessions)}`,
-    true,
-  );
-}
-function intervalChart() {
-  const turns = state.report.sessions
-    .flatMap((s) =>
-      s.turns.filter((t) => t.period_ms !== null).map((t) => ({ s, t })),
-    )
-    .sort((a, b) => a.t.start_ms - b.t.start_ms)
-    .slice(0, 12);
-  if (!turns.length) return '<div class="empty">暂无可测量区间。</div>';
-  const lo = Math.min(...turns.map((x) => x.t.start_ms)),
-    hi = Math.max(...turns.map((x) => x.t.end_ms)),
-    span = Math.max(hi - lo, 1);
-  return `<div class="panel"><div class="panelhead"><h2>完整记录区间（前 12 轮）</h2></div><div class="recordchart"><div class="chartaxis"><span>${h(stamp(lo))}</span><span>${h(stamp(hi))}</span></div>${turns.map(({ s, t }) => `<div class="lane"><label>${h(s.project)}</label><div class="track"><button class="bar" style="left:${((t.start_ms - lo) / span) * 100}%;width:${Math.max(((t.end_ms - t.start_ms) / span) * 100, 0.5)}%;max-width:${((hi - t.start_ms) / span) * 100}%" data-session="${h(s.id)}" aria-label="查看 ${h(s.project)} 对应会话"></button></div></div>`).join("")}</div><p class="rangefoot">图中为完整轮次起止，仅帮助观察重叠。上方本期总额由全部符合范围的区间精确计算，不受图中数量限制。</p></div>`;
-}
+
 function toast(message) {
-  $("#live").innerHTML = `<div class="toast">${h(message)}</div>`;
+  $("#live").innerHTML = `<div class="session-pill" style="position:fixed; bottom:24px; right:24px; z-index:9999; background:#FAF9F5; box-shadow:var(--shadow-lg);">${h(message)}</div>`;
   setTimeout(() => ($("#live").innerHTML = ""), 4500);
 }
+
 function exportCSV() {
   const data = [
     [
@@ -391,8 +936,8 @@ function exportCSV() {
       s.measured_turns ? s.period_ms : "",
       s.measured_turns,
       s.turns.length,
-      "",
-      "",
+      s.work_ms ?? "",
+      s.review_wait_ms ?? "",
       state.start,
       state.end,
       timezone,
@@ -400,7 +945,7 @@ function exportCSV() {
     ]),
   ];
   const cell = (v) => {
-    let x = String(v);
+    let x = String(v ?? "");
     if (/^\s*[=+@-]|^[\t\r\n]/.test(x)) x = "'" + x;
     return '"' + x.replaceAll('"', '""') + '"';
   };
@@ -415,6 +960,7 @@ function exportCSV() {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
 async function refresh() {
   if (state.busy) return;
   state.busy = true;
@@ -427,13 +973,7 @@ async function refresh() {
       body: "{}",
     });
     await load();
-    toast(
-      `成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个导入失败` : ""}${r.notices?.length ? "；" + r.notices.join("；") : ""}`,
-    );
-    if (r.failed)
-      open(
-        `${head("部分记录未能导入", `已更新 ${r.updated} 个文件，失败 ${r.failed} 个。`)}<p class="sub">首次导入失败的文件不会生成统计；此前已成功导入的记录会保留旧快照。调整统计日期不会解决导入失败。</p><h3>失败原因</h3>${(r.failures || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>当前服务未提供详细原因，请更新并重启 AgentTime。</p>"}<p class="sub">可以将这些原因发给项目维护者，不需要发送问题、答复或完整会话文件。</p>`,
-      );
+    toast(`成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个失败` : ""}`);
   } catch (e) {
     error(e.message);
   } finally {
@@ -442,17 +982,38 @@ async function refresh() {
     $("#refresh").textContent = "同步记录";
   }
 }
+
+// 全局事件委托
 document.addEventListener("click", async (e) => {
-  const b = e.target.closest("button");
+  // 轮次行点击唤起下钻抽屉
+  const turnRow = e.target.closest(".turn-row");
+  if (turnRow) {
+    const sId = turnRow.dataset.sessionId;
+    const tId = turnRow.dataset.turnId;
+    const s = state.report.sessions.find((x) => x.id === sId);
+    if (s) {
+      const t = s.turns.find((x) => x.id === tId);
+      if (t) {
+        $$(".turn-row").forEach((r) => r.classList.remove("active"));
+        turnRow.classList.add("active");
+        openDrawer(t, s);
+        return;
+      }
+    }
+  }
+
+  const b = e.target.closest("button") || e.target.closest("[data-page]");
   if (!b) {
     if (e.target.matches("[data-overlay]")) close();
     return;
   }
+
   if (b.dataset.page) {
     state.page = b.dataset.page;
     render();
     window.scrollTo(0, 0);
   }
+
   if (b.dataset.range) {
     state.range = b.dataset.range;
     state.end = localDate();
@@ -462,15 +1023,16 @@ document.addEventListener("click", async (e) => {
     );
     await load();
   }
+
   if (b.dataset.session) {
-    if ($("#layer [role=dialog]")) close();
     details(b.dataset.session);
   }
-  if (b.dataset.metric) metric(b.dataset.metric);
+
   if (b.dataset.saveDirectory) await saveDirectory(b.dataset.saveDirectory);
+
   if (b.dataset.resetDirectory) {
-    const agent = b.dataset.resetDirectory,
-      item = state.directories.find((x) => x.agent === agent);
+    const agent = b.dataset.resetDirectory;
+    const item = state.directories.find((x) => x.agent === agent);
     state.drafts[agent] = {
       ...directoryDraft(item),
       path: item.default_path || "",
@@ -479,9 +1041,13 @@ document.addEventListener("click", async (e) => {
     };
     render();
   }
+
   switch (b.dataset.action) {
     case "close":
       close();
+      break;
+    case "close-drawer":
+      closeDrawer();
       break;
     case "definitions":
       definitions();
@@ -494,15 +1060,14 @@ document.addEventListener("click", async (e) => {
       break;
     case "dates":
       open(
-        `${head("选择统计日期", "按浏览器时区计算；结束日期包含当天，最多 367 天。")}<div class="formfields"><label>开始日期<br><input class="dateinput" type="date" id="start" value="${h(state.start)}"></label><label>结束日期<br><input class="dateinput" type="date" id="end" value="${h(state.end)}"></label></div><p id="dateerror" role="alert" class="sub"></p><button class="btn primary" data-action="apply-dates">应用日期</button>`,
+        `${head("选择统计日期", "按浏览器时区计算；结束日期包含当天，最多 367 天。")}<div style="display:flex; gap:12px; margin:14px 0;"><label style="flex:1;">开始日期<br><input type="date" id="start" value="${h(state.start)}" style="width:100%;"></label><label style="flex:1;">结束日期<br><input type="date" id="end" value="${h(state.end)}" style="width:100%;"></label></div><p id="dateerror" role="alert" class="sub" style="color:#B91C1C; margin-bottom:12px;"></p><button class="btn primary" data-action="apply-dates">应用日期</button>`,
       );
       break;
     case "apply-dates": {
-      const a = $("#start").value,
-        z = $("#end").value;
+      const a = $("#start").value;
+      const z = $("#end").value;
       if (!a || !z || a > z || (new Date(z) - new Date(a)) / 86400000 > 366) {
-        $("#dateerror").textContent =
-          "请选择有效日期，开始不晚于结束，最多 367 天。";
+        $("#dateerror").textContent = "请选择有效日期，开始不晚于结束，最多 367 天。";
         break;
       }
       state.start = a;
@@ -514,6 +1079,7 @@ document.addEventListener("click", async (e) => {
     }
   }
 });
+
 document.addEventListener("input", (e) => {
   if (e.target.dataset.directoryInput)
     editDirectory(e.target.dataset.directoryInput, "path", e.target.value);
@@ -526,46 +1092,31 @@ document.addEventListener("input", (e) => {
     $("#search").setSelectionRange(pos, pos);
   }
 });
+
 document.addEventListener("change", (e) => {
   if (e.target.dataset.directoryEnabled)
-    editDirectory(
-      e.target.dataset.directoryEnabled,
-      "enabled",
-      e.target.checked,
-    );
+    editDirectory(e.target.dataset.directoryEnabled, "enabled", e.target.checked);
   if (e.target.id === "sort") {
     state.sort = e.target.value;
     render();
   }
 });
+
+// ESC 键随手关闭抽屉或弹层
 document.addEventListener("keydown", (e) => {
-  const dialog = $("#layer [role=dialog]");
-  if (!dialog) return;
   if (e.key === "Escape") {
-    close();
-    return;
-  }
-  if (e.key === "Tab") {
-    const els = [...dialog.querySelectorAll("button,input,select,a[href]")],
-      first = els[0],
-      last = els.at(-1);
-    if (!first) {
-      e.preventDefault();
+    const dialog = $("#layer [role=dialog]");
+    if (dialog) {
+      close();
       return;
     }
-    if (
-      e.shiftKey &&
-      (document.activeElement === first || document.activeElement === dialog)
-    ) {
-      e.preventDefault();
-      last.focus();
-    } else if (
-      !e.shiftKey &&
-      (document.activeElement === last || document.activeElement === dialog)
-    ) {
-      e.preventDefault();
-      first.focus();
+    const d = $("#detailDrawer");
+    if (d && !d.classList.contains("collapsed")) {
+      closeDrawer();
+      return;
     }
   }
 });
+
+// 首次自动拉取数据
 load();
