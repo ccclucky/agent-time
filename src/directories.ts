@@ -137,7 +137,7 @@ export class Directories {
   collect() {
     const files = new Map<string, string>(),
       notices: string[] = [];
-    const agents = new Map<string, "codex" | "claude">();
+    const agents = new Map<string, "codex" | "claude" | "pi">();
     for (const item of this.list()) {
       if (!item.enabled || !item.supported) continue;
       if (item.status !== "directory") {
@@ -171,7 +171,7 @@ export class Directories {
             )
               continue;
             files.set(real, root);
-            agents.set(real, item.agent as "codex" | "claude");
+            agents.set(real, item.agent as "codex" | "claude" | "pi");
             count++;
             if (files.size > 5000)
               throw new ValidationError(

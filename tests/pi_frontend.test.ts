@@ -53,3 +53,65 @@ test("Pi can be enabled and the preference persists; others still cannot", () =>
   assert.equal(dirs.get("pi").enabled, false);
   assert.throws(() => dirs.save("opencode", null, true), /不能启用/);
 });
+
+const piRows = () => [
+  {
+    type: "session",
+    version: 3,
+    id: "01a122b0-a300-7113-8773-07227583e9b1",
+    timestamp: "2026-10-09T22:03:15.000Z",
+    cwd: "/Users/demo/work/my_project",
+  },
+  {
+    type: "message",
+    id: "u1",
+    parentId: null,
+    timestamp: "2026-10-09T22:03:15.437Z",
+    message: {
+      role: "user",
+      content: [{ type: "text", text: "run the build" }],
+      timestamp: Date.parse("2026-10-09T22:03:15.437Z"),
+    },
+  },
+  {
+    type: "message",
+    id: "a1",
+    parentId: "u1",
+    timestamp: "2026-10-09T22:03:20.000Z",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      model: "z-ai/glm-5.3",
+      stopReason: "stop",
+      timestamp: Date.parse("2026-10-09T22:03:16.000Z"),
+      durationMs: 4000,
+      thinkingLevel: "high",
+    },
+  },
+];
+test("enabled Pi directory discovers sessions/<encoded-project> transcripts as Pi", () => {
+  const { store, dirs, home } = setup();
+  file(
+    path.join(
+      home,
+      ".pi",
+      "agent",
+      "sessions",
+      "--Users-demo-work-my_project--",
+    ),
+    piRows(),
+    "2026-10-09T22-03-15-000Z_01a122b0-a300-7113-8773-07227583e9b1.jsonl",
+  );
+  dirs.save("pi", null, true);
+  const result = store.refresh(dirs);
+  assert.equal(result.updated, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(result.discovered, 1);
+  const sessions = store.sessions();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].agent, "Pi");
+  assert.equal(sessions[0].id, "pi/01a122b0-a300-7113-8773-07227583e9b1");
+  assert.equal(sessions[0].project, "my_project");
+  assert.equal(sessions[0].turns.length, 1);
+  assert.equal(sessions[0].turns[0].status, "completed");
+});
