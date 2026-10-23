@@ -6,6 +6,7 @@ import os from "node:os";
 import { Store } from "../src/store.js";
 import { report } from "../src/metrics.js";
 import { calculatePiTiming } from "../src/store.js";
+import { parsePi } from "../src/pi.js";
 import type { Event } from "../src/types.js";
 
 // All fixtures are synthetic (no real user content) and use one base epoch so
@@ -415,5 +416,75 @@ test("Pi timing: parallel calls share one approval gap (interval union, not sum)
   ]);
 
   store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi timing: report basis documents the Pi measurement methodology", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
+  const p = writeSession(tmpDir, "basis.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "pit-0000-0000-0000-000000000004",
+      timestamp: iso(B),
+      cwd: "/work/demo_app",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: iso(B),
+      message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: B },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: iso(B + 2000),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        model: "z-ai/glm-5.3",
+        stopReason: "stop",
+        timestamp: B + 500,
+        durationMs: 1500,
+      },
+    },
+  ]);
+  const store = new Store(path.join(tmpDir, "test.db"));
+  store.importFile(p, null, "pi");
+  const rep = report(store.sessions(), "2026-10-21", "2026-10-21", "UTC", "Pi");
+  assert.ok(rep.basis.includes("Pi"), "basis must cover the Pi 口径");
+  assert.ok(rep.basis.includes("机时累加"));
+  assert.ok(rep.basis.includes("正向间隔并集"));
+
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi timing: parsePi no longer tells users the three-state split is coming", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
+  const p = writeSession(tmpDir, "no-notice.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "pit-0000-0000-0000-000000000005",
+      timestamp: iso(B),
+      cwd: "/work/demo_app",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: iso(B),
+      message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: B },
+    },
+  ]);
+  const data = parsePi(p);
+  assert.ok(
+    !data.issues.some((i) => i.includes("后续版本") || i.includes("暂不显示")),
+    "timing exists now; the informational issue must be gone",
+  );
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
