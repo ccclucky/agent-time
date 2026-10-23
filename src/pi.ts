@@ -10,6 +10,17 @@ import { ValidationError, type Event } from "./types.js";
 const validId = (v: unknown): v is string =>
   typeof v === "string" && /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/.test(v);
 
+// message.timestamp is epoch ms (request start / result creation per role).
+const epochMs = (v: unknown): number => {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0 || v > 4102444800000)
+    throw Error();
+  return v;
+};
+// message.durationMs is an optional monotonic-clock duration; absent or
+// malformed means "fall back", never abort.
+const durationMs = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+
 // Record-level ISO timestamps are record append times; invalid ones mark the
 // single line bad (issue) instead of aborting the import, so wrap as plain Error.
 const iso = (v: unknown): number => {
@@ -26,7 +37,11 @@ export function parsePi(path: string) {
     current: string | null = null,
     excluded = false;
   const events: Event[] = [],
-    issues = new Set<string>();
+    issues = new Set<string>(),
+    // toolCallId -> issuing assistant response end + tool name, so toolResult
+    // records can fall back to the issuing response end when durationMs is
+    // missing and prefer their own toolName when present.
+    toolCalls = new Map<string, { end: number; name: string | null }>();
 
   const add = (
     turn_id: string,
@@ -81,13 +96,85 @@ export function parsePi(path: string) {
       if (!sid || r.type !== "message") continue;
       const m = r.message;
       if (!m || typeof m !== "object" || Array.isArray(m)) continue;
-      if (m.role !== "user") continue;
-      if (!validId(r.id)) {
-        issues.add("部分记录缺少有效消息 ID，未猜测归属");
+      if (m.role === "user") {
+        if (!validId(r.id)) {
+          issues.add("部分记录缺少有效消息 ID，未猜测归属");
+          continue;
+        }
+        current = r.id as string;
+        add(current, "start", iso(r.timestamp));
         continue;
       }
-      current = r.id as string;
-      add(current, "start", iso(r.timestamp));
+      if (m.role === "assistant") {
+        // The model loop (toolUse/deferred) continues the same user turn.
+        if (!current) continue;
+        const turn = current,
+          requestStart = epochMs(m.timestamp),
+          dur = durationMs(m.durationMs),
+          recordAt = iso(r.timestamp),
+          // Response end: monotonic duration preferred, else record append ISO.
+          responseEnd = dur !== null ? requestStart + dur : recordAt;
+        const level =
+          typeof m.thinkingLevel === "string" && m.thinkingLevel.trim()
+            ? Array.from(m.thinkingLevel.trim()).slice(0, 40).join("")
+            : null;
+        if (typeof m.model === "string" && m.model.trim())
+          add(turn, "model", requestStart, Array.from(m.model).slice(0, 120).join(""), {
+            end_ms: responseEnd,
+            thinking_level: level,
+          });
+        if (Array.isArray(m.content))
+          for (const b of m.content) {
+            if (!b || typeof b !== "object" || Array.isArray(b)) continue;
+            if (b.type !== "toolCall") continue;
+            const tid = typeof b.id === "string" ? b.id : null;
+            const tname = typeof b.name === "string" && b.name ? b.name : "tool";
+            if (tid) toolCalls.set(tid, { end: responseEnd, name: tname });
+            add(turn, "tool_use", responseEnd, null, {
+              tool_id: tid,
+              tool_name: tname,
+            });
+          }
+        if (m.stopReason === "stop" || m.stopReason === "length") {
+          add(turn, "complete", recordAt);
+          current = null;
+        } else if (m.stopReason === "aborted") {
+          add(turn, "abort", recordAt);
+          current = null;
+        } else if (m.stopReason === "error") {
+          add(turn, "fail", recordAt);
+          current = null;
+        }
+        continue;
+      }
+      if (m.role === "toolResult") {
+        if (!current) continue;
+        const created = epochMs(m.timestamp),
+          dur = durationMs(m.durationMs),
+          tid = typeof m.toolCallId === "string" ? m.toolCallId : null,
+          issuing = tid ? toolCalls.get(tid) : undefined;
+        const tname =
+          typeof m.toolName === "string" && m.toolName
+            ? m.toolName
+            : (issuing?.name ?? null);
+        let at: number;
+        if (dur !== null) at = created - dur;
+        else if (issuing) {
+          at = issuing.end;
+          issues.add(
+            "部分工具结果缺少 durationMs；工具开始时刻回退为发起响应结束，可能包含审批等待",
+          );
+        } else {
+          at = iso(r.timestamp);
+          issues.add("部分工具结果缺少 durationMs 且无法定位发起响应；计时精度受限");
+        }
+        add(current, "tool_result", at, null, {
+          end_ms: created,
+          tool_id: tid,
+          tool_name: tname,
+        });
+        continue;
+      }
     } catch (e) {
       if (e instanceof ValidationError) throw e;
       issues.add("存在无法解析的记录；只保留可验证的元数据，请检查源文件");
