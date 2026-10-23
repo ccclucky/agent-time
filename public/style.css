@@ -1727,3 +1727,218 @@ input[type="search"] {
     text-align: left;
   }
 }
+
+/* ========================================================
+   切片 3：轮次时序流胶囊 (Turn Capsules) 与 Turn Inspector 抽屉
+   ======================================================== */
+.turn-capsule-list {
+  margin-top: 26px;
+}
+
+.capsule-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--fg-title);
+}
+
+.capsule-head-sub {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.turn-capsule {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  background: #FFFFFF;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.turn-capsule:hover {
+  border-color: var(--state-work);
+  background: #FFFBF9;
+  box-shadow: 0 2px 8px rgba(204, 120, 92, 0.1);
+  transform: translateX(2px);
+}
+
+.turn-capsule.active {
+  border-color: var(--state-work);
+  background: #FFF8F4;
+  border-width: 2px;
+}
+
+.turn-capsule:focus-visible {
+  outline: 2px solid var(--state-work);
+  outline-offset: 2px;
+}
+
+.capsule-no {
+  width: 70px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--state-work);
+  font-family: var(--font-mono);
+}
+
+.capsule-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-title);
+  padding: 0 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capsule-slow-flag {
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 11px;
+  color: #DC2626;
+  border: 1px solid #DC2626;
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.capsule-bar {
+  width: 260px;
+  flex-shrink: 0;
+  height: 12px;
+  background: #E5E0D8;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  margin-right: 16px;
+}
+
+.capsule-duration {
+  width: 80px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--fg-title);
+}
+
+@media (max-width: 960px) {
+  .turn-capsule {
+    flex-wrap: wrap;
+  }
+
+  .capsule-bar {
+    width: 100%;
+    order: 3;
+    margin-top: 8px;
+    margin-right: 0;
+  }
+}
+
+/* 抽屉内的逐次工具调用卡 (.slow = 单次 >15s, 3px 红色左边框) */
+.tool-exec-card {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: #FFFFFF;
+  font-size: 12px;
+}
+
+.tool-exec-card.slow {
+  border-left: 3px solid #DC2626;
+}
+
+.tool-exec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tool-exec-head strong {
+  color: var(--fg-title);
+  overflow-wrap: anywhere;
+}
+
+.tool-exec-time {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.tool-exec-time.slow {
+  color: #DC2626;
+  font-weight: 700;
+}
+
+/* 抽屉内的提问 / 思考文本区（按需读取，含诚实降级提示） */
+.drawer-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.drawer-transcript-box {
+  background: #FAF9F5;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg-title);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.drawer-missing-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.drawer-transcript-note {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 6px;
+}
+
+/* 抽屉头部的上/下一轮步进按钮 */
+.drawer-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.drawer-step-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  background: #FFFFFF;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg-title);
+  white-space: nowrap;
+}
+
+.drawer-step-btn:hover:not(:disabled) {
+  border-color: var(--state-work);
+  color: var(--state-work);
+}
+
+.drawer-step-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

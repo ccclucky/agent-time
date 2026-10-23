@@ -3,8 +3,14 @@
  * Message timestamps are record times, not exact model execution boundaries.
  */
 import { posix } from "node:path";
-import { lines, timestamp, hash, legacyJSON } from "./codex.js";
-import { ValidationError, type Event } from "./types.js";
+import {
+  lines,
+  timestamp,
+  hash,
+  legacyJSON,
+  truncateCodePoints,
+} from "./codex.js";
+import { ValidationError, type Event, type TranscriptTurn } from "./types.js";
 
 const validId = (v: unknown): v is string =>
   typeof v === "string" && /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/.test(v);
@@ -255,4 +261,129 @@ export function parseClaude(path: string) {
     events: [...unique.values()],
     issues: [...issues].sort(),
   };
+}
+
+/** On-demand transcript extraction for Claude Code sessions (never persisted).
+ *  Turn ids mirror parseClaude (the user message uuid), so the drawer can join
+ *  this against turn.id from the event stream. Prompt/thinking text is read
+ *  from message content blocks; tool-call durations are paired from
+ *  tool_use ↔ tool_result record timestamps (raw record deltas, may include
+ *  permission wait — the event-stream timings remain the authoritative split).
+ */
+export function extractClaudeTranscript(path: string): TranscriptTurn[] {
+  const turns = new Map<string, TranscriptTurn>();
+  let current: string | null = null,
+    lastTurnId: string | null = null,
+    sid: string | null = null;
+  const pending = new Map<string, { name: string; at: number }>();
+  const get = (tid: string | null): TranscriptTurn | null => {
+    if (!tid || !validId(tid)) return null;
+    let t = turns.get(tid);
+    if (!t) {
+      t = { turn_id: tid, prompt: null, thinking: null, models: [], tool_calls: [] };
+      turns.set(tid, t);
+    }
+    return t;
+  };
+  for (const line of lines(path)) {
+    if (!line.toString().trim()) continue;
+    try {
+      const r = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(line),
+      );
+      if (!r || typeof r !== "object" || Array.isArray(r)) continue;
+      if (r.type !== "user" && r.type !== "assistant") continue;
+      if (!validId(r.sessionId)) continue;
+      if (sid && sid !== r.sessionId) break; // mixed-session file: keep the first session only
+      sid = r.sessionId;
+      if (!validId(r.uuid)) continue;
+      const at = timestamp(r.timestamp),
+        content = r.message?.content as unknown;
+
+      if (r.type === "user") {
+        const isToolResult =
+          r.toolUseResult ||
+          (Array.isArray(content) &&
+            content.some(
+              (b: unknown) =>
+                b && typeof b === "object" && (b as ContentBlock).type === "tool_result",
+            ));
+        if (isToolResult) {
+          if (Array.isArray(content)) {
+            const active = current ?? lastTurnId,
+              t = get(active);
+            for (const b of content) {
+              if (
+                b &&
+                typeof b === "object" &&
+                (b as ContentBlock).type === "tool_result" &&
+                typeof (b as ContentBlock).tool_use_id === "string" &&
+                t
+              ) {
+                const u = pending.get((b as ContentBlock).tool_use_id!);
+                if (u) {
+                  t.tool_calls.push({
+                    name: u.name,
+                    duration_ms: Math.max(0, at - u.at),
+                  });
+                  pending.delete((b as ContentBlock).tool_use_id!);
+                }
+              }
+            }
+          }
+          continue;
+        }
+        if (r.isMeta || r.isCompactSummary || r.isSynthetic || r.sourceToolAssistantUUID)
+          continue;
+        let prompt: string | null = null;
+        if (typeof content === "string") prompt = content;
+        else if (Array.isArray(content))
+          prompt =
+            content
+              .filter(
+                (b: unknown) =>
+                  b &&
+                  typeof b === "object" &&
+                  (b as ContentBlock).type === "text" &&
+                  typeof (b as { text?: unknown }).text === "string",
+              )
+              .map((b) => (b as { text: string }).text)
+              .join("\n")
+              .trim() || null;
+        if (prompt === null) continue;
+        current = r.uuid as string;
+        lastTurnId = current;
+        const t = get(current);
+        if (t && t.prompt === null) t.prompt = truncateCodePoints(prompt);
+        continue;
+      }
+
+      const active = current ?? lastTurnId,
+        t = get(active);
+      if (!t) continue;
+      if (typeof r.message?.model === "string" && r.message.model.trim()) {
+        const model = truncateCodePoints(r.message.model, 120);
+        if (!t.models.includes(model)) t.models.push(model);
+      }
+      if (Array.isArray(content)) {
+        for (const b of content) {
+          if (!b || typeof b !== "object") continue;
+          const block = b as ContentBlock & { thinking?: unknown; input?: unknown };
+          if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
+            t.thinking = t.thinking
+              ? truncateCodePoints(t.thinking + "\n" + block.thinking)
+              : truncateCodePoints(block.thinking);
+          } else if (block.type === "tool_use" && typeof block.id === "string") {
+            pending.set(block.id, {
+              name: typeof block.name === "string" ? block.name : "tool",
+              at,
+            });
+          }
+        }
+      }
+    } catch {
+      // Unreadable line: skip it; the store reports degradation honestly.
+    }
+  }
+  return [...turns.values()];
 }

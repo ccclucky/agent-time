@@ -102,4 +102,25 @@ export interface Session {
   subagents?: SubagentSummary[];
 }
 
+/** On-demand per-turn transcript text, extracted from the local source file
+ *  when the session detail drawer opens. Never persisted to the store. */
+export interface TranscriptToolCall {
+  name: string;
+  duration_ms: number | null;
+}
+
+export interface TranscriptTurn {
+  turn_id: string;
+  prompt: string | null;
+  thinking: string | null;
+  models: string[];
+  tool_calls: TranscriptToolCall[];
+}
+
+export interface SessionTranscript {
+  session_id: string;
+  turns: TranscriptTurn[];
+  missing_fields: string[];
+}
+
 export class ValidationError extends Error {}

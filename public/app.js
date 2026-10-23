@@ -76,6 +76,8 @@ const state = {
   selectedTurnId: null,
   zoomStartPct: 0,
   zoomEndPct: 100,
+  // Turn Inspector 抽屉的按需会话文本缓存（session_id → {status, data?, message?}）
+  transcriptCache: new Map(),
 };
 
 let focusBeforeDialog = null;
@@ -1024,7 +1026,7 @@ function sessionDetail() {
 
   const slowRows = slow.slice(0, 3).map(
     (c, i) => `
-      <div class="slow-tool-row">
+      <div class="slow-tool-row" data-turn-capsule="${h(c.turnId)}" role="button" tabindex="0" aria-label="在抽屉中检视轮次 #${c.turnIndex} 的 ${h(c.name)}">
         <span class="slow-tool-name"><strong class="slow-tool-rank">${i + 1}.</strong> ${h(c.name)}<span class="slow-tool-turn">轮次 #${c.turnIndex}</span></span>
         <span class="slow-tool-time">${fmt(c.duration_ms)}</span>
       </div>`,
@@ -1097,8 +1099,72 @@ function sessionDetail() {
         </div>
       </div>
     </div>
-    <!-- 切片 3 预留：轮次时序流胶囊 (Turn Capsules) 将渲染在此处 -->
+    <!-- 切片 3：轮次时序流胶囊 (Turn Capsules) -->
+    ${turnCapsuleSection(s)}
   `;
+}
+
+// ========================================================
+// 切片 3：轮次时序流胶囊 (Turn Capsules) + 右侧 Turn Inspector 抽屉联动
+// ========================================================
+
+// 单轮 260px 迷你占比条：模型推理 / 本地工具 / 等待人审阅 / 待命，
+// 全部来自 slice-1 色彩令牌。Codex 会话 breakdown 为 null →
+// 不伪造分段，诚实退化为单色总时长条。
+function capsuleBarHtml(t) {
+  const tool = t.breakdown?.tool_execution_ms ?? 0;
+  const model = t.breakdown?.model_api_ms ?? 0;
+  const wait = t.review_wait_ms ?? 0;
+  const standby = t.standby_ms ?? 0;
+  const known = tool + model + wait + standby;
+  const segs = [
+    { ms: model, color: "var(--color-system)", label: "模型推理" },
+    { ms: tool, color: "var(--color-mcp)", label: "本地工具" },
+    { ms: wait, color: "var(--color-skills)", label: "等待人审阅" },
+    { ms: standby, color: "var(--state-standby)", label: "待命" },
+  ].filter((x) => x.ms > 0);
+  if (known > 0 && segs.length) {
+    return segs
+      .map(
+        (x) =>
+          `<div style="width:${((x.ms / known) * 100).toFixed(1)}%; background:${x.color};" title="${x.label}: ${fmt(x.ms)}"></div>`,
+      )
+      .join("");
+  }
+  const total = t.elapsed_ms ?? t.period_ms ?? null;
+  const why = total
+    ? "该轮无细分耗时数据（该来源不提供 breakdown），仅按总时长展示"
+    : "该轮无细分耗时数据，且缺少可测量时长";
+  return `<div style="width:100%; background:var(--state-standby);" title="${why}"></div>`;
+}
+
+// 胶囊标题：逐轮状态 + 首个模型（来源没有轮次级任务标题，不编造）
+function capsuleTitle(t) {
+  const statusLabel = statuses[t.status] || t.status;
+  return t.models && t.models.length
+    ? `${statusLabel} · ${t.models[0]}`
+    : statusLabel;
+}
+
+function turnCapsuleSection(s) {
+  const rows = s.turns.map((t, i) => {
+    const hasSlow = perCallToolTimings(t).some((c) => c.duration_ms > 15000);
+    return `
+      <div class="turn-capsule${state.selectedTurnId === t.id ? " active" : ""}" data-turn-capsule="${h(t.id)}" role="button" tabindex="0" aria-label="检视轮次 #${i + 1}">
+        <span class="capsule-no">轮次 #${i + 1}</span>
+        <span class="capsule-title">${h(capsuleTitle(t))}${hasSlow ? '<em class="capsule-slow-flag">含 &gt;15s 慢操作</em>' : ""}</span>
+        <div class="capsule-bar">${capsuleBarHtml(t)}</div>
+        <span class="capsule-duration">${fmt(t.elapsed_ms ?? t.period_ms ?? null)}</span>
+      </div>`;
+  });
+  return `
+    <section class="turn-capsule-list">
+      <div class="capsule-head">
+        <strong>轮次时序流 (点击胶囊呼出右侧抽屉)</strong>
+        <span class="capsule-head-sub">共 ${s.turns.length} 轮交互</span>
+      </div>
+      ${rows.join("") || `<div class="s1-empty">该会话在当前统计范围内没有轮次记录。</div>`}
+    </section>`;
 }
 
 function bindBrushEvents() {
@@ -1179,10 +1245,27 @@ function openDrawer(turn, session) {
   const d = $("#detailDrawer");
   if (!d) return;
 
+  const turnIndex = session.turns.findIndex((t) => t.id === turn.id);
   const titleEl = $("#drawerTurnTitle");
   if (titleEl) {
-    titleEl.textContent = `会话 ${session.project} · 轮次详情`;
+    titleEl.textContent =
+      turnIndex === -1
+        ? `会话 ${session.project} · 轮次详情`
+        : `轮次 #${turnIndex + 1} 深度检视 · ${session.project}`;
   }
+
+  // 上/下一轮按钮：处于首/末轮时禁用
+  const prevBtn = $("#drawerPrevTurn");
+  const nextBtn = $("#drawerNextTurn");
+  if (prevBtn) prevBtn.disabled = turnIndex <= 0;
+  if (nextBtn)
+    nextBtn.disabled =
+      turnIndex === -1 || turnIndex >= session.turns.length - 1;
+
+  // 胶囊高亮与抽屉选中轮次保持同步（.turn-capsule.active）
+  $$(".turn-capsule").forEach((c) =>
+    c.classList.toggle("active", c.dataset.turnCapsule === turn.id),
+  );
 
   const work = turn.work_ms;
   const wait = turn.review_wait_ms;
@@ -1193,7 +1276,7 @@ function openDrawer(turn, session) {
   const apiMs = turn.breakdown?.model_api_ms ?? null;
   const toolMs = turn.breakdown?.tool_execution_ms ?? null;
 
-  // 提取真实的工具清单
+  // 提取真实的工具清单（供 KPI 汇总口径使用）
   let toolsList = [];
   if (turn.breakdown?.tools && turn.breakdown.tools.length) {
     toolsList = turn.breakdown.tools.map(t => ({
@@ -1221,6 +1304,11 @@ function openDrawer(turn, session) {
       }
     }
   }
+
+  // 逐次调用粒度的工具调用栈（与慢操作榜单同一口径），>15s 标红
+  const perCallStack = perCallToolTimings(turn).sort(
+    (a, b) => b.duration_ms - a.duration_ms,
+  );
 
   // 耗时倒序排序
   toolsList.sort((a, b) => b.duration_ms - a.duration_ms);
@@ -1276,27 +1364,14 @@ function openDrawer(turn, session) {
   `
       : "";
 
-  const toolsHtml = toolsList.length
-    ? toolsList.map((t, idx) => {
-        const isSlow = idx === 0 && t.duration_ms > 2000;
-        const isBash = t.name.toLowerCase().includes("bash") || t.name.toLowerCase().includes("run") || t.name.toLowerCase().includes("exec");
-        const stdoutId = `stdout-${idx}`;
+  const toolsHtml = perCallStack.length
+    ? perCallStack.map((c) => {
+        const isSlow = c.duration_ms > 15000;
         return `
-          <div class="tool-item-card">
-            <div class="tool-item-head" onclick="const el=document.getElementById('${stdoutId}'); if(el) el.classList.toggle('hidden');">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span class="tool-badge ${isBash ? "bash" : "write"}">${isBash ? "BASH / EXEC" : "EDIT / FS"}</span>
-                <span style="font-size:12px; font-weight:600; color:var(--fg-title);">${h(t.name)}</span>
-              </div>
-              <span class="tool-time">${fmt(t.duration_ms)} ${isSlow ? "(慢瓶颈)" : ""}</span>
-            </div>
-            <div class="tool-command">${h(t.name)} · 累计执行 ${t.count} 次</div>
-            <div class="tool-stdout hidden" id="${stdoutId}">
-              [工具执行快照]<br>
-              工具标识: ${h(t.name)}<br>
-              执行频次: ${t.count} 次<br>
-              耗时小计: ${fmt(t.duration_ms)}<br>
-              所属轮次: ${h(turn.id)}
+          <div class="tool-exec-card${isSlow ? " slow" : ""}">
+            <div class="tool-exec-head">
+              <strong>${h(c.name)}</strong>
+              <span class="tool-exec-time${isSlow ? " slow" : ""}">${fmt(c.duration_ms)}${isSlow ? " (慢瓶颈)" : ""}</span>
             </div>
           </div>
         `;
@@ -1304,6 +1379,14 @@ function openDrawer(turn, session) {
     : `<div class="empty" style="padding:16px;">本轮未调用外部工具/脚本 (纯模型推理)。</div>`;
 
   $("#drawerBody").innerHTML = `
+    <!-- 按需读取的该轮提问与思考文本（切片 3）：加载/错误状态诚实可见 -->
+    <div>
+      <div class="drawer-section-label">用户输入 (User Prompt)</div>
+      <div class="drawer-transcript-box" id="drawerPrompt">正在读取本机源文件…</div>
+      <div class="drawer-section-label" style="margin-top:14px;">模型思考与推理 (CoT & Reasoning)</div>
+      <div class="drawer-transcript-box" id="drawerThinking">正在读取本机源文件…</div>
+    </div>
+
     <!-- 顶部总账微卡 -->
     <div>
       <div style="font-size:12px; font-weight:700; margin-bottom:8px; color:var(--fg-title); display:flex; justify-content:space-between;">
@@ -1343,14 +1426,17 @@ function openDrawer(turn, session) {
     <!-- 详细脚本与慢工具清单 -->
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-        <span style="font-size:12px; font-weight:700; color:var(--fg-title);">执行明细与慢脚本清单</span>
-        <span style="font-size:11px; color:var(--fg-muted);">按耗时倒序 · 点击折叠展开详情</span>
+        <span style="font-size:12px; font-weight:700; color:var(--fg-title);">本轮工具调用栈 (Operations Stack)</span>
+        <span style="font-size:11px; color:var(--fg-muted);">单次调用粒度 · 按耗时倒序 · &gt;15s 标红</span>
       </div>
       <div class="tool-list-container">
         ${toolsHtml}
       </div>
     </div>
   `;
+
+  // 按需加载该轮提问/思考文本（缓存按 session 生效，失败时诚实提示）
+  loadDrawerTranscript(session, turn);
 
   d.classList.remove("collapsed");
 }
@@ -1359,6 +1445,88 @@ function closeDrawer() {
   const d = $("#detailDrawer");
   if (d) d.classList.add("collapsed");
   state.selectedTurnId = null;
+  // 同步清掉轮次胶囊高亮
+  $$(".turn-capsule.active").forEach((c) => c.classList.remove("active"));
+}
+
+// 上/下一轮切换：在当前会话的轮次序列上步进，openDrawer 内部会同步胶囊高亮
+function navigateTurn(dir) {
+  const s = detailSession();
+  if (!s || state.selectedTurnId === null) return;
+  const idx = s.turns.findIndex((t) => t.id === state.selectedTurnId);
+  if (idx === -1) return;
+  const target = s.turns[idx + dir];
+  if (target) openDrawer(target, s);
+}
+
+// 按需拉取该会话的轮次提问/思考文本（GET /api/session/transcript），
+// 按 session_id 缓存：同会话内切换轮次不重复请求
+async function loadDrawerTranscript(session, turn) {
+  let entry = state.transcriptCache.get(session.id);
+  if (!entry) {
+    try {
+      entry = {
+        status: "ok",
+        data: await api(
+          `/api/session/transcript?id=${encodeURIComponent(session.id)}`,
+        ),
+      };
+    } catch (e) {
+      entry = { status: "error", message: e.message };
+    }
+    state.transcriptCache.set(session.id, entry);
+  }
+  renderDrawerTranscript(entry, session, turn);
+}
+
+function drawerHint(text) {
+  return `<span class="drawer-missing-hint">${h(text)}</span>`;
+}
+
+// 把文本写进抽屉 DOM 前先确认抽屉仍停在这一轮，防止异步竞态串轮
+function renderDrawerTranscript(entry, session, turn) {
+  if (state.activeSessionId !== session.id || state.selectedTurnId !== turn.id)
+    return;
+  const promptEl = $("#drawerPrompt");
+  const cotEl = $("#drawerThinking");
+  if (!promptEl || !cotEl) return;
+
+  if (entry.status === "loading") return; // innerHTML 占位已是加载中
+  if (entry.status === "error") {
+    promptEl.innerHTML = drawerHint(
+      `无法按需读取本机源文件（${entry.message || "未知错误"}）。原始会话文件可能已被移动或删除；耗时统计不受影响。`,
+    );
+    cotEl.innerHTML = drawerHint("—");
+    return;
+  }
+
+  const t = (entry.data?.turns || []).find((x) => x.turn_id === turn.id);
+  const notes = entry.data?.missing_fields || [];
+  if (!t) {
+    // 来源文件整体缺失/不可读时，后端会以 turns:[] + missing_fields 说明原因
+    const fileGone =
+      (entry.data?.turns || []).length === 0 && notes.length > 0;
+    promptEl.innerHTML = drawerHint(
+      fileGone
+        ? notes.join("；")
+        : "该轮次在本机源文件中未找到对应的提问文本（导入快照与来源文件可能存在差异）。",
+    );
+    cotEl.innerHTML = drawerHint("该来源未记录该轮的模型思考文本。");
+    return;
+  }
+  if (t.prompt) promptEl.textContent = t.prompt;
+  else
+    promptEl.innerHTML = drawerHint("该来源未记录该轮的提问文本。");
+  if (t.thinking) cotEl.textContent = t.thinking;
+  else
+    cotEl.innerHTML = drawerHint("该来源未记录该轮的模型思考文本。");
+  // 截断等诚实备注（missing_fields）只在抽屉内提示一次
+  if (notes.length && !$("#drawerTranscriptNote")) {
+    cotEl.insertAdjacentHTML(
+      "afterend",
+      `<p class="drawer-transcript-note" id="drawerTranscriptNote">${h(notes.join("；"))}</p>`,
+    );
+  }
 }
 
 function overview() {
@@ -1793,6 +1961,15 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
+  // 0.5 轮次胶囊 / 慢操作榜单行：打开右侧 Turn Inspector 抽屉
+  const capsule = e.target.closest("[data-turn-capsule]");
+  if (capsule) {
+    const s = detailSession();
+    const t = s && s.turns.find((x) => x.id === capsule.dataset.turnCapsule);
+    if (s && t) openDrawer(t, s);
+    return;
+  }
+
   // 1. 会话弹窗内下钻按钮
   const drillBtn = e.target.closest("[data-drill-turn]");
   if (drillBtn) {
@@ -1862,6 +2039,12 @@ document.addEventListener("click", async (e) => {
     case "close-drawer":
       closeDrawer();
       break;
+    case "prev-turn":
+      navigateTurn(-1);
+      break;
+    case "next-turn":
+      navigateTurn(1);
+      break;
     case "definitions":
       definitions();
       break;
@@ -1923,12 +2106,18 @@ document.addEventListener("change", (e) => {
 
 // ESC 键随手关闭抽屉与弹层，支持 Tab 焦点陷阱 (Focus Trap)
 document.addEventListener("keydown", (e) => {
-  // 键盘可达性：会话卡片 / TOP 榜行支持 Enter / Space 激活
+  // 键盘可达性：会话卡片 / 轮次胶囊 / TOP 榜行支持 Enter / Space 激活
   if ((e.key === "Enter" || e.key === " ") && e.target instanceof Element) {
     const card = e.target.closest("[data-open-session]");
     if (card) {
       e.preventDefault();
       location.hash = "#session/" + encodeURIComponent(card.dataset.openSession);
+      return;
+    }
+    const capsule = e.target.closest("[data-turn-capsule]");
+    if (capsule) {
+      e.preventDefault();
+      capsule.click();
       return;
     }
   }
@@ -1963,6 +2152,21 @@ document.addEventListener("keydown", (e) => {
     if (d && !d.classList.contains("collapsed")) {
       closeDrawer();
       return;
+    }
+  }
+
+  // 抽屉打开时 ← / → 在轮次间步进（胶囊高亮随 openDrawer 同步）
+  if (
+    (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+    state.selectedTurnId !== null
+  ) {
+    const tag = e.target instanceof Element ? e.target.tagName : "";
+    if (!["INPUT", "TEXTAREA", "SELECT"].includes(tag)) {
+      const d = $("#detailDrawer");
+      if (d && !d.classList.contains("collapsed")) {
+        e.preventDefault();
+        navigateTurn(e.key === "ArrowLeft" ? -1 : 1);
+      }
     }
   }
 });

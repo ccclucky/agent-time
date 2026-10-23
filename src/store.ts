@@ -2,9 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parse, hash } from "./codex.js";
-import { parseClaude } from "./claude.js";
-import { parsePi } from "./pi.js";
+import { parse, hash, truncateCodePoints, TRANSCRIPT_TEXT_LIMIT } from "./codex.js";
+import { parseClaude, extractClaudeTranscript } from "./claude.js";
+import { parsePi, extractPiTranscript } from "./pi.js";
+import { extractCodexTranscript } from "./codex.js";
 import { SCHEMA } from "./schema.js";
 import { Directories } from "./directories.js";
 import { expand } from "./locations.js";
@@ -14,6 +15,7 @@ import {
   type AdapterName,
   type Event,
   type Session,
+  type SessionTranscript,
   type Status,
   type SubagentSummary,
   type Turn,
@@ -652,6 +654,49 @@ export class Store {
     }
     return [...sessions.values()];
   }
+  /** On-demand per-turn transcript for the session detail drawer: re-reads the
+   *  registered source file and extracts prompt/thinking text. Nothing is
+   *  persisted. Returns null when the session is unknown; degrades to
+   *  turns:[] with an honest missing_fields reason when the file is gone or
+   *  unreadable. */
+  transcript(sessionId: string): SessionTranscript | null {
+    const rows = this.db
+      .prepare(
+        "SELECT path, agent FROM source WHERE session_id=? ORDER BY imported_at DESC LIMIT 1",
+      )
+      .all(sessionId) as unknown as { path: string; agent: string }[];
+    if (!rows.length) return null;
+    const { path: p, agent } = rows[0];
+    try {
+      const turns =
+        agent === "Claude Code"
+          ? extractClaudeTranscript(p)
+          : agent === "Pi"
+            ? extractPiTranscript(p)
+            : extractCodexTranscript(p);
+      const missing: string[] = [];
+      const overLimit = (s: string | null) =>
+        s !== null && Array.from(s).length >= TRANSCRIPT_TEXT_LIMIT;
+      if (turns.some((t) => overLimit(t.prompt)))
+        missing.push("部分轮次的提问文本超长，已截断至 8000 字符");
+      if (turns.some((t) => overLimit(t.thinking)))
+        missing.push("部分轮次的思考文本超长，已截断至 8000 字符");
+      if (agent === "Codex")
+        missing.push("Codex 来源未记录模型思考文本，思考与推理无法展示");
+      return { session_id: sessionId, turns, missing_fields: missing };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return {
+        session_id: sessionId,
+        turns: [],
+        missing_fields: [
+          code === "ENOENT"
+            ? "原始会话文件不存在或已被移动；无法按需读取轮次提问与思考文本（耗时统计不受影响）"
+            : "原始会话文件暂时无法读取；无法按需提取轮次提问与思考文本（耗时统计不受影响）",
+        ],
+      };
+    }
+  }
   sourceInfo() {
     const sources = this.db
       .prepare("SELECT * FROM source ORDER BY imported_at DESC")
@@ -669,7 +714,8 @@ export class Store {
           ...(s.last_error ? [s.last_error] : []),
         ],
       })),
-      privacy: "仅本机存储统计元数据，不保存问题、答复、工具参数或凭据。",
+      privacy:
+        "仅本机存储统计元数据，不保存工具参数或凭据；会话详情页在打开抽屉时按需从本机源文件读取该轮的提问与模型思考文本用于本地展示，仍仅限本机、不上传。",
     };
   }
 }

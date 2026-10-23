@@ -3,8 +3,14 @@ import { openSync, readSync, closeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { TextDecoder } from "node:util";
-import { ValidationError, type Event, type Kind } from "./types.js";
+import { ValidationError, type Event, type Kind, type TranscriptTurn } from "./types.js";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
+// Per-turn transcript text caps (code points) so transcript responses stay bounded.
+export const TRANSCRIPT_TEXT_LIMIT = 8000;
+// Unicode-safe truncation by code points, never splitting a surrogate pair.
+export function truncateCodePoints(s: string, n = TRANSCRIPT_TEXT_LIMIT): string {
+  return Array.from(s).slice(0, n).join("").trim();
+}
 // Match the previous Python JSON serialization so existing snapshots deduplicate.
 export function legacyJSON(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(legacyJSON).join(", ") + "]";
@@ -158,4 +164,58 @@ export function parse(path: string) {
     events: [...unique.values()],
     issues: [...issues].sort(),
   };
+}
+
+/** On-demand transcript extraction for Codex sessions (never persisted).
+ *  Codex event_msg rows carry the user prompt text (user_message) and the
+ *  model reply (agent_message) per turn_id. Codex sources record no thinking
+ *  text and no per-turn tool-call text; the caller reports those honestly via
+ *  missing_fields instead of fabricating them.
+ */
+export function extractCodexTranscript(path: string): TranscriptTurn[] {
+  const turns = new Map<string, TranscriptTurn>();
+  let lastTurnId: string | null = null;
+  const get = (tid: string | null): TranscriptTurn | null => {
+    if (!tid || !ID.test(tid)) return null;
+    let t = turns.get(tid);
+    if (!t) {
+      t = { turn_id: tid, prompt: null, thinking: null, models: [], tool_calls: [] };
+      turns.set(tid, t);
+    }
+    return t;
+  };
+  for (const line of lines(path)) {
+    if (!line.toString().trim()) continue;
+    try {
+      const row = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(line),
+      );
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const p = row.payload;
+      if (!p || typeof p !== "object" || Array.isArray(p)) continue;
+      const tid =
+        typeof p.turn_id === "string" && ID.test(p.turn_id)
+          ? ((lastTurnId = p.turn_id), p.turn_id)
+          : lastTurnId;
+      if (row.type === "turn_context") {
+        const t = get(tid);
+        if (
+          t &&
+          typeof p.model === "string" &&
+          p.model.trim() &&
+          !t.models.includes(p.model)
+        )
+          t.models.push(truncateCodePoints(p.model, 120));
+        continue;
+      }
+      if (row.type === "event_msg" && p.type === "user_message") {
+        const t = get(tid);
+        if (t && t.prompt === null && typeof p.message === "string" && p.message.trim())
+          t.prompt = truncateCodePoints(p.message);
+      }
+    } catch {
+      // Unreadable line: skip it; the store reports degradation honestly.
+    }
+  }
+  return [...turns.values()];
 }

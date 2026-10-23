@@ -122,12 +122,16 @@ test("Slice 6 Detail View: style.css ports the prototype detail-page classes", (
   assert.ok(css.includes("#DC2626"), "slow-op red accent must be defined");
 });
 
-test("Slice 6 Detail View: index.html bumps the cache-busting stamp to 143 for both assets", () => {
+test("Slice 6 Detail View: index.html keeps one shared cache-busting stamp for both assets", () => {
   const html = read("../public/index.html");
   const cssV = html.match(/style\.css\?v=(\d+)/)![1];
   const jsV = html.match(/app\.js\?v=(\d+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "143", "version stamp must be bumped 142 → 143");
+  assert.equal(
+    cssV,
+    "144",
+    "version stamp must advance with each visual slice (143 → 144 in slice 3)",
+  );
 });
 
 test("Slice 6 Detail View: GLOSSARY.md documents the autonomy formula", () => {
