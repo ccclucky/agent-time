@@ -37,7 +37,7 @@ writeFileSync(
     .map(JSON.stringify)
     .join("\n"),
 );
-const args = ["exec", "--yes", "--package", archive, "--", "agenttime"];
+const args = ["exec", "--yes", "--package", archive, "--", "agent-time"];
 let child;
 try {
   const imported = spawnSync(
@@ -96,8 +96,20 @@ try {
   const directories = await (await fetch(address + "/api/directories")).json();
   assert.equal(directories.directories.length, 6);
   assert(directories.directories.every((d) => !d.enabled));
+  const aliasCheck = spawnSync(
+    npm,
+    ["exec", "--yes", "--package", archive, "--", "agenttime", "--help"],
+    {
+      cwd: dir,
+      env,
+      encoding: "utf8",
+      timeout: 30000,
+      shell: process.platform === "win32",
+    },
+  );
+  assert.equal(aliasCheck.status, 0, aliasCheck.stderr);
   console.log(
-    "PASS: clean-directory npm exec, CLI import, default server, assets, report and disabled sources",
+    "PASS: clean-directory npm exec, CLI import, default server, assets, report, disabled sources and alias compatibility",
   );
 } finally {
   // npm exec wraps the server process. Terminate its child first on POSIX.

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   writeFileSync,
   readFileSync,
   copyFileSync,
@@ -22,7 +23,7 @@ import { legacyJSON, hash, timestamp } from "../src/codex.js";
 import { makeServer } from "../src/server.js";
 const resources: { dir: string; store: Store }[] = [];
 function setup() {
-  const dir = mkdtempSync(path.join(tmpdir(), "agenttime-test-")),
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "agenttime-test-"))),
     store = new Store(path.join(dir, "data.sqlite3")),
     home = path.join(dir, "home");
   mkdirSync(home);

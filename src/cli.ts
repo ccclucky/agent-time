@@ -27,7 +27,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagenttime [serve] [--port 8765] [--db PATH]\nagenttime import --agent codex|claude FILE_OR_DIRECTORY [--db PATH]\nagenttime refresh [--db PATH]\n\n默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
