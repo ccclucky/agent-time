@@ -47,7 +47,8 @@ jobs:
       - name: Build package & pre-publish smoke test
         id: pack
         run: |
-          TARBALL=$(npm pack)
+          npm pack
+          TARBALL=$(ls -1 agenttime-*.tgz | tail -n 1)
           echo "Generated tarball: $TARBALL"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           node scripts/package-smoke.mjs "$TARBALL"
