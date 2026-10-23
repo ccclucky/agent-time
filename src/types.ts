@@ -67,6 +67,7 @@ export interface Turn {
   response_gap_ms: number | null;
   period_ms?: number | null;
   agent_id?: string | null;
+  subagents?: SubagentSummary[];
   breakdown?: TurnBreakdown | null;
 }
 

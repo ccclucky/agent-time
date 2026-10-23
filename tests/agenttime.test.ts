@@ -830,11 +830,17 @@ test("Claude scanner excludes subagent files and folders", () => {
 });
 test("Claude subagents, mixed sessions and competing human branches reject whole snapshots", () => {
   const { store, dir } = setup();
-  for (const rows of [
-    [
+  store.importFile(
+    file(dir, [
       ...claudeRows(),
       claudeRow("assistant", "side", 20, { isSidechain: true }),
-    ],
+    ]),
+    null,
+    "claude",
+  );
+  assert.equal(store.sessions().length, 1);
+
+  for (const rows of [
     [...claudeRows(), claudeRow("user", "mixed", 20, { sessionId: "other" })],
     [
       ...claudeRows(),
@@ -849,7 +855,6 @@ test("Claude subagents, mixed sessions and competing human branches reject whole
     ],
   ])
     assert.throws(() => store.importFile(file(dir, rows), null, "claude"));
-  assert.equal(store.sessions().length, 0);
 });
 test("Claude multiple rounds and model switches preserve each model without duplicating time", () => {
   const { store, dir } = setup();
@@ -873,4 +878,5 @@ test("Claude multiple rounds and model switches preserve each model without dupl
   assert.deepEqual(turns[1].models, ["model-2"]);
   assert.equal(summary(store).processing_ms, 15 * 60000);
 });
+
 
