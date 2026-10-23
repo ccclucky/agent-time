@@ -76,6 +76,8 @@ const state = {
   selectedTurnId: null,
   zoomStartPct: 0,
   zoomEndPct: 100,
+  // 首页接入工具筛选（"all" 或当前报告中实际存在的 agent 名）
+  overviewAgent: "all",
   // Turn Inspector 抽屉的按需会话文本缓存（session_id → {status, data?, message?}）
   transcriptCache: new Map(),
 };
@@ -651,7 +653,7 @@ function topSessionsCard(model) {
           <span class="rank-num">${String(idx + 1).padStart(2, "0")}</span>
           <div class="rank-main">
             <span class="rank-title">${h(s.title || s.project)}</span>
-            <span class="rank-subline">${h(s.project)} · ${h(s.id.slice(0, 16))}</span>
+            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text">${h(s.project)} · ${h(s.id.slice(0, 16))}</span></span>
           </div>
           <span class="rank-duration">${fmt(duration)}</span>
         </div>
@@ -790,22 +792,61 @@ function streamMiniBarHtml(s, maxDuration) {
     </div>`;
 }
 
+// ========================================================
+// 接入工具筛选 (Fix: "首页展示的内容都不知道是哪个 harness 的")
+// 只列出当前报告中实际存在的 agent；筛选收窄会话流、TOP 3 榜与
+// 视口操作分布聚合（在 sessionSummaries 进入视口聚合前过滤），
+// 热力图与视口拖拽逻辑保持全量口径不受影响
+// ========================================================
+function availableAgents() {
+  const present = [...new Set((state.report.sessions || []).map((s) => s.agent))];
+  const order = ["Codex", "Claude Code", "Pi"];
+  return [
+    ...order.filter((a) => present.includes(a)),
+    ...present.filter((a) => !order.includes(a)),
+  ];
+}
+
+function effectiveOverviewAgent() {
+  const agents = availableAgents();
+  return agents.includes(state.overviewAgent) ? state.overviewAgent : "all";
+}
+
+function agentFilterChips() {
+  const agents = availableAgents();
+  // 单一接入来源时"全部 / 唯一来源"两枚芯片是噪音，直接省略
+  if (agents.length < 2) return "";
+  const active = effectiveOverviewAgent();
+  const chip = (key, html) =>
+    `<button class="filter-chip agent-chip${active === key ? " active" : ""}" data-agent-chip="${h(key)}" aria-pressed="${active === key}">${html}</button>`;
+  return `
+    <div class="agent-filter-row" role="group" aria-label="按接入工具筛选">
+      ${chip("all", "全部")}
+      ${agents.map((a) => chip(a, `${agentMark(a)}<span>${h(a)}</span>`)).join("")}
+    </div>
+  `;
+}
+
 function sessionStream() {
+  const agent = effectiveOverviewAgent();
   const rows = (state.report.sessions || [])
+    .filter((s) => agent === "all" || s.agent === agent)
     .slice()
     .sort((a, b) => sessionClippedPeriodMs(b) - sessionClippedPeriodMs(a));
   const maxDuration = Math.max(0, ...rows.map(sessionClippedPeriodMs));
 
   return `
+    ${agentFilterChips()}
     <div class="session-stream-head">
       <h3>全部会话流 (点击任一卡片跳转至独立详情页)</h3>
-      <span class="sub">共 ${rows.length} 个会话</span>
+      <span class="sub">共 ${rows.length} 个会话${agent !== "all" ? ` · ${h(agent)}` : ""}</span>
     </div>
     ${rows
       .map(
         (s) => `
       <div class="session-stream-card" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
         <div class="stream-left">
+          ${agentMark(s.agent)}
           <span class="stream-project-pill" title="${h(s.project)}">${h(s.project)}</span>
           <strong class="stream-title">${h(s.title || s.project)}</strong>
           <span class="stream-turns-pill">${s.turns.length} 轮交互</span>
@@ -819,6 +860,11 @@ function sessionStream() {
     `,
       )
       .join("")}
+    ${
+      rows.length
+        ? ""
+        : `<div class="s1-empty">当前筛选的接入工具在此时间范围内没有会话，点击上方"全部"恢复完整列表。</div>`
+    }
   `;
 }
 
@@ -1137,7 +1183,7 @@ function sessionDetail() {
       <button class="btn-back-home" data-action="back-overview" aria-label="返回总览">
         <span>← 返回总览</span>
       </button>
-      <span class="detail-id-mono">${h(s.agent)} · ${h(s.id)}</span>
+      <span class="detail-id-mono">${agentMark(s.agent)}<span>${h(s.agent)} · ${h(s.id)}</span></span>
       <span class="detail-status-pill ${status.cls}">${h(status.label)}</span>
     </div>
     <h2 class="detail-title">${h(s.title || s.project)}</h2>
@@ -1253,6 +1299,7 @@ function turnCapsuleSection(s) {
     );
     return `
       <div class="turn-capsule${state.selectedTurnId === t.id ? " active" : ""}" data-turn-capsule="${h(t.id)}" role="button" tabindex="0" aria-label="检视轮次 #${i + 1}">
+        ${agentMark(s.agent)}
         <span class="capsule-no">轮次 #${i + 1}</span>
         <span class="capsule-title">${h(capsuleTitle(t))}${hasSlow ? '<em class="capsule-slow-flag">含 &gt;15s 慢操作</em>' : ""}</span>
         <div class="capsule-bar">${capsuleBarHtml(t)}</div>
@@ -1348,6 +1395,9 @@ function openDrawer(turn, session) {
   if (!d) return;
 
   const turnIndex = session.turns.findIndex((t) => t.id === turn.id);
+  // 抽屉标题旁的接入工具徽标：一眼可见这一轮来自哪个 harness
+  const markEl = $("#drawerAgentMark");
+  if (markEl) markEl.innerHTML = agentMark(session.agent);
   const titleEl = $("#drawerTurnTitle");
   if (titleEl) {
     titleEl.textContent =
@@ -1680,14 +1730,26 @@ function overview() {
   if (!s.sessions) return noData();
 
   const model = computeTimelineModel();
+  // 接入工具筛选：只收窄双列榜（TOP 3 + 操作分布）的聚合口径，
+  // 在 sessionSummaries 进入视口聚合前过滤；热力图与视口拖拽不受影响
+  const agent = effectiveOverviewAgent();
+  const scopedModel =
+    agent === "all"
+      ? model
+      : (() => {
+          const summaries = model.sessionSummaries.filter(
+            (i) => i.session.agent === agent,
+          );
+          return { ...model, sessionSummaries: summaries, visibleSessions: summaries };
+        })();
 
   return `
     ${stats()}
     ${funnel()}
     ${timeline(model)}
     <div class="s1-grid">
-      ${topSessionsCard(model)}
-      ${viewportBreakdownCard(model)}
+      ${topSessionsCard(scopedModel)}
+      ${viewportBreakdownCard(scopedModel)}
     </div>
     ${sessionStream()}
   `;
@@ -1721,7 +1783,7 @@ function table(rows) {
                     <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono); margin-top:2px;">${subTitle}</span>
                   </button>
                 </td>
-                <td><span class="tag">${h(s.agent)}</span></td>
+                <td class="agent-cell">${agentMark(s.agent)}<span class="tag">${h(s.agent)}</span></td>
                 <td style="font-weight:700; font-family:var(--font-mono);">${fmt(s.measured_turns ? s.period_ms : null)}</td>
                 <td><span class="tag ${s.measured_turns === s.turns.length ? "" : "warn"}">${s.measured_turns}/${s.turns.length}</span></td>
                 <td style="color:var(--fg-muted); font-family:var(--font-mono);">${h(stamp(lastAt))}</td>
@@ -1748,7 +1810,7 @@ function filtered() {
 
 function sessions() {
   return `
-    <div class="panelhead" style="margin-bottom:12px;">
+    <div class="panelhead">
       <div style="display:flex; gap:10px; align-items:center; flex:1;">
         <input id="search" type="search" aria-label="搜索会话" placeholder="搜索项目、工具或会话 ID…" style="flex:1; max-width:360px;">
         <select id="sort" aria-label="会话排序">
@@ -1788,7 +1850,7 @@ function compare() {
   }
 
   return `
-    <div class="demo" style="margin-bottom:16px;">
+    <div class="demo">
       <strong>口径提示</strong>
       <span>当前接入 Codex、Claude Code 与 Pi，按模型上下文分组，耗时更短不等于质量更优。</span>
     </div>
@@ -1874,7 +1936,7 @@ function directoryCards() {
 
 function sources() {
   return `
-    <div class="demo" style="margin-bottom:16px;">
+    <div class="demo">
       <strong>隐私安全承诺</strong>
       <span>${h(state.sources.privacy)} 仅扫描会话历史事件，不读取凭据，不采集 Prompt 源码内容。</span>
     </div>
@@ -2131,6 +2193,14 @@ document.addEventListener("click", async (e) => {
     const s = detailSession();
     const t = s && s.turns.find((x) => x.id === capsule.dataset.turnCapsule);
     if (s && t) openDrawer(t, s);
+    return;
+  }
+
+  // 0.6 接入工具筛选芯片：收窄会话流 / TOP 3 榜 / 视口操作分布
+  const chip = e.target.closest("[data-agent-chip]");
+  if (chip) {
+    state.overviewAgent = chip.dataset.agentChip;
+    render();
     return;
   }
 

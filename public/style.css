@@ -388,6 +388,27 @@ h1#title {
   gap: 20px;
 }
 
+/* 页面主体：统一垂直节奏。此前各模块间距全靠零散 margin-bottom（漏斗/时间轴/
+   双列榜之间甚至为 0，直接贴边），首页模块被压成一整块。改为 flex 纵向布局，
+   桌面端模块间 ≥24px，窄屏按比例收敛；直接子元素的遗留 margin-bottom 一律
+   清零，杜绝 margin 与 gap 叠加出忽宽忽窄的不规则节奏。 */
+#content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+#content > * {
+  margin-bottom: 0;
+}
+
+@media (max-width: 960px) {
+  #content {
+    gap: 16px;
+  }
+}
+
 .demo {
   display: flex;
   align-items: center;
@@ -946,6 +967,110 @@ h1#title {
   white-space: nowrap;
 }
 
+/* ========================================================
+   接入工具徽标 (agentMark) 与筛选芯片行
+   内联 SVG 圆角单字徽标：Codex 深石板 / Claude Code 陶土橙日光纹 / Pi 深亚麻灰
+   复用现有设计令牌，不引入刺眼新蓝色（本地工具蓝 --color-mcp 除外）
+   ======================================================== */
+.agent-mark {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  flex-shrink: 0;
+  border-radius: 4.5px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.agent-mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.agent-mark-codex {
+  color: #2F3A45; /* 深石板 */
+}
+
+.agent-mark-claude {
+  color: var(--state-work); /* 陶土橙 */
+}
+
+.agent-mark-pi {
+  color: var(--state-idle); /* 深亚麻灰 */
+}
+
+/* TOP 3 榜副行：徽标 + 项目/ID 单行省略 */
+.rank-subline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rank-subline .agent-mark {
+  width: 16px;
+  height: 16px;
+}
+
+.rank-subline-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 会话流卡片左侧徽标与胶囊行徽标的间距 */
+.turn-capsule .agent-mark {
+  margin-right: 8px;
+}
+
+/* 会话表"工具接入"列：徽标 + 标签同行 */
+.agent-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* 通用筛选芯片（时间轴"重置全时间段"与接入工具筛选共用基类） */
+.filter-chip {
+  border: 1px solid var(--line);
+  background: #FFFFFF;
+  border-radius: 9999px;
+  padding: 4px 12px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-body);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  border-color: var(--state-work);
+  color: var(--state-work);
+}
+
+.filter-chip.active {
+  background: var(--state-work-light);
+  border-color: var(--state-work-border);
+  color: var(--state-work-border);
+}
+
+.agent-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-filter-row .agent-mark {
+  width: 16px;
+  height: 16px;
+}
+
 /* 会话流迷你条：以列表内最长会话为基准的相对时长占比条；
    独占整行、min-width:0、fill 保底 2% 可见宽度，杜绝 Flex 挤压成 0px 细线 */
 .stream-mini-bar {
@@ -1020,11 +1145,17 @@ h1#title {
   min-width: 0;
 }
 
-/* 会话主题可能较长：超出抽屉宽度时省略号截断，完整内容悬停可见 */
+/* 会话主题可能较长：超出抽屉宽度时省略号截断，完整内容悬停可见。
+   徽标 (#drawerAgentMark) 保持原尺寸不参与省略 */
 .drawer-title span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.drawer-title #drawerAgentMark {
+  overflow: visible;
+  flex-shrink: 0;
 }
 
 .drawer-close {
@@ -1500,12 +1631,21 @@ input[type="search"] {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 徽标之后的 "agent · id" 文本整体省略号截断 */
+.detail-id-mono > span:last-child {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-  text-align: center;
 }
 
 .detail-status-pill {
