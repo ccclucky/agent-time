@@ -194,8 +194,10 @@ for (const [name, events, status, elapsed] of [
     assert.equal(t.status, status);
     assert.equal(t.elapsed_ms, elapsed);
     assert.equal(summary(store).processing_ms, elapsed);
-    assert.equal(t.work_ms, null);
-    assert.equal(t.human_ms, null);
+    // Codex turns now carry three-state timing: no tool or review-wait events
+    // means work equals elapsed; unmeasured turns stay null.
+    assert.equal(t.work_ms, elapsed);
+    assert.equal(t.human_ms, elapsed === null ? null : 0);
   });
 for (const extra of [
   { source: "unknown" },
@@ -230,7 +232,7 @@ test("corruption and unassociated events warn without inventing data", () => {
     p = file(dir, [...rows(), event("task_complete", 10, "bad id")]);
   writeFileSync(p, readFileSync(p) + "not JSON PRIVATE\n");
   store.importFile(p);
-  assert.equal(store.sessions()[0].issues.length, 2);
+  assert.equal(store.sessions()[0].issues.length, 3);
   assert.equal(summary(store).turns, 1);
   assert(!JSON.stringify(store.sessions()).includes("PRIVATE"));
 });
@@ -259,7 +261,8 @@ test("multiple models never multiply a round duration", () => {
       })),
     ]),
   );
-  assert.deepEqual(store.sessions()[0].turns[0].models, ["modelA", "modelB"]);
+  // Only the first turn_context per turn becomes a model event.
+  assert.deepEqual(store.sessions()[0].turns[0].models, ["modelA"]);
   assert.equal(summary(store).processing_ms, 600000);
 });
 test("empty data is unavailable, not zero", () => {

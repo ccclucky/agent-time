@@ -87,7 +87,9 @@ zst("parse reads .jsonl.zst identically to the uncompressed original", () => {
 zst("importFile stores .jsonl.zst events idempotently", () => {
   const { dir, store } = setup(),
     p = zstFile(dir, rows());
-  assert.deepEqual(store.importFile(p), { events: 2, issues: [] });
+  const { events, issues } = store.importFile(p);
+  assert.equal(events, 2);
+  assert.ok(issues.some((i: string) => /三态切分/.test(i)));
   store.importFile(p);
   assert.equal(store.sessions().length, 1);
   assert.equal(summary(store).processing_ms, 600000);

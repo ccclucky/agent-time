@@ -60,7 +60,13 @@ export function groupSubagents(
   return result;
 }
 
-export function calculateClaudeTiming(
+/**
+ * Three-state timing shared by Claude Code and Codex. Both adapters emit the
+ * same event vocabulary (turn boundaries, tool_use/tool_result pairs keyed by
+ * tool_id, optional review_wait_start/end). With no review-wait events it
+ * degrades naturally: review_wait_ms = 0 and work = elapsed - tool time.
+ */
+export function calculateEventTiming(
   entries: Event[],
   start: number,
   end: number,
@@ -469,8 +475,13 @@ export class Store {
       let review_wait_ms: number | null = null;
       let breakdown: Turn["breakdown"] = null;
 
-      if (elapsed !== null && start !== null && end !== null && sessionObj.agent === "Claude Code") {
-        const timing = calculateClaudeTiming(entries, start, end, elapsed);
+      if (
+        elapsed !== null &&
+        start !== null &&
+        end !== null &&
+        (sessionObj.agent === "Claude Code" || sessionObj.agent === "Codex")
+      ) {
+        const timing = calculateEventTiming(entries, start, end, elapsed);
         work_ms = timing.work_ms;
         review_wait_ms = timing.review_wait_ms;
         breakdown = timing.breakdown;

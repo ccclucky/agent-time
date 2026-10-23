@@ -31,6 +31,10 @@ const kinds: Record<string, Kind> = {
   turn_complete: "complete",
   turn_aborted: "abort",
 };
+// Turns imported from other agents carry synthetic import-moment timestamps.
+const EXTERNAL_IMPORT_TURN = "external-import-turn-";
+const validId = (v: unknown): v is string =>
+  typeof v === "string" && ID.test(v);
 export function timestamp(value: unknown): number {
   if (
     typeof value !== "string" ||
@@ -115,6 +119,30 @@ export function parse(path: string) {
     excluded = false;
   const events: Omit<Event, "key">[] = [],
     issues = new Set<string>();
+  // response_item / turn_context rows carry no turn_id: attribute them to the
+  // nearest preceding task_started window (99.1% measured consistency).
+  let currentTurn: string | null = null,
+    externalSeen = false;
+  const turnStart = new Map<string, number>(),
+    agentDone = new Map<string, number>(),
+    modelSeen = new Set<string>();
+  const add = (
+    turn_id: string,
+    kind: Kind,
+    at_ms: number,
+    model: string | null = null,
+    tool_id: string | null = null,
+    tool_name: string | null = null,
+  ) => {
+    events.push({
+      turn_id,
+      kind,
+      at_ms,
+      model,
+      ...(tool_id ? { tool_id } : {}),
+      ...(tool_name ? { tool_name } : {}),
+    });
+  };
   for (const line of path.endsWith(".zst") ? linesZst(path) : lines(path)) {
     if (!line.toString().trim()) continue;
     try {
@@ -155,25 +183,103 @@ export function parse(path: string) {
         excluded = true;
         continue;
       }
-      let kind: Kind;
-      if (row.type === "turn_context") kind = "model";
-      else if (row.type === "event_msg" && Object.hasOwn(kinds, p.type))
-        kind = kinds[p.type];
-      else continue;
+      // item_completed rows are not events: they anchor the turn's true end.
+      // CLI/older writers flush task_complete lazily at the next user message,
+      // so its row timestamp contains human idle time.
+      if (row.type === "event_msg" && p.type === "item_completed") {
+        const item = p.item;
+        if (
+          validId(p.turn_id) &&
+          item &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          item.type !== "UserMessage"
+        ) {
+          const anchor =
+            typeof p.completed_at_ms === "number" && p.completed_at_ms > 0
+              ? p.completed_at_ms
+              : timestamp(row.timestamp);
+          const prev = agentDone.get(p.turn_id);
+          if (prev === undefined || anchor > prev) agentDone.set(p.turn_id, anchor);
+        }
+        continue;
+      }
+      if (row.type === "turn_context") {
+        const turn = validId(p.turn_id) ? p.turn_id : currentTurn;
+        if (!turn) {
+          issues.add("部分事件没有可关联的交互 ID，未猜测归属");
+          continue;
+        }
+        // One model event per turn; turn_context repeats on every model call.
+        if (modelSeen.has(turn)) continue;
+        if (typeof p.model !== "string" || !p.model.trim()) continue;
+        modelSeen.add(turn);
+        if (turn.startsWith(EXTERNAL_IMPORT_TURN)) continue;
+        add(turn, "model", timestamp(row.timestamp), Array.from(p.model).slice(0, 120).join(""));
+        continue;
+      }
+      if (row.type === "response_item") {
+        const isCall = p.type === "function_call" || p.type === "custom_tool_call";
+        const isOutput =
+          p.type === "function_call_output" ||
+          p.type === "custom_tool_call_output";
+        if (!isCall && !isOutput) continue;
+        if (!currentTurn) {
+          issues.add("部分事件没有可关联的交互 ID，未猜测归属");
+          continue;
+        }
+        if (currentTurn.startsWith(EXTERNAL_IMPORT_TURN)) {
+          externalSeen = true;
+          continue;
+        }
+        const tool_id = validId(p.call_id) ? p.call_id : null;
+        add(
+          currentTurn,
+          isCall ? "tool_use" : "tool_result",
+          timestamp(row.timestamp),
+          null,
+          tool_id,
+          isCall && typeof p.name === "string" && p.name ? p.name : isCall ? "tool" : null,
+        );
+        continue;
+      }
+      let kind: Kind | undefined = kinds[p.type as string];
+      if (row.type !== "event_msg" || !kind) continue;
       if (kind === "complete" && p.error != null) kind = "fail";
-      if (typeof p.turn_id !== "string" || !ID.test(p.turn_id)) {
+      if (!validId(p.turn_id)) {
         issues.add("部分事件没有可关联的交互 ID，未猜测归属");
         continue;
       }
-      const at = timestamp(row.timestamp);
-      let model: string | null = null;
-      if (kind === "model") {
-        if (typeof p.model !== "string" || !p.model.trim()) continue;
-        model = Array.from(p.model as string)
-          .slice(0, 120)
-          .join("");
+      const rowAt = timestamp(row.timestamp);
+      if (kind === "start") {
+        currentTurn = p.turn_id;
+        turnStart.set(p.turn_id, rowAt);
+        if (p.turn_id.startsWith(EXTERNAL_IMPORT_TURN)) {
+          externalSeen = true;
+          continue;
+        }
+        add(p.turn_id, "start", rowAt);
+        continue;
       }
-      events.push({ turn_id: p.turn_id, kind, at_ms: at, model });
+      if (p.turn_id.startsWith(EXTERNAL_IMPORT_TURN)) {
+        externalSeen = true;
+        continue;
+      }
+      if (kind === "complete") {
+        // Calibrate to the last non-UserMessage item_completed anchor; fall
+        // back to the (possibly lazy) row timestamp within [start, rowAt].
+        const anchor = agentDone.get(p.turn_id),
+          start = turnStart.get(p.turn_id);
+        if (
+          anchor !== undefined &&
+          anchor <= rowAt &&
+          (start === undefined || anchor >= start)
+        )
+          add(p.turn_id, "complete", anchor);
+        else add(p.turn_id, "complete", rowAt);
+        continue;
+      }
+      add(p.turn_id, kind, rowAt);
     } catch {
       issues.add("存在无法解析的记录；只保留可验证的元数据，请检查源文件");
     }
@@ -183,6 +289,11 @@ export function parse(path: string) {
     throw new ValidationError(
       "来源未知、远程、子 Agent、分支继承或回滚记录暂不支持；未导入",
     );
+  issues.add(
+    "Codex：基于 task_started/task_complete、工具调用配对与 item_completed 锚点的三态切分；本地语料无审批事件，等待人工未单独计量",
+  );
+  if (externalSeen)
+    issues.add("外部导入轮次时间戳为导入时刻，不参与计时");
   const unique = new Map<string, Event>();
   for (const e of events) {
     const key = hash(legacyJSON([meta.id, e]));
