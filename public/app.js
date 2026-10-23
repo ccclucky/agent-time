@@ -810,6 +810,10 @@ function openDrawer(turn, session) {
   toolsList.sort((a, b) => b.duration_ms - a.duration_ms);
 
   // 可选分项（如 Pi 的事件流切分）：仅在数据落盘存在时渲染该小节
+  const unclassifiedMs = turn.breakdown?.unclassified_delay_ms ?? null;
+  const waitCaption = unclassifiedMs !== null
+    ? "来源未落盘审批事件 · 无法归因"
+    : "授权审批与决策对齐卡点";
   const modelBreakdown = (turn.breakdown?.model_api_breakdown ?? [])
     .slice()
     .sort((a, b) => b.duration_ms - a.duration_ms);
@@ -842,6 +846,19 @@ function openDrawer(turn, session) {
     </div>
   `
     : "";
+
+  const unclassifiedHtml =
+    unclassifiedMs !== null && unclassifiedMs > 0
+      ? `
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid var(--line); border-radius:8px; padding:7px 12px;">
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">未分类延迟 (Unclassified)</span>
+        <span class="tool-time">${fmt(unclassifiedMs)}</span>
+      </div>
+      <div style="font-size:var(--text-xs); color:var(--fg-muted); margin-top:4px;">工具就绪至实际开始的间隔；来源未落盘审批事件，可能含审批等待、调度或限流，不计入等待人审阅。</div>
+    </div>
+  `
+      : "";
 
   const toolsHtml = toolsList.length
     ? toolsList.map((t, idx) => {
@@ -891,7 +908,7 @@ function openDrawer(turn, session) {
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);">
           <div class="drawer-kpi-title">等待人审阅 (Review Wait)</div>
           <div class="drawer-kpi-val">${wait !== null ? fmt(wait) : "—"}</div>
-          <div class="drawer-kpi-sub">授权审批与决策对齐卡点</div>
+          <div class="drawer-kpi-sub">${waitCaption}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);">
           <div class="drawer-kpi-title">单轮壁钟时长 (Wall Time)</div>
@@ -903,6 +920,9 @@ function openDrawer(turn, session) {
 
     <!-- 模型与思考等级可选分项（仅数据存在时渲染） -->
     ${breakdownHtml}
+
+    <!-- Pi 未分类延迟（工具就绪到实际开始，无法归因为人审） -->
+    ${unclassifiedHtml}
 
     <!-- 详细脚本与慢工具清单 -->
     <div>

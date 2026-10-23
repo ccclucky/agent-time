@@ -188,10 +188,10 @@ test("Pi: maps a full turn sequence (model/tool_use/tool_result/terminal) with e
 
 test("Pi: terminal stopReason maps length->complete, aborted->abort, error->fail; toolUse/deferred keep the turn open", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
-  const mk = (id: string, stop: string, minute: number) => ({
+  const mk = (id: string, stop: string, minute: number, parentId: string | null) => ({
     type: "message",
     id,
-    parentId: null,
+    parentId,
     timestamp: `2026-10-09T22:0${minute}:00.000Z`,
     message: {
       role: "assistant",
@@ -216,10 +216,10 @@ test("Pi: terminal stopReason maps length->complete, aborted->abort, error->fail
       timestamp: "2026-10-09T22:01:00.000Z",
       message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: Date.parse("2026-10-09T22:01:00.000Z") },
     },
-    mk("a1", "toolUse", 2),
-    mk("a2", "deferred", 3),
-    mk("a3", "pending", 4),
-    mk("a4", "length", 5),
+    mk("a1", "toolUse", 2, "u1"),
+    mk("a2", "deferred", 3, "a1"),
+    mk("a3", "pending", 4, "a2"),
+    mk("a4", "length", 5, "a3"),
   ]);
   const data = parsePi(p);
   assert.deepEqual(
@@ -244,7 +244,7 @@ test("Pi: terminal stopReason maps length->complete, aborted->abort, error->fail
       timestamp: "2026-10-09T22:01:00.000Z",
       message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: Date.parse("2026-10-09T22:01:00.000Z") },
     },
-    mk("a9", "aborted", 2),
+    mk("a9", "aborted", 2, "u9"),
   ]);
   const d2 = parsePi(p2);
   assert.deepEqual(
@@ -267,7 +267,7 @@ test("Pi: terminal stopReason maps length->complete, aborted->abort, error->fail
       timestamp: "2026-10-09T22:01:00.000Z",
       message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: Date.parse("2026-10-09T22:01:00.000Z") },
     },
-    mk("a8", "error", 2),
+    mk("a8", "error", 2, "u8"),
   ]);
   const d3 = parsePi(p3);
   assert.deepEqual(
@@ -605,7 +605,7 @@ test("Pi: skips non-user-flow entries and unknown types; bad lines become issues
       JSON.stringify({
         type: "message",
         id: "u2",
-        parentId: null,
+        parentId: "a1",
         timestamp: "2026-10-09T22:04:05.000Z",
         message: {
           role: "user",
@@ -827,10 +827,12 @@ test("Pi: imports through Store.importFile into sessions() with end_ms/thinking_
   assert.equal(turn.status, "completed");
   assert.equal(turn.start_ms, T("2026-10-09T22:03:05.000Z"));
   assert.equal(turn.end_ms, T("2026-10-09T22:03:20.000Z"));
-  // Three-state split: model 1904 + 2600, tool 27 -> work 4531; approval
-  // interval [response end 22:03:17.362, tool start 22:03:17.367) -> 5ms.
+  // Three-state split: model 1904 + 2600, tool 27 -> work 4531; the
+  // [response end 22:03:17.362, tool start 22:03:17.367) gap has no approval
+  // evidence in Pi sources, so it is unclassified delay, not review wait.
   assert.equal(turn.work_ms, 4531);
-  assert.equal(turn.review_wait_ms, 5);
+  assert.equal(turn.review_wait_ms, null);
+  assert.equal(turn.breakdown?.unclassified_delay_ms, 5);
   assert.deepEqual(turn.models.sort(), ["dp-llm/Qwen3.6-35B-A3B", "z-ai/glm-5.3"]);
 
   const model = turn.events.find(
@@ -929,10 +931,10 @@ test("Pi: session_info names the session; latest wins and an empty name clears i
     timestamp: "2026-10-10T10:00:00.000Z",
     cwd: "/Users/demo/work/titled_project",
   };
-  const userTurn = (at: string) => ({
+  const userTurn = (at: string, parentId: string | null) => ({
     type: "message",
     id: "u" + at,
-    parentId: null,
+    parentId,
     timestamp: at,
     message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: Date.parse(at) },
   });
@@ -941,7 +943,7 @@ test("Pi: session_info names the session; latest wins and an empty name clears i
       header,
       { type: "session_info", id: "si1", parentId: null, timestamp: "2026-10-10T10:01:00.000Z", name: "  重构\n解析器  " },
       { type: "session_info", id: "si2", parentId: "si1", timestamp: "2026-10-10T10:02:00.000Z", name: "Pi 解析器重构" },
-      userTurn("2026-10-10T10:03:00.000Z"),
+      userTurn("2026-10-10T10:03:00.000Z", "si2"),
     ]),
   );
   assert.equal(named.session.title, "Pi 解析器重构");
@@ -950,14 +952,14 @@ test("Pi: session_info names the session; latest wins and an empty name clears i
       { ...header, id: "01ab0002-0000-4000-8000-000000000002" },
       { type: "session_info", id: "si1", parentId: null, timestamp: "2026-10-10T11:01:00.000Z", name: "旧名字" },
       { type: "session_info", id: "si2", parentId: "si1", timestamp: "2026-10-10T11:02:00.000Z", name: "   " },
-      userTurn("2026-10-10T11:03:00.000Z"),
+      userTurn("2026-10-10T11:03:00.000Z", "si2"),
     ]),
   );
   assert.equal(cleared.session.title, null);
   const unnamed = parsePi(
     writeSession(tmpDir, "2026-10-10T12-00-00-000Z_01ab0003-0000-4000-8000-000000000003.jsonl", [
       { ...header, id: "01ab0003-0000-4000-8000-000000000003" },
-      userTurn("2026-10-10T12:03:00.000Z"),
+      userTurn("2026-10-10T12:03:00.000Z", null),
     ]),
   );
   assert.equal(unnamed.session.title, null);
@@ -975,5 +977,97 @@ test("Pi: session_info names the session; latest wins and an empty name clears i
   assert.equal(row.title, "Pi 解析器重构");
   assert.equal(store.sessions()[0].title, "Pi 解析器重构");
   store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: reconstructs the active branch — abandoned subtree is excluded with an issue", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  // u1 -> a1(complete); abandoned branch u2 -> a2 hangs off a1; the user
+  // actually resumed from a1 with u3 -> a3, so the active root-to-leaf path
+  // is u1 -> a1 -> u3 -> a3 and u2/a2 are abandoned.
+  const p = writeSession(tmpDir, "branch.jsonl", [
+    { type: "session", version: 3, id: "aaaabbbb-cccc-dddd-eeee-ffff00000051", timestamp: "2026-10-09T22:00:00.000Z", cwd: "/Users/demo/work/my_project" },
+    { type: "message", id: "u1", parentId: null, timestamp: "2026-10-09T22:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "old" }], timestamp: T("2026-10-09T22:01:00.000Z") } },
+    { type: "message", id: "a1", parentId: "u1", timestamp: "2026-10-09T22:02:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "x" }], model: "m", stopReason: "stop", timestamp: T("2026-10-09T22:01:30.000Z"), durationMs: 30000 } },
+    // Abandoned: user asked u2, model answered a2, then the user navigated
+    // back to a1 and took a different path.
+    { type: "message", id: "u2", parentId: "a1", timestamp: "2026-10-09T22:05:00.000Z", message: { role: "user", content: [{ type: "text", text: "dead" }], timestamp: T("2026-10-09T22:05:00.000Z") } },
+    { type: "message", id: "a2", parentId: "u2", timestamp: "2026-10-09T22:06:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "x" }], model: "m", stopReason: "stop", timestamp: T("2026-10-09T22:05:20.000Z"), durationMs: 40000 } },
+    // Active continuation from a1.
+    { type: "message", id: "u3", parentId: "a1", timestamp: "2026-10-09T22:10:00.000Z", message: { role: "user", content: [{ type: "text", text: "new" }], timestamp: T("2026-10-09T22:10:00.000Z") } },
+    { type: "message", id: "a3", parentId: "u3", timestamp: "2026-10-09T22:11:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "x" }], model: "m", stopReason: "stop", timestamp: T("2026-10-09T22:10:20.000Z"), durationMs: 40000 } },
+  ]);
+  const data = parsePi(p);
+  // Both turns stay measured along the active path (u1's completed turn and
+  // u3's), while the abandoned u2 turn never opens or leaks timing.
+  const turnIds = [...new Set(data.events.map((e) => e.turn_id))];
+  assert.deepEqual(turnIds, ["u1", "u3"]);
+  assert.ok(data.issues.some((i) => i.includes("被放弃的分支记录")));
+
+  const store = new Store(path.join(tmpDir, "branch.db"));
+  store.importFile(p, null, "pi");
+  const s = store.sessions()[0];
+  assert.equal(s.turns.length, 2);
+  assert.equal(s.turns[0].id, "u1");
+  assert.equal(s.turns[0].status, "completed");
+  assert.equal(s.turns[1].id, "u3");
+  assert.equal(s.turns[1].status, "completed");
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: automatic retries after stopReason error stay in the originating turn", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const T = (s: string) => Date.parse(s);
+  const assistant = (id: string, parent: string, stop: string, atIso: string, reqAt: number, dur: number) => ({
+    type: "message",
+    id,
+    parentId: parent,
+    timestamp: atIso,
+    message: { role: "assistant", content: [{ type: "text", text: "x" }], model: "m", stopReason: stop, timestamp: reqAt, durationMs: dur },
+  });
+  // Retry case: error response is automatically retried; one completed turn
+  // keeps both model spans (1000 + 2000).
+  const retry = writeSession(tmpDir, "retry.jsonl", [
+    { type: "session", version: 3, id: "aaaabbbb-cccc-dddd-eeee-ffff00000061", timestamp: "2026-10-09T22:00:00.000Z", cwd: "/Users/demo/work/my_project" },
+    { type: "message", id: "u1", parentId: null, timestamp: "2026-10-09T22:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: T("2026-10-09T22:01:00.000Z") } },
+    assistant("a1", "u1", "error", "2026-10-09T22:01:02.000Z", T("2026-10-09T22:01:00.000Z"), 1000),
+    assistant("a2", "a1", "stop", "2026-10-09T22:01:05.000Z", T("2026-10-09T22:01:03.000Z"), 2000),
+  ]);
+  const store = new Store(path.join(tmpDir, "retry.db"));
+  store.importFile(retry, null, "pi");
+  const s = store.sessions()[0];
+  assert.equal(s.turns.length, 1);
+  assert.equal(s.turns[0].status, "completed");
+  assert.equal(s.turns[0].work_ms, 3000);
+
+  // Terminal case: error followed by a new user message -> failed turn, then
+  // the next turn opens normally.
+  const terminal = writeSession(tmpDir, "terminal.jsonl", [
+    { type: "session", version: 3, id: "aaaabbbb-cccc-dddd-eeee-ffff00000062", timestamp: "2026-10-09T22:00:00.000Z", cwd: "/Users/demo/work/my_project" },
+    { type: "message", id: "u1", parentId: null, timestamp: "2026-10-09T22:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: T("2026-10-09T22:01:00.000Z") } },
+    assistant("a1", "u1", "error", "2026-10-09T22:01:02.000Z", T("2026-10-09T22:01:00.000Z"), 1000),
+    { type: "message", id: "u2", parentId: "a1", timestamp: "2026-10-09T22:02:00.000Z", message: { role: "user", content: [{ type: "text", text: "again" }], timestamp: T("2026-10-09T22:02:00.000Z") } },
+    assistant("a2", "u2", "stop", "2026-10-09T22:02:05.000Z", T("2026-10-09T22:02:03.000Z"), 2000),
+  ]);
+  store.importFile(terminal, null, "pi");
+  const s2 = store.sessions().find((x) => x.id === "pi/aaaabbbb-cccc-dddd-eeee-ffff00000062")!;
+  assert.equal(s2.turns.length, 2);
+  assert.equal(s2.turns[0].status, "failed");
+  assert.equal(s2.turns[0].end_ms, T("2026-10-09T22:01:02.000Z"));
+  assert.equal(s2.turns[1].status, "completed");
+
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: rejects fork copies that carry a parentSession header", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const p = writeSession(tmpDir, "fork.jsonl", [
+    { type: "session", version: 3, id: "aaaabbbb-cccc-dddd-eeee-ffff00000071", timestamp: "2026-10-09T22:00:00.000Z", cwd: "/Users/demo/work/my_project", parentSession: "/Users/demo/.pi/agent/sessions/--x--/old.jsonl" },
+    { type: "message", id: "u1", parentId: null, timestamp: "2026-10-09T22:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: Date.parse("2026-10-09T22:01:00.000Z") } },
+  ]);
+  assert.throws(() => parsePi(p), /fork 副本/);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

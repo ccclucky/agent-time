@@ -94,11 +94,11 @@ test("Pi timing: terminated turns fill work/review_wait from duration evidence (
   assert.equal(turn.status, "completed");
   assert.equal(turn.elapsed_ms, 4500);
   assert.equal(turn.work_ms, 3500);
-  assert.equal(turn.review_wait_ms, 0);
-  assert.equal(turn.human_ms, 0);
+  assert.equal(turn.review_wait_ms, null);
+  assert.equal(turn.human_ms, null);
   assert.equal(turn.breakdown?.model_api_ms, 2500);
   assert.equal(turn.breakdown?.tool_execution_ms, 1000);
-  assert.equal(turn.breakdown?.review_wait_ms, 0);
+  assert.equal(turn.breakdown?.unclassified_delay_ms, 0);
 
   store.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -165,7 +165,7 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
     {
       type: "message",
       id: "tA",
-      parentId: "a1",
+      parentId: "tB",
       timestamp: iso(B + 10001),
       message: {
         role: "toolResult",
@@ -255,12 +255,14 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
   assert.equal(t1.status, "completed");
   assert.equal(t1.elapsed_ms, 12100);
   assert.equal(t1.work_ms, 12600);
-  assert.equal(t1.review_wait_ms, 3000);
-  assert.equal(t1.human_ms, 3000);
+  // No approval evidence in Pi sources: the 3000ms tool-ready → tool-start
+  // gap is unclassified delay; review wait stays unknown (null).
+  assert.equal(t1.review_wait_ms, null);
+  assert.equal(t1.human_ms, null);
   assert.equal(t1.standby_ms, null);
   assert.equal(t1.breakdown?.model_api_ms, 3600);
   assert.equal(t1.breakdown?.tool_execution_ms, 9000);
-  assert.equal(t1.breakdown?.review_wait_ms, 3000);
+  assert.equal(t1.breakdown?.unclassified_delay_ms, 3000);
   assert.deepEqual(t1.breakdown?.tools, [
     { name: "bash", count: 1, duration_ms: 4000 },
     { name: "read", count: 1, duration_ms: 5000 },
@@ -278,10 +280,11 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
   assert.equal(t2.id, "u2");
   assert.equal(t2.status, "completed");
   assert.equal(t2.elapsed_ms, 10900);
-  // Fallback: the unmeasurable approval wait stays inside tool time (never
-  // fabricated as review_wait) and the missing durationMs is flagged.
+  // Fallback: the unmeasurable gap stays inside tool time (never fabricated
+  // as review wait) and the missing durationMs is flagged.
   assert.equal(t2.work_ms, 9900);
-  assert.equal(t2.review_wait_ms, 0);
+  assert.equal(t2.review_wait_ms, null);
+  assert.equal(t2.breakdown?.unclassified_delay_ms, 0);
   assert.equal(t2.standby_ms, 17900);
   assert.equal(t2.response_gap_ms, 17900);
   assert.deepEqual(t2.breakdown?.tools, [
@@ -298,7 +301,7 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
 
   // Session-level aggregation.
   assert.equal(s.work_ms, 22500);
-  assert.equal(s.review_wait_ms, 3000);
+  assert.equal(s.review_wait_ms, null);
   assert.equal(s.standby_ms, 17900);
 
   // report() aggregation for the Pi filter.
@@ -307,8 +310,8 @@ test("Pi timing: two-turn session — exact split, model/thinking breakdown, dur
   assert.equal(rep.summary.processing_union_ms, 23000);
   assert.equal(rep.summary.overlap_ms, 0);
   assert.equal(rep.summary.work_ms, 22500);
-  assert.equal(rep.summary.review_wait_ms, 3000);
-  assert.equal(rep.summary.human_ms, 3000);
+  assert.equal(rep.summary.review_wait_ms, null);
+  assert.equal(rep.summary.human_ms, null);
   assert.equal(rep.summary.standby_ms, 17900);
   assert.equal(rep.summary.sessions, 1);
   assert.equal(rep.summary.turns, 2);
@@ -376,7 +379,7 @@ test("Pi timing: parallel calls share one approval gap (interval union, not sum)
     {
       type: "message",
       id: "tA",
-      parentId: "a1",
+      parentId: "tB",
       timestamp: iso(B + 10001),
       message: {
         role: "toolResult",
@@ -407,7 +410,8 @@ test("Pi timing: parallel calls share one approval gap (interval union, not sum)
   store.importFile(p, null, "pi");
   const turn = store.sessions()[0].turns[0];
   assert.equal(turn.elapsed_ms, 11600);
-  assert.equal(turn.review_wait_ms, 3000);
+  assert.equal(turn.review_wait_ms, null);
+  assert.equal(turn.breakdown?.unclassified_delay_ms, 3000);
   // Machine accumulation: 2000 + 4000 + 3000 + 1600 = 10600.
   assert.equal(turn.work_ms, 10600);
   assert.deepEqual(turn.breakdown?.tools, [
@@ -456,7 +460,8 @@ test("Pi timing: report basis documents the Pi measurement methodology", () => {
   const rep = report(store.sessions(), "2026-10-21", "2026-10-21", "UTC", "Pi");
   assert.ok(rep.basis.includes("Pi"), "basis must cover the Pi 口径");
   assert.ok(rep.basis.includes("机时累加"));
-  assert.ok(rep.basis.includes("正向间隔并集"));
+  assert.ok(rep.basis.includes("未分类延迟"));
+  assert.ok(rep.basis.includes("不落盘审批事件"));
 
   store.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -515,7 +520,8 @@ test("Pi timing: marker events without end_ms and invalid spans contribute zero,
     9000,
   );
   assert.equal(timing.work_ms, 7000);
-  assert.equal(timing.review_wait_ms, 0);
+  assert.equal(timing.review_wait_ms, null);
+  assert.equal(timing.breakdown.unclassified_delay_ms, 0);
   assert.equal(timing.breakdown.model_api_ms, 3000);
   assert.equal(timing.breakdown.tool_execution_ms, 4000);
   assert.deepEqual(timing.breakdown.tools, [

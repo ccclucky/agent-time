@@ -33,7 +33,11 @@ export interface ToolExecutionDetail {
 export interface TurnBreakdown {
   model_api_ms: number;
   tool_execution_ms: number;
-  review_wait_ms: number;
+  /** Claude: measured permission wait. Pi: absent (source has no approval events). */
+  review_wait_ms?: number;
+  /** Pi: positive tool-ready → tool-start gaps the source cannot attribute
+   *  (may contain approval waits, scheduling, rate limiting). */
+  unclassified_delay_ms?: number;
   tools: ToolExecutionDetail[];
   model_api_breakdown?: { model: string; duration_ms: number }[];
   thinking_breakdown?: { level: string; duration_ms: number }[];

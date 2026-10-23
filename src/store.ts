@@ -167,7 +167,7 @@ export function calculatePiTiming(
   elapsed: number,
 ): {
   work_ms: number;
-  review_wait_ms: number;
+  review_wait_ms: number | null;
   breakdown: TurnBreakdown;
 } {
   let modelApiMs = 0;
@@ -193,16 +193,18 @@ export function calculatePiTiming(
   // Tools aggregate from tool_result events, where Pi's duration evidence
   // lives (at_ms = tool start, end_ms = result creation).
   const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
-  // Approval suspension: positive interval from the issuing response end
+  // Unclassified delay: positive interval from the issuing response end
   // (tool_use.at_ms = tool ready) to the actual tool start (tool_result.at_ms),
-  // unioned across parallel calls. Fallback results start exactly at the
-  // issuing response end, contributing zero naturally; missing data is never
-  // fabricated.
+  // unioned across parallel calls. Pi persists no approval/permission events,
+  // so this gap cannot be attributed to human review — it may equally be
+  // scheduling, extension work, or rate limiting. It is reported separately
+  // and never counted as review wait. Fallback results start exactly at the
+  // issuing response end, contributing zero naturally.
   const toolUses = entries.filter(
     (e) => e.kind === "tool_use" && e.tool_id != null,
   );
   const usedUses = new Set<number>();
-  const waitIntervals: [number, number][] = [];
+  const delayIntervals: [number, number][] = [];
   for (const r of entries) {
     if (r.kind !== "tool_result") continue;
     const dur =
@@ -219,17 +221,18 @@ export function calculatePiTiming(
     );
     if (uIdx !== -1) {
       usedUses.add(uIdx);
-      waitIntervals.push([toolUses[uIdx].at_ms, r.at_ms]);
+      delayIntervals.push([toolUses[uIdx].at_ms, r.at_ms]);
     }
   }
-  const reviewWaitMs = unionMs(waitIntervals);
+  const unclassifiedDelayMs = unionMs(delayIntervals);
   return {
     work_ms: modelApiMs + toolMs,
-    review_wait_ms: reviewWaitMs,
+    // Pi sources carry no approval evidence; review wait stays unknown.
+    review_wait_ms: null,
     breakdown: {
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
-      review_wait_ms: reviewWaitMs,
+      unclassified_delay_ms: unclassifiedDelayMs,
       tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
       model_api_breakdown: [...modelTotals.entries()]
         .map(([model, duration_ms]) => ({ model, duration_ms }))

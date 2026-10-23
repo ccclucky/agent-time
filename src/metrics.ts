@@ -140,7 +140,7 @@ export function report(
       statuses: counts,
     },
     basis:
-      "Codex：执行开始至结束记录；Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）；Pi：模型推理耗时与工具执行机时累加为纯工作，等待人审阅按工具就绪到实际开始的正向间隔并集计量，缺失时长证据不编造。",
+      "Codex：执行开始至结束记录；Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）；Pi：模型推理耗时与工具执行机时累加为纯工作；Pi 来源不落盘审批事件，等待人审阅保持未知，工具就绪到实际开始的间隔单列为未分类延迟（可能含审批等待、调度或限流），缺失时长证据不编造。",
     sessions: included,
   };
 }
