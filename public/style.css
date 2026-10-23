@@ -863,6 +863,101 @@ h1#title {
 }
 
 /* ========================================================
+   首页维度聚合统计（反馈轮 3 Fix 3）：按 Harness / 按项目 / 按工具
+   复用 .s1-box 卡片令牌；三列在窄屏折行为单列。
+   占比条为线性份额（数值就在条旁，无需非线性缩放），
+   fill 保底 2% 防极小份额被压成 0px 不可见细线。
+   ======================================================== */
+.agg-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.agg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 12px;
+  background: var(--card-muted);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: var(--text-sm);
+  min-width: 0;
+}
+
+.agg-row:last-child {
+  margin-bottom: 0;
+}
+
+.agg-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agg-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agg-agent .agent-mark {
+  width: 16px;
+  height: 16px;
+}
+
+.agg-agent-name {
+  font-weight: 700;
+  color: var(--fg-title);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agg-nums {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.agg-nums strong {
+  color: var(--state-work);
+}
+
+.agg-tail {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 4px 0 0;
+}
+
+.agg-basis {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin: -8px 0 10px;
+}
+
+.agg-share-bar {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--line-subtle);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.agg-share-fill {
+  height: 100%;
+  min-width: 2%;
+  border-radius: 9999px;
+}
+
+/* ========================================================
    方案 A 替换模块 2：纯会话流卡片 (点击跳转独立详情页 #session/:id)
    ======================================================== */
 .session-stream-head {
@@ -982,7 +1077,7 @@ h1#title {
   vertical-align: middle;
 }
 
-.agent-mark svg {
+.agent-mark > svg {
   width: 100%;
   height: 100%;
   display: block;
@@ -1024,12 +1119,22 @@ h1#title {
   margin-right: 8px;
 }
 
-/* 会话表"工具接入"列：徽标 + 标签同行 */
+/* 会话表"工具接入"列：徽标 + 标签同行（反馈轮 3 Fix 1）。
+   严禁在 td 上用 display:flex —— 那会把表格单元格降级为匿名单元格包裹的
+   普通块，徽标各自成框、行高与行边框断裂（反馈截图 1 的病灶）。
+   这里保持 td 原生 table-cell 显示，用 inline + vertical-align 居中即可。 */
 .agent-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   white-space: nowrap;
+  vertical-align: middle;
+}
+
+.agent-cell .agent-mark {
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.agent-cell .tag {
+  vertical-align: middle;
 }
 
 /* 通用筛选芯片（时间轴"重置全时间段"与接入工具筛选共用基类） */
@@ -1092,7 +1197,8 @@ h1#title {
 }
 
 @media (max-width: 960px) {
-  .s1-grid {
+  .s1-grid,
+  .agg-grid {
     grid-template-columns: 1fr;
   }
 

@@ -131,35 +131,57 @@ const statuses = {
   invalid: "记录冲突",
 };
 
-// Codex 内建工具的友好显示名（仅展示名；原始 id 保留在 title / 明细行中）。
-const TOOL_LABELS = {
-  exec: "执行命令",
-  wait: "等待",
-  followup_task: "跟进任务",
-  apply_patch: "应用补丁",
-  read_file: "读取文件",
-  write_file: "写入文件",
-  view_image: "查看图片",
-};
-
-// 工具名的统一展示入口：内建名映射为友好名，未知名原样透传
-function toolLabel(name) {
-  return TOOL_LABELS[name] || name || "本地工具";
-}
+// Codex 内建工具的友好显示名与 toolLabel() 定义已并入下方 PURE HELPERS 纯函数块，
+// 与总账回填 / 维度聚合助手共用同一块零浏览器依赖代码（node:vm 整块提取做行为级单测）
 
 // 首页/抽屉统一使用的接入工具徽标（内联 SVG，见 agentMark 定义处）
+// 徽标内容为各 harness 的真实标志（反馈轮 3）：
+// - Codex：OpenAI 官方 mark（simple-icons 单 path，viewBox 0 0 24 24），
+//   沿用单色 currentColor 底 + paper 反白，不再使用拼错的 "Cx" 字母
+// - Claude Code：日光纹 sunburst（用户已接受，保持不动）
+// - Pi：Pi-agent 新版像素标（4×4 像素网格，crispEdges，三色像素），
+//   不再使用旧版 π 字母（pi.dev favicon 是旧 logo，勿引用）
+const OPENAI_MARK_PATH =
+  "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
+
+// Pi 新版像素标：4×4 网格（viewBox 0 0 4 4），每个非空像素一个 1×1 rect
+const PI_PIXEL_RECTS = [
+  ["#E48A7A", 0, 0],
+  ["#E48A7A", 1, 0],
+  ["#E48A7A", 2, 0],
+  ["#E48A7A", 2, 1],
+  ["#4F8EB3", 0, 1],
+  ["#4F8EB3", 0, 2],
+  ["#4F8EB3", 1, 2],
+  ["#4F8EB3", 0, 3],
+  ["#EAB65D", 3, 2],
+  ["#EAB65D", 3, 3],
+]
+  .map(([fill, x, y]) => `<rect x="${x}" y="${y}" width="1" height="1" fill="${fill}"/>`)
+  .join("");
+
 function agentMark(agent) {
   const marks = {
-    Codex: { glyph: "Cx", cls: "codex", label: "Codex" },
-    "Claude Code": { sunburst: true, cls: "claude", label: "Claude Code" },
-    Pi: { glyph: "π", cls: "pi", label: "Pi" },
+    Codex: {
+      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${OPENAI_MARK_PATH}" fill="#FAF9F5"/></svg>`,
+      cls: "codex",
+      label: "Codex",
+    },
+    "Claude Code": {
+      glyph:
+        '<path d="M8 2.2v11.6M2.2 8h11.6M3.9 3.9l8.2 8.2M12.1 3.9l-8.2 8.2" stroke="#FAF9F5" stroke-width="1.9" stroke-linecap="round" fill="none"/>',
+      cls: "claude",
+      label: "Claude Code",
+    },
+    Pi: {
+      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 4 4" shape-rendering="crispEdges" aria-hidden="true">${PI_PIXEL_RECTS}</svg>`,
+      cls: "pi",
+      label: "Pi",
+    },
   };
   const m = marks[agent];
   if (!m) return "";
-  const glyph = m.sunburst
-    ? '<path d="M8 2.2v11.6M2.2 8h11.6M3.9 3.9l8.2 8.2M12.1 3.9l-8.2 8.2" stroke="#FAF9F5" stroke-width="1.9" stroke-linecap="round" fill="none"/>'
-    : `<text x="8" y="11.4" text-anchor="middle" font-size="8" font-weight="700" fill="#FAF9F5" font-family="JetBrains Mono, ui-monospace, monospace">${h(m.glyph)}</text>`;
-  return `<span class="agent-mark agent-mark-${m.cls}" title="${h(m.label)}" aria-label="${h(m.label)}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="0" y="0" width="16" height="16" rx="4.5" fill="currentColor"/>${glyph}</svg></span>`;
+  return `<span class="agent-mark agent-mark-${m.cls}" title="${h(m.label)}" aria-label="${h(m.label)}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="0" y="0" width="16" height="16" rx="4.5" fill="currentColor"/>${m.glyph}</svg></span>`;
 }
 
 async function api(url, options) {
@@ -764,6 +786,98 @@ function viewportBreakdownCard(model) {
 }
 
 // ========================================================
+// 首页维度聚合统计（反馈轮 3 Fix 3）：用户要的是聚合、统计，不是过滤。
+// 与双列榜共用 scopedModel.visibleSessions（当前视口 + 接入工具筛选同口径），
+// 在筛选芯片之外叠加三个只读聚合维度：按 Harness / 按项目 TOP 5 / 按工具 TOP 5。
+// 纯聚合数学在上方 PURE HELPERS 块（aggregateSessionsByAgent 等）单测覆盖。
+// ========================================================
+// 线性占比条：数值就在条旁，直接线性即可；fill 保底 2% 防极小份额不可见
+function aggShareBar(pct, color, label) {
+  const w = Math.max(2, Math.min(100, pct));
+  return `<div class="agg-share-bar" role="img" aria-label="${h(label)} ${pct.toFixed(1)}%"><div class="agg-share-fill" style="width:${w.toFixed(1)}%; background:${color};"></div></div>`;
+}
+
+function viewportAggregationCard(model) {
+  const sessions = model.visibleSessions.map((i) => i.session);
+  const byAgent = aggregateSessionsByAgent(sessions);
+  const byProject = aggregateSessionsByProject(sessions);
+  const byTool = aggregateTurnsByTool(sessions);
+
+  const agentRows = byAgent.rows
+    .map((r) => {
+      const pct =
+        byAgent.totalWallMs > 0 ? (r.wallMs / byAgent.totalWallMs) * 100 : 0;
+      return `
+      <div class="agg-row">
+        <div class="agg-row-top">
+          <span class="agg-agent">${agentMark(r.agent)}<span class="agg-agent-name">${h(r.agent)}</span></span>
+          <span class="agg-nums">${r.sessions} 会话 · ${r.turns} 轮 · <strong>${fmt(r.wallMs)}</strong></span>
+        </div>
+        ${aggShareBar(pct, "var(--state-work)", `${r.agent} 的总壁钟时长占比`)}
+      </div>
+    `;
+    })
+    .join("");
+
+  const projectRows =
+    byProject.top
+      .map((r) => {
+        const pct =
+          byProject.totalWallMs > 0 ? (r.wallMs / byProject.totalWallMs) * 100 : 0;
+        return `
+      <div class="agg-row">
+        <div class="agg-row-top">
+          <span class="agg-agent"><span class="agg-agent-name" title="${h(r.project)}">${h(r.project)}</span></span>
+          <span class="agg-nums">${r.sessions} 会话 · <strong>${fmt(r.wallMs)}</strong></span>
+        </div>
+        ${aggShareBar(pct, "var(--state-work)", `${r.project} 的总壁钟时长占比`)}
+      </div>
+    `;
+      })
+      .join("") +
+    (byProject.restCount > 0
+      ? `<div class="agg-tail">等 ${byProject.restCount} 个项目</div>`
+      : "");
+
+  const maxToolMs = byTool.top[0]?.durationMs || 0;
+  const toolRows = byTool.top
+    .map((r) => {
+      const pct = maxToolMs > 0 ? (r.durationMs / maxToolMs) * 100 : 0;
+      return `
+      <div class="agg-row">
+        <div class="agg-row-top">
+          <span class="agg-agent"><span class="agg-agent-name" title="${h(r.name)}">${h(toolLabel(r.name))}</span></span>
+          <span class="agg-nums">${r.count} 次 · <strong>${fmt(r.durationMs)}</strong></span>
+        </div>
+        ${aggShareBar(pct, "var(--color-mcp)", `${toolLabel(r.name)} 的累计执行耗时占比`)}
+      </div>
+    `;
+    })
+    .join("");
+
+  const emptyRow =
+    '<div class="s1-empty">当前视口内没有可聚合的会话。</div>';
+
+  return `
+    <div class="agg-grid" aria-label="维度聚合统计（当前视口）">
+      <div class="s1-box">
+        <div class="s1-title">按 Harness (会话 · 轮次 · 总壁钟时长 · 当前视口)</div>
+        ${agentRows || emptyRow}
+      </div>
+      <div class="s1-box">
+        <div class="s1-title">按项目 TOP 5 (总壁钟时长 · 当前视口)</div>
+        ${projectRows || emptyRow}
+      </div>
+      <div class="s1-box">
+        <div class="s1-title">按工具 TOP 5 (累计执行耗时)</div>
+        <div class="agg-basis">基于已测量 breakdown 的 ${byTool.basisSessions} 个会话 · 未测量来源不计入</div>
+        ${toolRows || `<div class="s1-empty">当前视口内没有已测量 breakdown 的会话（Codex 会话不提供 breakdown 事件）。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+// ========================================================
 // 方案 A 替换模块 2：纯会话流列表
 // 首页最小原子是会话 (Session)，绝不在首页平铺每一轮次；
 // 点击卡片写入 #session/:id 哈希，独立详情页由后续切片落地
@@ -942,28 +1056,37 @@ function sessionStatus(s) {
   return { label: `存在未完结轮次 (${done}/${total} 轮完结)`, cls: "warn" };
 }
 
-// 总壁钟时长 (WALL TIME)：当前范围内该会话轮次的首尾物理跨度
-function sessionWallSpan(s) {
-  let first = Infinity;
-  let last = 0;
-  for (const t of s.turns) {
-    const st = t.start_ms || t.end_ms;
-    const en = t.end_ms || t.start_ms;
-    if (st && st < first) first = st;
-    if (en && en > last) last = en;
-  }
-  if (first === Infinity || !last) return { firstMs: null, lastMs: null, wallMs: null };
-  return { firstMs: first, lastMs: last, wallMs: Math.max(0, last - first) };
-}
-
 // 会话专属 Operations Breakdown 聚合：本地工具 / 模型推理 / 等待人审阅 / 待命
-// Codex 会话 breakdown 为 null，按 0 贡献；total 为 0 时上层显示诚实空态
+// （sessionWallSpan 已并入上方 PURE HELPERS 纯函数块）
 function sessionBreakdown(s) {
   const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
   for (const t of s.turns) {
     addTurnBreakdown(agg, t);
   }
   return sumBreakdown(agg);
+}
+
+// ==== PURE HELPERS BEGIN ====
+// 零浏览器依赖的纯函数块（tests/slice9_feedback_round3.test.ts 通过 node:vm
+// 整块提取执行本块做行为级单测）：工具友好名、逐次工具耗时配对、
+// 抽屉总账回填 (resolveRollup / rollupEvidenceNote) 与首页维度聚合
+// (aggregateSessionsByAgent / aggregateSessionsByProject / aggregateTurnsByTool)。
+// 在本块内新增逻辑时必须保持纯函数语义 —— 不碰 DOM、不读 state、不引用 window。
+
+// Codex 内建工具的友好显示名（仅展示名；原始 id 保留在 title / 明细行中）。
+const TOOL_LABELS = {
+  exec: "执行命令",
+  wait: "等待",
+  followup_task: "跟进任务",
+  apply_patch: "应用补丁",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  view_image: "查看图片",
+};
+
+// 工具名的统一展示入口：内建名映射为友好名，未知名原样透传
+function toolLabel(name) {
+  return TOOL_LABELS[name] || name || "本地工具";
 }
 
 // 配对 review_wait_start / review_wait_end 形成等待区间（与后端口径一致）
@@ -1030,6 +1153,153 @@ function perCallToolTimings(turn) {
   return calls;
 }
 
+// ------------------------------------------------------------------
+// 抽屉总账回填（反馈轮 3 Fix 2）：breakdown 为 null 的轮次（未完结轮、
+// Codex 等不落盘分解的来源）凡是可从一手事件推导的指标都要回填，
+// 推导不出来的维度给出诚实的一行原因，而不是孤零零一个 "—"
+// ------------------------------------------------------------------
+// 总壁钟时长 (WALL TIME)：当前范围内该会话轮次的首尾物理跨度
+// （TOP 3 榜、详情页 KPI 与下方维度聚合的统一口径）
+function sessionWallSpan(s) {
+  let first = Infinity;
+  let last = 0;
+  for (const t of s.turns) {
+    const st = t.start_ms || t.end_ms;
+    const en = t.end_ms || t.start_ms;
+    if (st && st < first) first = st;
+    if (en && en > last) last = en;
+  }
+  if (first === Infinity || !last) return { firstMs: null, lastMs: null, wallMs: null };
+  return { firstMs: first, lastMs: last, wallMs: Math.max(0, last - first) };
+}
+function resolveRollup(turn, nowMs = Date.now()) {
+  const bd = turn.breakdown;
+  const hasBd = bd != null;
+  const perCall = perCallToolTimings(turn);
+  const perCallTotal = perCall.reduce((s, c) => s + c.duration_ms, 0);
+
+  // 未正常结束（无结束记录）的轮次：end_ms 缺失
+  const openEnded = turn.end_ms == null;
+
+  const apiMs =
+    hasBd && typeof bd.model_api_ms === "number" ? bd.model_api_ms : null;
+
+  // 工具耗时：breakdown 有一手总账 → 直接用；否则按逐次调用时长累计回填
+  let toolMs = null;
+  let toolBackfilled = false;
+  if (hasBd && typeof bd.tool_execution_ms === "number") {
+    toolMs = bd.tool_execution_ms;
+  } else if (perCall.length) {
+    toolMs = perCallTotal;
+    toolBackfilled = true;
+  }
+
+  const waitMs = turn.review_wait_ms ?? null;
+  const workMs = turn.work_ms ?? null;
+
+  // 壁钟时长：elapsed_ms 优先；open 轮次回退为 起点→当前时刻 的已进行跨度
+  let wallMs = turn.elapsed_ms ?? turn.period_ms ?? null;
+  let wallBackfilled = false;
+  if (wallMs == null && typeof turn.start_ms === "number" && nowMs > turn.start_ms) {
+    wallMs = nowMs - turn.start_ms;
+    wallBackfilled = true;
+  }
+
+  const workRate =
+    wallMs && workMs !== null ? Math.round((workMs / wallMs) * 100) : null;
+
+  return {
+    apiMs,
+    toolMs,
+    toolBackfilled,
+    waitMs,
+    workMs,
+    wallMs,
+    wallBackfilled,
+    workRate,
+    openEnded,
+  };
+}
+
+// 缺证卡片的诚实下标文案：两种口径必须可区分 ——
+// 1) 未正常结束的轮次（无结束记录，任何事后核算都缺依据）
+// 2) 已完结但不落盘 breakdown 的来源（Codex / 三态降级，来源本身不提供该维度）
+function rollupEvidenceNote(turn) {
+  if (turn.end_ms == null) return "该轮未正常结束，无结束记录，无法核算";
+  if (turn.breakdown == null) return "该来源不提供此维度的一手分解数据";
+  return null;
+}
+
+// ------------------------------------------------------------------
+// 首页维度聚合统计（反馈轮 3 Fix 3）：聚合、统计，不是过滤。
+// 输入是"当前视口可见会话"，与视口操作分布卡完全同口径。
+// ------------------------------------------------------------------
+
+// 会话 WALL TIME 口径（与 TOP 3 榜、详情页 KPI 同源）：首末轮次的物理壁钟跨度
+function aggregateSessionsByAgent(sessions) {
+  const map = new Map();
+  let totalWallMs = 0;
+  for (const s of sessions) {
+    const wall = sessionWallSpan(s).wallMs || 0;
+    totalWallMs += wall;
+    const cur = map.get(s.agent) || { agent: s.agent, sessions: 0, turns: 0, wallMs: 0 };
+    cur.sessions += 1;
+    cur.turns += s.turns.length;
+    cur.wallMs += wall;
+    map.set(s.agent, cur);
+  }
+  return {
+    totalWallMs,
+    rows: [...map.values()].sort((a, b) => b.wallMs - a.wallMs),
+  };
+}
+
+// 按项目：全部行按总壁钟时长排序，上层取 TOP 5 并对剩余数量诚实披露
+function aggregateSessionsByProject(sessions) {
+  const map = new Map();
+  let totalWallMs = 0;
+  for (const s of sessions) {
+    const wall = sessionWallSpan(s).wallMs || 0;
+    totalWallMs += wall;
+    const cur = map.get(s.project) || { project: s.project, sessions: 0, wallMs: 0 };
+    cur.sessions += 1;
+    cur.wallMs += wall;
+    map.set(s.project, cur);
+  }
+  const rows = [...map.values()].sort((a, b) => b.wallMs - a.wallMs);
+  return {
+    totalWallMs,
+    top: rows.slice(0, 5),
+    restCount: Math.max(0, rows.length - 5),
+  };
+}
+
+// 按工具：跨会话聚合 turn.breakdown.tools[]（逐会话一手测量值），
+// 只统计确有测量证据的会话；Codex 等 breakdown 为 null 的来源不虚构数据
+function aggregateTurnsByTool(sessions) {
+  const map = new Map();
+  let basisSessions = 0;
+  for (const s of sessions) {
+    let hasEvidence = false;
+    for (const t of s.turns) {
+      if (t.breakdown?.tools?.length) {
+        hasEvidence = true;
+        for (const tool of t.breakdown.tools) {
+          const cur = map.get(tool.name) || { name: tool.name, count: 0, durationMs: 0 };
+          cur.count += tool.count || 0;
+          cur.durationMs += tool.duration_ms || 0;
+          map.set(tool.name, cur);
+        }
+      }
+    }
+    if (hasEvidence) basisSessions += 1;
+  }
+  return {
+    basisSessions,
+    top: [...map.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 5),
+  };
+}
+
 // 慢操作阈值：单次工具调用超过 15 秒即视为慢瓶颈（用户可见文案统一写作 "15s"）
 const SLOW_OP_THRESHOLD_MS = 15000;
 
@@ -1043,6 +1313,7 @@ function slowToolCalls(s, threshold = SLOW_OP_THRESHOLD_MS) {
   });
   return calls.sort((a, b) => b.duration_ms - a.duration_ms);
 }
+// ==== PURE HELPERS END ====
 
 // 自动化自治率 (AUTONOMY)：纯工作耗时 ÷ (纯工作 + 等待人审阅) × 100%
 // 人工确认次数 = 成对闭合的 review_wait_start/end（Claude 独有；Pi/Codex 优雅降级）
@@ -1422,14 +1693,17 @@ function openDrawer(turn, session) {
     c.classList.toggle("active", c.dataset.turnCapsule === turn.id),
   );
 
-  const work = turn.work_ms;
-  const wait = turn.review_wait_ms;
-  const wall = turn.elapsed_ms || turn.period_ms || (work !== null ? (work + (wait || 0)) : null);
-  const workRate = wall && work !== null ? Math.round((work / wall) * 100) : null;
+  // 总账四卡统一走 resolveRollup：breakdown 缺失时可推导指标回填，
+  // 推导不出的维度由 rollupEvidenceNote 给出诚实一行原因
+  const rollup = resolveRollup(turn);
+  const work = rollup.workMs;
+  const wait = rollup.waitMs;
+  const wall = rollup.wallMs;
+  const workRate = rollup.workRate;
 
   // 真实消费分解数据：有 breakdown 消费 breakdown，没有则如实呈现
-  const apiMs = turn.breakdown?.model_api_ms ?? null;
-  const toolMs = turn.breakdown?.tool_execution_ms ?? null;
+  const apiMs = rollup.apiMs;
+  const toolMs = rollup.toolMs;
 
   // 提取真实的工具清单（供 KPI 汇总口径使用）
   let toolsList = [];
@@ -1552,23 +1826,23 @@ function openDrawer(turn, session) {
       <div class="drawer-kpi-grid">
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
           <div class="drawer-kpi-title">模型推理耗时 (API)</div>
-          <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : (work !== null ? fmt(work) : "—")}</div>
-          <div class="drawer-kpi-sub">${h(turn.models.join(" / ") || "模型上下文未知")}</div>
+          <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : "—"}</div>
+          <div class="drawer-kpi-sub">${h(apiMs !== null ? turn.models.join(" / ") || "模型上下文未知" : rollupEvidenceNote(turn) || "模型上下文未知")}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
           <div class="drawer-kpi-title">工具执行耗时 (Tools)</div>
           <div class="drawer-kpi-val">${toolMs !== null ? fmt(toolMs) : "—"}</div>
-          <div class="drawer-kpi-sub">${toolsList.length} 项工具执行</div>
+          <div class="drawer-kpi-sub">${h(toolMs !== null ? `${toolsList.length} 项工具执行${rollup.toolBackfilled ? " · 逐次调用累计" : ""}` : rollupEvidenceNote(turn) || "0 项工具执行")}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);">
           <div class="drawer-kpi-title">等待人审阅 (Review Wait)</div>
           <div class="drawer-kpi-val">${wait !== null ? fmt(wait) : "—"}</div>
-          <div class="drawer-kpi-sub">${waitCaption}</div>
+          <div class="drawer-kpi-sub">${h(wait !== null ? waitCaption : rollupEvidenceNote(turn) || waitCaption)}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);">
           <div class="drawer-kpi-title">单轮壁钟时长 (Wall Time)</div>
           <div class="drawer-kpi-val">${fmt(wall)}</div>
-          <div class="drawer-kpi-sub">有效工作率: ${workRate !== null ? `${workRate}%` : "—"}</div>
+          <div class="drawer-kpi-sub">有效工作率: ${workRate !== null ? `${workRate}%` : "—"}${rollup.wallBackfilled ? " · 该轮进行中，按起点至今累计" : ""}</div>
         </div>
       </div>
       <!-- Token / 模型下钻：与三态并排呈现；无快照如实留空，绝不 0 断言 -->
@@ -1755,6 +2029,7 @@ function overview() {
       ${topSessionsCard(scopedModel)}
       ${viewportBreakdownCard(scopedModel)}
     </div>
+    ${viewportAggregationCard(scopedModel)}
     ${sessionStream()}
   `;
 }
