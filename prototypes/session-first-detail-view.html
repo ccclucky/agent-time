@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentTime · 方案 A 与完整详情页联动原型 (最终对齐版)</title>
+  <style>
+    :root {
+      --bg-page: #FAF9F5;
+      --bg-card: #FFFFFF;
+      --bg-card-muted: #F5F2EB;
+      --border-default: #E5E0D8;
+      --border-subtle: #F0EAE1;
+      --fg-title: #1F1E1D;
+      --fg-body: #494541;
+      --fg-muted: #827C75;
+      --state-work: #CC785C;
+      --state-wait: #C68A4C;
+      --state-standby: #9E968B;
+      --color-mcp: #2563EB;
+      --color-system: #EA580C;
+      --color-skills: #D97706;
+      --font-sans: "Inter", "Noto Sans SC", -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #F4EFEA;
+      color: var(--fg-body);
+      font-family: var(--font-sans);
+      padding: 24px;
+      line-height: 1.5;
+    }
+    .container { max-width: 1260px; margin: 0 auto; }
+
+    /* 顶部提示条 */
+    .top-indicator {
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 12px;
+      padding: 14px 20px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: var(--state-work);
+      color: #FFF;
+      display: inline-block;
+      margin-bottom: 4px;
+    }
+
+    /* 浏览器视窗模拟 */
+    .app-window {
+      background: var(--bg-page);
+      border: 1px solid var(--border-default);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+      position: relative;
+      min-height: 820px;
+    }
+    .window-header {
+      background: #ECE7DE;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border-default);
+    }
+    .dots { display: flex; gap: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .dot-r { background: #EF4444; }
+    .dot-y { background: #F59E0B; }
+    .dot-g { background: #10B981; }
+    .window-url { font-size: 12px; color: var(--fg-muted); font-family: var(--font-mono); }
+
+    .window-body { padding: 28px; }
+
+    /* ========================================================
+       首页保留模块：4 个 KPI 指标
+       ======================================================== */
+    .fixed-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .kpi-card {
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .kpi-label { font-size: 11px; color: var(--fg-muted); margin-bottom: 6px; }
+    .kpi-val { font-size: 24px; font-weight: 800; color: var(--fg-title); font-family: var(--font-mono); }
+    .kpi-sub { font-size: 11px; color: var(--fg-muted); margin-top: 4px; }
+
+    /* 首页保留模块：耗时蒸发漏斗 */
+    .fixed-funnel {
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+    }
+    .funnel-head { font-size: 13px; font-weight: 700; margin-bottom: 12px; color: var(--fg-title); display: flex; justify-content: space-between; }
+    .funnel-row { display: flex; align-items: center; margin-bottom: 8px; font-size: 12px; }
+    .funnel-lbl { width: 140px; color: var(--fg-body); }
+    .funnel-track { flex: 1; height: 18px; background: #F3EFEA; border-radius: 4px; overflow: hidden; margin: 0 14px; }
+    .funnel-bar { height: 100%; border-radius: 4px; }
+    .funnel-val { width: 70px; text-align: right; font-family: var(--font-mono); font-weight: 700; color: var(--fg-title); }
+
+    /* 首页保留模块：140px 热力图 */
+    .fixed-heatmap {
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 18px 20px;
+      margin-bottom: 24px;
+    }
+    .heatmap-track-140 {
+      height: 140px;
+      background: #F3EFEA;
+      border: 1px solid #DFD8CE;
+      border-radius: 8px;
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      padding: 8px 10px;
+      gap: 3px;
+    }
+    .heat-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+    .heat-bar { width: 100%; background: #CC785C; border-radius: 3px 3px 0 0; }
+    .heat-viewport {
+      position: absolute;
+      top: 0; bottom: 0; left: 0; width: 100%;
+      background: rgba(204, 120, 92, 0.12);
+      border: 2px solid var(--state-work);
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: grab;
+    }
+    .handle { width: 7px; height: 64px; background: var(--state-work); border-radius: 4px; }
+
+    /* ========================================================
+       方案 A 替换模块 1：双列组合榜（TOP 3 会话榜 + 操作分布条）
+       ======================================================== */
+    .s1-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .s1-box {
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .s1-title { font-size: 13px; font-weight: 700; color: var(--fg-title); margin-bottom: 12px; }
+    .rank-mini-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--bg-card-muted);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .rank-mini-item:hover {
+      background: #FFF;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .rank-num { font-weight: 800; font-family: var(--font-mono); width: 22px; color: var(--state-work); }
+
+    /* 多维操作分段条 (对标用户截图) */
+    .multi-seg-bar {
+      height: 7px;
+      border-radius: 4px;
+      background: #E5E5E5;
+      display: flex;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+
+    /* ========================================================
+       方案 A 替换模块 2：纯会话流卡片 (点击跳转详情页)
+       ======================================================== */
+    .session-stream-card {
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .session-stream-card:hover {
+      border-color: var(--state-work);
+      box-shadow: 0 2px 10px rgba(204,120,92,0.12);
+      transform: translateY(-1px);
+    }
+
+    /* ========================================================
+       完整会话独立详情页 (Session Detail View)
+       ======================================================== */
+    .detail-view { display: none; }
+    .detail-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .btn-back-home {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--state-work);
+      cursor: pointer;
+    }
+
+    /* 详情页专属 Operations Breakdown (对标截图) */
+    .session-breakdown-full {
+      background: #FAFAFA;
+      border: 2px solid var(--border-default);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .breakdown-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 0;
+      font-size: 13px;
+      border-bottom: 1px solid #F0F0F0;
+    }
+    .breakdown-row:last-child { border-bottom: none; }
+
+    /* 4 项关键体检 KPI */
+    .detail-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    /* 双栏瓶颈诊断区 */
+    .detail-diag-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 28px;
+    }
+    .diag-card {
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 16px;
+      background: #FFF;
+    }
+    .diag-head {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--fg-title);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .slow-tool-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 10px;
+      background: var(--bg-page);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .slow-tool-row:hover { border-color: var(--state-work); background: #FFF; }
+
+    /* 紧凑轮次甘特胶囊 */
+    .turn-capsule {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #FFF;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .turn-capsule:hover {
+      border-color: var(--state-work);
+      background: #FFFBF9;
+      box-shadow: 0 2px 8px rgba(204, 120, 92, 0.1);
+      transform: translateX(2px);
+    }
+    .turn-capsule.active {
+      border-color: var(--state-work);
+      background: #FFF8F4;
+      border-width: 2px;
+    }
+
+    /* ========================================================
+       侧滑检视抽屉 (Turn Inspector Drawer)
+       ======================================================== */
+    .turn-drawer {
+      position: absolute;
+      top: 42px;
+      bottom: 0;
+      right: 0;
+      width: 520px;
+      background: #FFF;
+      border-left: 1px solid var(--border-default);
+      box-shadow: -4px 0 24px rgba(0,0,0,0.12);
+      transform: translateX(100%);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      z-index: 50;
+    }
+    .turn-drawer.open { transform: translateX(0); }
+    .drawer-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-default);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-card-muted);
+    }
+    .drawer-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .tool-exec-card {
+      padding: 10px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      background: #FFF;
+      font-size: 12px;
+    }
+    .tool-exec-card.slow { border-left: 3px solid #DC2626; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top-indicator">
+      <div>
+        <span class="badge">方案 A 深度对齐版</span>
+        <strong style="font-size:15px; color:var(--fg-title);">首页保持方案 A（双列组合榜）+ 点击会话进入完整详情页 + 抽屉检视</strong>
+        <p style="font-size:12px; color:var(--fg-muted);">首页原 4 指标、漏斗、140px 热力图不动；点击会话跳转进入包含 Breakdown、体检 KPI 与抽屉的完整详情页。</p>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button id="btnTabHome" onclick="navigateTo('home')" style="padding:8px 16px; border:none; background:#FFF; border-radius:6px; font-weight:700; color:var(--state-work); cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,0.1);">1. 首页 (方案 A)</button>
+        <button id="btnTabDetail" onclick="navigateTo('detail')" style="padding:8px 16px; border:none; background:none; border-radius:6px; font-weight:600; color:var(--fg-muted); cursor:pointer;">2. 独立会话详情页</button>
+      </div>
+    </div>
+
+    <!-- 浏览器视窗 -->
+    <div class="app-window">
+      <div class="window-header">
+        <div class="dots"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span></div>
+        <span class="window-url" id="lblAddress">http://127.0.0.1:8765/ (首页时间总览 · 方案 A)</span>
+        <span style="font-size:11px; color:var(--fg-muted);">可交互点击体验</span>
+      </div>
+
+      <!-- 1. 首页视图 (方案 A: 原生保留 + 替换两模块) -->
+      <div class="window-body" id="homePage">
+        <!-- 原生保留 1：顶部 4 KPI -->
+        <div class="fixed-kpis">
+          <div class="kpi-card">
+            <div class="kpi-label">已记录的累计机时</div>
+            <div class="kpi-val">7h 19m</div>
+            <div class="kpi-sub">各轮可测量记录区间时间相加 ↗</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">物理跨度并集时长</div>
+            <div class="kpi-val">7h 19m</div>
+            <div class="kpi-sub">同时运行的时间仅计一次 ↗</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">已测量 / 已记录轮次</div>
+            <div class="kpi-val">13 / 43</div>
+            <div class="kpi-sub">未结束或异常记录单列 ↗</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">统计会话总数</div>
+            <div class="kpi-val">19</div>
+            <div class="kpi-sub">已接入本地工具全部记录 ↗</div>
+          </div>
+        </div>
+
+        <!-- 原生保留 2：耗时蒸发漏斗 -->
+        <div class="fixed-funnel">
+          <div class="funnel-head">
+            <span>耗时蒸发漏斗 (Time Drop Funnel) · 一屏讲透壁钟时长流向</span>
+            <span style="font-size:11px; background:#F4EFEA; padding:2px 8px; border-radius:4px; font-family:var(--font-mono);">1.0x 并发效能倍率</span>
+          </div>
+          <div class="funnel-row">
+            <span class="funnel-lbl">● 1. 原始挂机时总计</span>
+            <div class="funnel-track"><div class="funnel-bar" style="width:100%; background:#736B63;"></div></div>
+            <span class="funnel-val">18h 35m</span>
+          </div>
+          <div class="funnel-row">
+            <span class="funnel-lbl">● 2. 扣除等待人审阅卡点</span>
+            <div class="funnel-track"><div class="funnel-bar" style="width:0%; background:var(--state-wait);"></div></div>
+            <span class="funnel-val">-0ms</span>
+          </div>
+          <div class="funnel-row">
+            <span class="funnel-lbl">● 3. 扣除静默就绪待命</span>
+            <div class="funnel-track"><div class="funnel-bar" style="width:60.5%; background:#736B63;"></div></div>
+            <span class="funnel-val">-11h 15m</span>
+          </div>
+          <div class="funnel-row">
+            <span class="funnel-lbl">● 4. 沉淀纯工作有效净值</span>
+            <div class="funnel-track"><div class="funnel-bar" style="width:39.5%; background:var(--state-work);"></div></div>
+            <span class="funnel-val" style="color:var(--state-work);">7h 19m</span>
+          </div>
+        </div>
+
+        <!-- 原生保留 3：140px 热力图 -->
+        <div class="fixed-heatmap">
+          <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <strong style="font-size:13px; color:var(--fg-title);">全景时间轴与微缩视口 (Brush & Zoom Timeline)</strong>
+            <span style="font-size:12px; color:var(--fg-muted);">140px 黄金高度 · 指数非线性波峰</span>
+          </div>
+          <div class="heatmap-track-140">
+            <div class="heat-col"><div class="heat-bar" style="height:92%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:58%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:26%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:14%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:9%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:10%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:8%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:8%;"></div></div>
+            <div class="heat-col"><div class="heat-bar" style="height:8%;"></div></div>
+            <div class="heat-viewport">
+              <div class="handle"></div>
+              <div class="handle"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 方案 A 替换模块 1：双列组合榜（TOP 3 榜 + 视口分段条） -->
+        <div class="s1-grid">
+          <div class="s1-box">
+            <div class="s1-title">🏆 耗时投入最高的活跃会话榜 (Top Sessions)</div>
+            <div class="rank-mini-item" onclick="navigateTo('detail')">
+              <div style="display:flex; align-items:center;">
+                <span class="rank-num">01</span>
+                <div>
+                  <strong style="color:var(--fg-title);">项目逻辑分析</strong>
+                  <div style="font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">agent-time · claude/4cb85c26-</div>
+                </div>
+              </div>
+              <div style="font-family:var(--font-mono); font-weight:700; color:var(--state-work);">39m 13s</div>
+            </div>
+
+            <div class="rank-mini-item" onclick="navigateTo('detail')">
+              <div style="display:flex; align-items:center;">
+                <span class="rank-num">02</span>
+                <div>
+                  <strong style="color:var(--fg-title);">项目最致命的 3 个 bug</strong>
+                  <div style="font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">my_first_network · claude/42f3192d-</div>
+                </div>
+              </div>
+              <div style="font-family:var(--font-mono); font-weight:700; color:var(--state-work);">7m 22s</div>
+            </div>
+
+            <div class="rank-mini-item" onclick="navigateTo('detail')">
+              <div style="display:flex; align-items:center;">
+                <span class="rank-num">03</span>
+                <div>
+                  <strong style="color:var(--fg-title);">分析代码</strong>
+                  <div style="font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">agent-time · claude/cb310ff1-</div>
+                </div>
+              </div>
+              <div style="font-family:var(--font-mono); font-weight:700; color:var(--state-work);">2m 02s</div>
+            </div>
+          </div>
+
+          <div class="s1-box">
+            <div class="s1-title">📊 视口操作与耗时分布 (Operations Breakdown)</div>
+            <div class="multi-seg-bar">
+              <div style="width:48%; background:var(--color-mcp);" title="本地工具: 48.1%"></div>
+              <div style="width:32%; background:var(--color-system);" title="模型推理: 31.9%"></div>
+              <div style="width:14%; background:var(--color-skills);" title="等待人审阅: 13.9%"></div>
+              <div style="width:6%; background:var(--state-standby);" title="待命: 6.1%"></div>
+            </div>
+            <div style="font-size:12px; line-height:2.2;">
+              <div style="display:flex; justify-content:space-between;">
+                <span><span style="color:var(--color-mcp);">■</span> 本地代码工具执行 (Bash / Edit)</span>
+                <span style="font-family:var(--font-mono);">3h 31m · <strong>48.1%</strong></span>
+              </div>
+              <div style="display:flex; justify-content:space-between;">
+                <span><span style="color:var(--color-system);">■</span> AI 模型推理耗时 (Claude 3.5 Sonnet)</span>
+                <span style="font-family:var(--font-mono);">2h 20m · <strong>31.9%</strong></span>
+              </div>
+              <div style="display:flex; justify-content:space-between;">
+                <span><span style="color:var(--color-skills);">■</span> 等待人类审阅卡点 (Review Wait)</span>
+                <span style="font-family:var(--font-mono);">1h 01m · <strong>13.9%</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 方案 A 替换模块 2：纯会话流列表 (点击跳转进入该会话专属详情页) -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3 style="font-size:14px; font-weight:700; color:var(--fg-title);">全部会话流 (点击任一卡片跳转至独立详情页)</h3>
+          <span style="font-size:12px; color:var(--fg-muted);">共 19 个会话</span>
+        </div>
+
+        <div class="session-stream-card" onclick="navigateTo('detail')">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span style="font-size:11px; font-family:var(--font-mono); padding:2px 8px; background:var(--bg-card-muted); border-radius:4px; border:1px solid var(--border-subtle);">agent-time</span>
+            <strong style="font-size:14px; color:var(--fg-title);">项目逻辑分析</strong>
+            <span style="font-size:11px; color:var(--fg-muted); background:#EEE; padding:2px 6px; border-radius:3px;">3 轮交互</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:18px;">
+            <span style="font-family:var(--font-mono); font-weight:700; font-size:13px;">39m 13s</span>
+            <span style="font-size:12px; font-weight:600; color:var(--state-work); background:rgba(204,120,92,0.1); padding:4px 10px; border-radius:4px;">进入会话详情页 →</span>
+          </div>
+        </div>
+
+        <div class="session-stream-card" onclick="navigateTo('detail')">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span style="font-size:11px; font-family:var(--font-mono); padding:2px 8px; background:var(--bg-card-muted); border-radius:4px; border:1px solid var(--border-subtle);">my_first_network</span>
+            <strong style="font-size:14px; color:var(--fg-title);">项目最致命的 3 个 bug</strong>
+            <span style="font-size:11px; color:var(--fg-muted); background:#EEE; padding:2px 6px; border-radius:3px;">2 轮交互</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:18px;">
+            <span style="font-family:var(--font-mono); font-weight:700; font-size:13px;">7m 22s</span>
+            <span style="font-size:12px; font-weight:600; color:var(--state-work); background:rgba(204,120,92,0.1); padding:4px 10px; border-radius:4px;">进入会话详情页 →</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 会话独立详情页视图 (完整对标你的设计诉求) -->
+      <div class="window-body detail-view" id="detailPage">
+        <!-- 顶部面包屑与返回导航 -->
+        <div class="detail-nav">
+          <div class="btn-back-home" onclick="navigateTo('home')">
+            <span>← 返回首页时间总览</span>
+            <span style="color:var(--border-default); margin:0 4px;">|</span>
+            <span style="color:var(--fg-muted); font-family:var(--font-mono); font-weight:normal;">agent-time · claude/4cb85c26-7d7f</span>
+          </div>
+          <span style="font-size:12px; padding:3px 8px; background:#DCFCE7; color:#166534; font-weight:600; border-radius:4px;">会话状态：已完结 (Completed)</span>
+        </div>
+
+        <h2 style="font-size:20px; font-weight:800; color:var(--fg-title); margin-bottom:18px;">项目逻辑分析</h2>
+
+        <!-- [首屏第一眼] 本会话专属 Operations Breakdown (完全对标你上传的截图结构) -->
+        <div class="session-breakdown-full">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:12px;">
+            <strong style="font-size:15px; color:#111;">本会话操作与耗时分布 (Session Operations Breakdown)</strong>
+            <span style="font-size:13px; color:#666; font-family:var(--font-mono);">总壁钟 39m 13s · 纯工作净值 26m 02s (66.4%)</span>
+          </div>
+
+          <!-- 分段彩色长条 (对标截图) -->
+          <div class="multi-seg-bar" style="height:8px;">
+            <div style="width: 58%; background: var(--color-mcp);" title="本地工具执行: 58.2%"></div>
+            <div style="width: 25%; background: var(--color-system);" title="模型推理耗时: 25.1%"></div>
+            <div style="width: 14%; background: var(--color-skills);" title="等待人审阅: 14.2%"></div>
+            <div style="width: 3%; background: var(--state-standby);" title="待命: 2.5%"></div>
+          </div>
+
+          <!-- 逐项 Breakdown 列表 (对标截图) -->
+          <div class="breakdown-row">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="width:12px; height:12px; border-radius:3px; background:var(--color-mcp);"></span>
+              <span style="font-weight:500; color:#222;">本地代码工具执行 (Playwright 截屏、Bash、Edit)</span>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:12px; color:#555;">
+              <span>22m 51s</span>
+              <strong style="color:#111; margin-left:14px; display:inline-block; width:44px; text-align:right;">58.2%</strong>
+            </div>
+          </div>
+
+          <div class="breakdown-row">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="width:12px; height:12px; border-radius:3px; background:var(--color-system);"></span>
+              <span style="font-weight:500; color:#222;">AI 模型推理耗时 (Claude 3.5 Sonnet)</span>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:12px; color:#555;">
+              <span>9m 51s</span>
+              <strong style="color:#111; margin-left:14px; display:inline-block; width:44px; text-align:right;">25.1%</strong>
+            </div>
+          </div>
+
+          <div class="breakdown-row">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="width:12px; height:12px; border-radius:3px; background:var(--color-skills);"></span>
+              <span style="font-weight:500; color:#222;">等待人类审阅/确认卡点 (Review Wait)</span>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:12px; color:#555;">
+              <span>5m 33s</span>
+              <strong style="color:#111; margin-left:14px; display:inline-block; width:44px; text-align:right;">14.2%</strong>
+            </div>
+          </div>
+
+          <div class="breakdown-row">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="width:12px; height:12px; border-radius:3px; background:var(--state-standby);"></span>
+              <span style="font-weight:500; color:#222;">静默就绪与待命 (Standby)</span>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:12px; color:#555;">
+              <span>58s</span>
+              <strong style="color:#111; margin-left:14px; display:inline-block; width:44px; text-align:right;">2.5%</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 个核心效能 KPI 卡片 -->
+        <div class="detail-kpis">
+          <div class="kpi-card">
+            <div class="kpi-label">总壁钟时长 (WALL TIME)</div>
+            <div class="kpi-val" style="font-size:22px;">39m 13s</div>
+            <div class="kpi-sub">开始至完结绝对跨度</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">纯工作有效净值 (ACTIVE WORK)</div>
+            <div class="kpi-val" style="font-size:22px; color:var(--state-work);">26m 02s</div>
+            <div class="kpi-sub">模型推理 + 工具执行</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">自动化自治率 (AUTONOMY)</div>
+            <div class="kpi-val" style="font-size:22px;">82.4%</div>
+            <div class="kpi-sub">仅 2 次人工确认卡点</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">慢操作瓶颈数</div>
+            <div class="kpi-val" style="font-size:22px; color:#DC2626;">2 项</div>
+            <div class="kpi-sub">&gt;15s 慢本地操作</div>
+          </div>
+        </div>
+
+        <!-- 中部双栏：慢操作 TOP 榜 + 瓶颈归因诊断 -->
+        <div class="detail-diag-grid">
+          <div class="diag-card">
+            <div class="diag-head">
+              <span>慢操作 TOP 榜 (Slowest Operations)</span>
+              <span style="font-size:11px; color:var(--fg-muted);">点击直接呼出右侧抽屉</span>
+            </div>
+            <div class="slow-tool-row" onclick="openDrawer(2)">
+              <span style="font-family:var(--font-mono); color:var(--fg-title);">1. python3 playwright (截图验真)</span>
+              <span style="font-family:var(--font-mono); font-weight:700; color:#DC2626;">18.4s (轮次 #2)</span>
+            </div>
+            <div class="slow-tool-row" onclick="openDrawer(3)">
+              <span style="font-family:var(--font-mono); color:var(--fg-title);">2. npm test (回归测试套件)</span>
+              <span style="font-family:var(--font-mono); font-weight:700; color:#DC2626;">4.8s (轮次 #3)</span>
+            </div>
+            <div class="slow-tool-row" onclick="openDrawer(1)">
+              <span style="font-family:var(--font-mono); color:var(--fg-title);">3. git checkout & worktree setup</span>
+              <span style="font-family:var(--font-mono); font-weight:700; color:var(--fg-muted);">2.1s (轮次 #1)</span>
+            </div>
+          </div>
+
+          <div class="diag-card">
+            <div class="diag-head">
+              <span>瓶颈诊断与效率归因 (Attribution)</span>
+              <span style="font-size:11px; color:#16A34A; font-weight:700;">系统自检结论</span>
+            </div>
+            <div style="font-size:12px; line-height:1.8; color:var(--fg-body);">
+              <p>• <strong>主要耗时源</strong>：Playwright 视觉截屏占据该会话约 42% 的执行机时。</p>
+              <p>• <strong>人机交互健康度</strong>：等待人工审阅耗时仅 5m 33s（占比 14%），人机交付流转紧凑。</p>
+              <p>• <strong>建议优化</strong>：日常联调可优先使用轻量度量，减少端到端全量截屏频次。</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部：紧凑轮次甘特时序流 (点击任意轮次弹出右侧抽屉，主指标不丢失) -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3 style="font-size:14px; font-weight:700; color:var(--fg-title);">轮次时序流 (点击胶囊呼出右侧抽屉)</h3>
+          <span style="font-size:12px; color:var(--fg-muted);">共 3 轮交互</span>
+        </div>
+
+        <div class="turn-capsule" id="capsule1" onclick="openDrawer(1)">
+          <span style="width:70px; font-size:12px; font-weight:700; color:var(--state-work); font-family:var(--font-mono);">轮次 #1</span>
+          <span style="flex:1; font-size:13px; font-weight:500; color:var(--fg-title); padding:0 14px;">初始化工作树与测试套件勘测</span>
+          <div style="width:260px; height:12px; background:#E5E0D8; border-radius:4px; overflow:hidden; display:flex; margin-right:16px;">
+            <div style="width:30%; background:var(--color-system);" title="模型: 25s"></div>
+            <div style="width:70%; background:var(--color-mcp);" title="工具: 47s"></div>
+          </div>
+          <span style="width:80px; text-align:right; font-size:12px; font-weight:700; font-family:var(--font-mono); color:var(--fg-title);">1m 12s</span>
+        </div>
+
+        <div class="turn-capsule" id="capsule2" onclick="openDrawer(2)">
+          <span style="width:70px; font-size:12px; font-weight:700; color:var(--state-work); font-family:var(--font-mono);">轮次 #2</span>
+          <span style="flex:1; font-size:13px; font-weight:500; color:var(--fg-title); padding:0 14px;">热力图拉伸至 140px 与非线性指数缩放 ⚠️ (含慢脚本)</span>
+          <div style="width:260px; height:12px; background:#E5E0D8; border-radius:4px; overflow:hidden; display:flex; margin-right:16px;">
+            <div style="width:20%; background:var(--color-system);" title="模型: 5m"></div>
+            <div style="width:65%; background:var(--color-mcp);" title="工具: 17m"></div>
+            <div style="width:15%; background:var(--color-skills);" title="等待: 4m"></div>
+          </div>
+          <span style="width:80px; text-align:right; font-size:12px; font-weight:700; font-family:var(--font-mono); color:var(--fg-title);">26m 02s</span>
+        </div>
+
+        <div class="turn-capsule" id="capsule3" onclick="openDrawer(3)">
+          <span style="width:70px; font-size:12px; font-weight:700; color:var(--state-work); font-family:var(--font-mono);">轮次 #3</span>
+          <span style="flex:1; font-size:13px; font-weight:500; color:var(--fg-title); padding:0 14px;">会话名称解析修复与 Worktree 归一化</span>
+          <div style="width:260px; height:12px; background:#E5E0D8; border-radius:4px; overflow:hidden; display:flex; margin-right:16px;">
+            <div style="width:35%; background:var(--color-system);" title="模型: 4m"></div>
+            <div style="width:55%; background:var(--color-mcp);" title="工具: 6m"></div>
+            <div style="width:10%; background:var(--color-skills);" title="等待: 1m"></div>
+          </div>
+          <span style="width:80px; text-align:right; font-size:12px; font-weight:700; font-family:var(--font-mono); color:var(--fg-title);">11m 59s</span>
+        </div>
+      </div>
+
+      <!-- 3. 右侧检视抽屉 (Turn Inspector Drawer) -->
+      <div class="turn-drawer" id="sideDrawer">
+        <div class="drawer-header">
+          <div>
+            <div style="font-size:15px; font-weight:700; color:var(--fg-title);" id="dTitle">轮次 #2 深度检视</div>
+            <div style="font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">Turn ID: turn-b94f1c8e · Claude 3.5 Sonnet</div>
+          </div>
+          <button style="background:none; border:none; font-size:18px; color:var(--fg-muted); cursor:pointer;" onclick="closeDrawer()">✕</button>
+        </div>
+        <div class="drawer-body">
+          <div style="font-size:11px; font-weight:700; color:var(--fg-muted); text-transform:uppercase; margin-bottom:8px;">用户输入 (User Prompt)</div>
+          <div style="background:var(--bg-page); border:1px solid var(--border-default); border-radius:6px; padding:12px; font-size:13px; line-height:1.5; color:var(--fg-title);" id="dPrompt">
+            「1、那么请拉高；2、不要假设我没理解的原因，我觉得这个放这里会很不合适，因为用户可能聊过很多会话了，放着也没有一些明显的记忆锚点...」
+          </div>
+
+          <div style="font-size:11px; font-weight:700; color:var(--fg-muted); text-transform:uppercase; margin:16px 0 8px 0;">模型思考与推理 (CoT & Reasoning)</div>
+          <div style="background:#FFF; border:1px solid var(--border-default); border-radius:6px; padding:10px; font-size:12px; color:var(--fg-muted);">
+            <div>• 耗时: <strong>4m 12s</strong> · 输出 1,840 Tokens</div>
+            <div style="margin-top:4px;">• 决策机理: 检测到 1225px 视口下 80px 依然为 15:1 细线，决定提至 140px 并引入 0.42 幂缩放。</div>
+          </div>
+
+          <div style="font-size:11px; font-weight:700; color:var(--fg-muted); text-transform:uppercase; margin:16px 0 8px 0;">本轮工具调用栈 (Operations Stack)</div>
+          <div class="tool-exec-card slow">
+            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+              <strong style="color:var(--fg-title);">run_command: Playwright 视觉度量</strong>
+              <span style="color:#DC2626; font-weight:700; font-family:var(--font-mono);">18.4s (慢瓶颈)</span>
+            </div>
+            <div style="color:var(--fg-muted); font-size:11px; margin-top:2px;">无头浏览器启动、DOM 渲染度量并截取 1440x900 视口快照</div>
+          </div>
+
+          <div class="tool-exec-card">
+            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+              <strong style="color:var(--fg-title);">edit_file: public/style.css</strong>
+              <span style="color:var(--fg-muted); font-family:var(--font-mono);">0.3s</span>
+            </div>
+            <div style="color:var(--fg-muted); font-size:11px; margin-top:2px;">调整 .brush-strip-track 高度为 140px</div>
+          </div>
+
+          <div class="tool-exec-card">
+            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+              <strong style="color:var(--fg-title);">run_command: npm test</strong>
+              <span style="color:var(--fg-muted); font-family:var(--font-mono);">4.2s</span>
+            </div>
+            <div style="color:var(--fg-muted); font-size:11px; margin-top:2px;">执行回归测试套件 (65 passed)</div>
+          </div>
+
+          <div style="margin-top:24px; display:flex; justify-content:space-between;">
+            <button style="padding:6px 12px; font-size:12px; border:1px solid var(--border-default); background:#FFF; border-radius:4px; cursor:pointer;" onclick="openDrawer(1)">← 上一轮 (#1)</button>
+            <button style="padding:6px 12px; font-size:12px; border:1px solid var(--border-default); background:#FFF; border-radius:4px; cursor:pointer;" onclick="openDrawer(3)">下一轮 (#3) →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function navigateTo(page) {
+      const isHome = page === 'home';
+      document.getElementById('homePage').style.display = isHome ? 'block' : 'none';
+      document.getElementById('detailPage').style.display = isHome ? 'none' : 'block';
+
+      document.getElementById('btnTabHome').style.color = isHome ? 'var(--state-work)' : 'var(--fg-muted)';
+      document.getElementById('btnTabHome').style.background = isHome ? '#FFF' : 'none';
+      document.getElementById('btnTabDetail').style.color = isHome ? 'var(--fg-muted)' : 'var(--state-work)';
+      document.getElementById('btnTabDetail').style.background = isHome ? 'none' : '#FFF';
+
+      document.getElementById('lblAddress').textContent = isHome
+        ? 'http://127.0.0.1:8765/ (首页时间总览 · 方案 A)'
+        : 'http://127.0.0.1:8765/#session/claude-4cb85c26 (独立会话详情页 · 首屏专属分布图)';
+      
+      closeDrawer();
+    }
+
+    function openDrawer(turnNum) {
+      document.querySelectorAll('.turn-capsule').forEach(c => c.classList.remove('active'));
+      const cap = document.getElementById('capsule' + turnNum);
+      if (cap) cap.classList.add('active');
+
+      const drawer = document.getElementById('sideDrawer');
+      const title = document.getElementById('dTitle');
+      const prompt = document.getElementById('dPrompt');
+
+      if (turnNum === 1) {
+        title.textContent = '轮次 #1 深度检视';
+        prompt.textContent = '「MR !11 实现得怎么样了？好，更新到本地启动一下我看看」';
+      } else if (turnNum === 2) {
+        title.textContent = '轮次 #2 深度检视';
+        prompt.textContent = '「1、那么请拉高；2、不要假设我没理解的原因，我觉得这个放这里会很不合适，放着也没有一些明显的记忆锚点...」';
+      } else {
+        title.textContent = '轮次 #3 深度检视';
+        prompt.textContent = '「还有一个问题，这里的会话名称，都没有正确地被拿出来渲染；这俩分别是什么？」';
+      }
+
+      drawer.classList.add('open');
+    }
+
+    function closeDrawer() {
+      const drawer = document.getElementById('sideDrawer');
+      if (drawer) drawer.classList.remove('open');
+      document.querySelectorAll('.turn-capsule').forEach(c => c.classList.remove('active'));
+    }
+  </script>
+</body>
+</html>
