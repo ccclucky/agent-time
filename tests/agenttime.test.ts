@@ -727,6 +727,26 @@ test("Claude directory enablement discovers main transcripts, with privacy and t
   assert.deepEqual(readFileSync(p), before);
   assert(!readFileSync(store.path).includes(Buffer.from("PRIVATE")));
 });
+test("Claude extracts session title from ai-title and custom-title events", () => {
+  const { store, dir } = setup();
+  const rows = [
+    { type: "ai-title", aiTitle: "项目最致命的 3 个 bug", sessionId: "claude-session" },
+    ...claudeRows(),
+  ];
+  const p = file(dir, rows);
+  store.importFile(p, null, "claude");
+  const sessions = store.sessions();
+  assert.equal(sessions[0].title, "项目最致命的 3 个 bug");
+
+  const rowsWithCustom = [
+    ...rows,
+    { type: "custom-title", title: "用户自定义分析任务", sessionId: "claude-session" },
+  ];
+  const p2 = file(dir, rowsWithCustom);
+  store.importFile(p2, null, "claude");
+  const sessions2 = store.sessions();
+  assert.equal(sessions2[0].title, "用户自定义分析任务");
+});
 test("Claude tool results, metadata and compact summaries are not new submissions", () => {
   const { store, dir } = setup();
   store.importFile(

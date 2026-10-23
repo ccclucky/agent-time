@@ -62,6 +62,29 @@ export function parseClaude(path: string) {
         new TextDecoder("utf-8", { fatal: true }).decode(line),
       );
       if (!r || typeof r !== "object" || Array.isArray(r)) throw Error();
+      if (r.type === "custom-title" || r.type === "ai-title") {
+        const titleCandidate =
+          typeof r.title === "string"
+            ? r.title
+            : typeof r.aiTitle === "string"
+              ? r.aiTitle
+              : typeof r.customTitle === "string"
+                ? r.customTitle
+                : null;
+        if (
+          titleCandidate &&
+          titleCandidate.trim() &&
+          titleCandidate !== "undefined"
+        ) {
+          if (r.type === "custom-title" || !sessionTitle) {
+            sessionTitle = titleCandidate.trim();
+          }
+        }
+        if (validId(r.sessionId) && !sid) {
+          sid = r.sessionId;
+        }
+        continue;
+      }
       if (
         !["user", "assistant", "system", "progress", "attachment", "permission_request", "permission_response"].includes(
           r.type,
@@ -114,10 +137,7 @@ export function parseClaude(path: string) {
         continue;
       }
 
-      if (r.type === "custom-title" && typeof r.title === "string" && r.title.trim() && r.title !== "undefined") {
-        sessionTitle = r.title.trim();
-        continue;
-      }
+
       if (r.type === "user") {
         const isToolResult =
           r.toolUseResult ||

@@ -929,12 +929,16 @@ function table(rows) {
         ${rows
           .map((s) => {
             const lastAt = Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0));
+            const displayTitle = s.title ? h(s.title) : h(s.project);
+            const subTitle = s.title
+              ? `${h(s.project)} · ${h(s.id.slice(0, 16))}`
+              : h(s.id.slice(0, 16));
             return `
               <tr>
                 <td>
-                  <button class="textbtn" data-session="${h(s.id)}">
-                    <strong>${h(s.project)}</strong>
-                    <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono);">${h(s.id.slice(0, 16))}</span>
+                  <button class="textbtn" data-session="${h(s.id)}" style="text-align:left;">
+                    <strong style="display:block; font-size:13px; color:var(--ink); line-height:1.4;">${displayTitle}</strong>
+                    <span style="display:block; font-size:11px; color:var(--fg-muted); font-family:var(--font-mono); margin-top:2px;">${subTitle}</span>
                   </button>
                 </td>
                 <td><span class="tag">${h(s.agent)}</span></td>
@@ -956,7 +960,7 @@ function table(rows) {
 function filtered() {
   const needle = state.query.trim().toLowerCase();
   const rows = state.report.sessions.filter((s) =>
-    (s.project + " " + s.id + " " + s.agent).toLowerCase().includes(needle),
+    (s.project + " " + s.id + " " + s.agent + " " + (s.title || "")).toLowerCase().includes(needle),
   );
   return state.sort === "duration"
     ? rows.sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
@@ -1207,7 +1211,7 @@ function details(id) {
   }).join("");
 
   open(
-    `${head(s.project, `${s.agent} · ${s.id}`)}
+    `${head(s.title || s.project, `${s.project} · ${s.agent} · ${s.id}`)}
      <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
      <div style="max-height:60vh; overflow-y:auto;">
        ${turnsHtml}
