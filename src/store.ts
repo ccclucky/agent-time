@@ -45,6 +45,13 @@ export class Store {
     for (const col of ["last_error", "config_root"])
       if (!columns.includes(col))
         this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
+    const eventCols = this.db
+      .prepare("PRAGMA table_info(event)")
+      .all()
+      .map((r) => (r as { name: string }).name);
+    for (const col of ["agent_id", "tool_id", "tool_name"])
+      if (!eventCols.includes(col))
+        this.db.exec(`ALTER TABLE event ADD COLUMN ${col} TEXT`);
     try {
       chmodSync(this.path, 0o600);
     } catch {}
@@ -96,9 +103,21 @@ export class Store {
           m.agent,
         );
       this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
-      const put = this.db.prepare("INSERT INTO event VALUES(?,?,?,?,?,?)");
+      const put = this.db.prepare(
+        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name) VALUES(?,?,?,?,?,?,?,?,?)",
+      );
       for (const e of data.events)
-        put.run(sid, e.key, e.turn_id, e.kind, e.at_ms, e.model);
+        put.run(
+          sid,
+          e.key,
+          e.turn_id,
+          e.kind,
+          e.at_ms,
+          e.model,
+          e.agent_id ?? null,
+          e.tool_id ?? null,
+          e.tool_name ?? null,
+        );
     });
     return { events: data.events.length, issues: data.issues };
   }
@@ -207,7 +226,7 @@ export class Store {
         .all() as unknown as Source[],
       events: this.db
         .prepare(
-          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
+          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
         )
         .all() as unknown as (Event & { session_id: string })[],
     }));
@@ -265,13 +284,13 @@ export class Store {
         end = endings.length === 1 ? endings[0].at_ms : null,
         endKind = endings.length === 1 ? endings[0].kind : null;
       let status: Status =
-          endKind === "complete"
-            ? "completed"
-            : endKind === "abort"
-              ? "aborted"
-              : endKind === "fail"
-                ? "failed"
-                : "open",
+        endKind === "complete"
+          ? "completed"
+          : endKind === "abort"
+            ? "aborted"
+            : endKind === "fail"
+              ? "failed"
+              : "open",
         reason: string | null = null;
       if (starts.length > 1 || endings.length > 1) {
         status = "invalid";
@@ -303,6 +322,8 @@ export class Store {
         ].sort(),
         events: entries,
         work_ms: null,
+        review_wait_ms: null,
+        standby_ms: null,
         human_ms: null,
         response_gap_ms: null,
       });
