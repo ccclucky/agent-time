@@ -126,7 +126,7 @@ test("readSessionIndex degrades to an empty map on missing index, null root or b
   assert.equal(map.get("x3")?.updated_at_ms, null);
 });
 
-test("importFile enriches the topic from the session index under the config root", async () => {
+test("importFile enriches the title from the session index under the config root", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [
@@ -136,12 +136,12 @@ test("importFile enriches the topic from the session index under the config root
   await store.importFile(p, configRoot);
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);
-  assert.equal(sessions[0].topic, "修复构建脚手架");
+  assert.equal(sessions[0].title, "修复构建脚手架");
   const rep = report(sessions, "2026-10-21", "2026-10-21", "UTC", "Codex");
-  assert.equal(rep.sessions[0].topic, "修复构建脚手架");
+  assert.equal(rep.sessions[0].title, "修复构建脚手架");
 });
 
-test("unnamed sessions and missing indexes import fine without a topic", async () => {
+test("unnamed sessions and missing indexes import fine without a title", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "other", thread_name: "别的线程", updated_at: "2026-05-01T08:00:00Z" }]);
@@ -155,12 +155,12 @@ test("unnamed sessions and missing indexes import fine without a topic", async (
   );
   const sessions = store.sessions();
   assert.deepEqual(
-    sessions.map((s) => s.topic).sort(),
+    sessions.map((s) => s.title).sort(),
     [null, null],
   );
 });
 
-test("a stale topic is cleared when a later import no longer finds the thread", async () => {
+test("a stale title is cleared when a later import no longer finds the thread", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   const indexPath = sessionIndex(configRoot, [
@@ -168,10 +168,10 @@ test("a stale topic is cleared when a later import no longer finds the thread", 
   ]);
   const p = file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]);
   await store.importFile(p, configRoot);
-  assert.equal(store.sessions()[0].topic, "旧主题");
+  assert.equal(store.sessions()[0].title, "旧主题");
   unlinkSync(indexPath);
   await store.importFile(p, configRoot);
-  assert.equal(store.sessions()[0].topic, null);
+  assert.equal(store.sessions()[0].title, null);
 });
 
 test("duplicate index ids resolve newest-wins by updated_at, regardless of line order", async () => {
@@ -189,7 +189,7 @@ test("duplicate index ids resolve newest-wins by updated_at, regardless of line 
     file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]),
     configRoot,
   );
-  assert.equal(store.sessions()[0].topic, "改名后的新主题");
+  assert.equal(store.sessions()[0].title, "改名后的新主题");
 
   // An unparseable updated_at never displaces a dated duplicate.
   const configRoot2 = path.join(dir, "codex-home-2");
@@ -202,12 +202,12 @@ test("duplicate index ids resolve newest-wins by updated_at, regardless of line 
     configRoot2,
   );
   assert.equal(
-    store.sessions().find((s) => s.id === "s2")?.topic,
+    store.sessions().find((s) => s.id === "s2")?.title,
     "带时间戳的行",
   );
 });
 
-test("topics longer than 100 characters are truncated like project names", async () => {
+test("titles longer than 100 characters are truncated like project names", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "s1", thread_name: "主".repeat(150), updated_at: "2026-05-01T08:00:00Z" }]);
@@ -215,7 +215,7 @@ test("topics longer than 100 characters are truncated like project names", async
     file(dir, [meta("s1"), msg("task_started", 0, "t1"), msg("task_complete", 2, "t1")]),
     configRoot,
   );
-  assert.equal(store.sessions()[0].topic?.length, 100);
+  assert.equal(store.sessions()[0].title?.length, 100);
 });
 
 // ---------------------------------------------------------------- slice B: tokens
@@ -349,7 +349,7 @@ test("opening an old-schema database migrates additively and preserves data", as
   const { dir } = setup();
   const dbPath = path.join(dir, "old.sqlite3");
   // Schema as of the T2 integration commit (e654817): agent columns exist,
-  // but no topic column and no token_usage table.
+  // but no title column and no token_usage table.
   const raw = new DatabaseSync(dbPath);
   raw.exec(`CREATE TABLE source (
  id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL,
@@ -375,16 +375,16 @@ CREATE TABLE event (
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].project, "旧项目");
-  assert.equal(sessions[0].topic ?? null, null);
+  assert.equal(sessions[0].title ?? null, null);
   assert.equal(sessions[0].turns[0].events[0].key, OLD_KEY);
   assert.equal(sessions[0].tokens ?? null, null);
   const cols = store.db.prepare("PRAGMA table_info(source)").all().map((r: any) => r.name);
-  assert(cols.includes("topic"), "topic column must be added");
+  assert(cols.includes("title"), "title column must be added");
   const tables = store.db
     .prepare("SELECT name FROM sqlite_master WHERE type='table'")
     .all().map((r: any) => r.name);
   assert(tables.includes("token_usage"), "token_usage table must be created");
-  // new imports into the migrated DB carry topic + tokens end to end
+  // new imports into the migrated DB carry title + tokens end to end
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "s1", thread_name: "迁移后的新主题", updated_at: "2026-05-01T08:00:00Z" }]);
   await store.importFile(
@@ -402,7 +402,7 @@ CREATE TABLE event (
   );
   const all = store.sessions();
   const fresh = all.find((s) => s.id === "s1")!;
-  assert.equal(fresh.topic, "迁移后的新主题");
+  assert.equal(fresh.title, "迁移后的新主题");
   assert.equal(fresh.tokens?.total_tokens, 12);
   const old = all.find((s) => s.id === "oldsess")!;
   assert.equal(old.project, "旧项目");
@@ -410,7 +410,7 @@ CREATE TABLE event (
 
 // ---------------------------------------------------------------- slice E: frontend
 
-test("/api/report carries topic and tokens; app.js and index.html render them with a cache stamp", async () => {
+test("/api/report carries title and tokens; app.js and index.html render them with a cache stamp", async () => {
   const { dir, store } = setup();
   const configRoot = path.join(dir, "codex-home");
   sessionIndex(configRoot, [{ id: "s1", thread_name: "前端联调主题", updated_at: "2026-05-01T08:00:00Z" }]);
@@ -438,7 +438,7 @@ test("/api/report carries topic and tokens; app.js and index.html render them wi
   try {
     const reportJson = JSON.parse(await get("/api/report?start=2026-10-21&end=2026-10-21&timezone=UTC"));
     const session = reportJson.sessions.find((s: { id: string }) => s.id === "s1");
-    assert.equal(session.topic, "前端联调主题");
+    assert.equal(session.title, "前端联调主题");
     assert.equal(session.tokens.total_tokens, 960);
     assert.equal(session.turns[0].tokens.cached_input_tokens, 300);
 
@@ -446,7 +446,7 @@ test("/api/report carries topic and tokens; app.js and index.html render them wi
     assert(js.includes("fmtTokens"), "token formatter exists");
     assert(js.includes("本轮 Token 用量"), "turn token KPI box exists");
     assert(js.includes("会话累计 Token"), "session token KPI box exists");
-    assert(js.includes("session.topic"), "topic is consumed");
+    assert(js.includes("session.title"), "title is consumed");
     assert(js.includes("源记录未携带 Token 快照"), "absent tokens render as absent, never zero");
     const html = await get("/");
     assert(html.includes("/style.css?v="), "style.css carries an explicit cache stamp");

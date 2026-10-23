@@ -562,6 +562,7 @@ export class Store {
         id: s.session_id,
         agent: s.agent,
         project: s.project,
+        title: null,
         issues: [],
         turns: [],
         imported_at: s.imported_at,

@@ -28,14 +28,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本
-
-agent-time [serve] [--port 8765] [--db PATH]
-agent-time import --agent codex|claude|pi FILE_OR_DIRECTORY [--db PATH]
-agent-time refresh [--db PATH]
-
-（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，claude 与 pi 支持 .jsonl）
-默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude|pi FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，claude 与 pi 支持 .jsonl）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
