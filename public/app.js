@@ -573,8 +573,9 @@ function timeline() {
         <div class="session-card-header" role="button" tabindex="0" aria-expanded="${isExpanded}">
           <div class="session-header-left">
             <span class="session-expand-icon">${isExpanded ? "▼" : "▶"}</span>
-            <span class="session-project-pill" title="${h(s.project)}">${h(s.project)}</span>
-            <span class="session-title-anchor" title="${h(sessionTitleAnchor)}">${h(sessionTitleAnchor)}</span>
+            ${s.title
+              ? `<span class="session-project-pill" title="${h(s.project)}">${h(s.project)}</span><span class="session-title-anchor" title="${h(s.title)}">${h(s.title)}</span>`
+              : `<span class="session-title-anchor" title="${h(s.project)}">${h(s.project)}</span>`}
             <span class="session-turns-pill">${turnsCount} 轮</span>
           </div>
           <div class="session-track-col">
