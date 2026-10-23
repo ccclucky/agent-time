@@ -12,6 +12,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Store } from "../src/store.js";
 import { Directories } from "../src/directories.js";
+import { SOURCES } from "../src/adapters.js";
 
 const resources: { dir: string; store: Store }[] = [];
 function setup() {
@@ -162,4 +163,11 @@ test("CLI import accepts --agent pi, advertises it in help and rejects others", 
   const help = cli(["--help"]);
   assert.equal(help.status, 0);
   assert.match(help.stdout, /codex\|claude\|pi/);
+});
+test("Pi is advertised as a supported source with three-state event split", () => {
+  const pi = SOURCES.find((s) => s.agent === "Pi")!;
+  assert.ok(pi, "SOURCES must keep a Pi row");
+  assert.equal(pi.supported, true);
+  assert.equal(pi.status, "只读导入 · 事件流三态切分");
+  assert.ok(!pi.note.includes("尚未接入"));
 });
