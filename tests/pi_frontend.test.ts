@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { Store } from "../src/store.js";
 import { Directories } from "../src/directories.js";
 
@@ -114,4 +115,51 @@ test("enabled Pi directory discovers sessions/<encoded-project> transcripts as P
   assert.equal(sessions[0].project, "my_project");
   assert.equal(sessions[0].turns.length, 1);
   assert.equal(sessions[0].turns[0].status, "completed");
+});
+
+const worktree = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+);
+const cli = (args: string[]) =>
+  spawnSync(
+    process.execPath,
+    ["--import", "tsx", path.join(worktree, "src", "cli.ts"), ...args],
+    { encoding: "utf8", cwd: worktree },
+  );
+test("CLI import accepts --agent pi, advertises it in help and rejects others", () => {
+  const { dir, home } = setup();
+  const p = file(path.join(home, "incoming"), piRows());
+  const ok = cli([
+    "import",
+    "--agent",
+    "pi",
+    "--db",
+    path.join(dir, "cli.sqlite3"),
+    p,
+  ]);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(
+    JSON.parse(ok.stdout.trim().split("\n").at(-1)!).imported_files,
+    1,
+  );
+  const store = new Store(path.join(dir, "cli.sqlite3"));
+  try {
+    assert.equal(store.sessions()[0].agent, "Pi");
+  } finally {
+    store.close();
+  }
+  const bad = cli([
+    "import",
+    "--agent",
+    "opencode",
+    "--db",
+    path.join(dir, "cli.sqlite3"),
+    p,
+  ]);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /codex\|claude\|pi/);
+  const help = cli(["--help"]);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /codex\|claude\|pi/);
 });
