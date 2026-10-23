@@ -152,3 +152,5 @@ If Node is available, `node --check public/app.js` checks frontend syntax. Funct
 Product planning is maintained in [user stories](docs/user-stories.zh-CN.md) and [local adapter research](docs/local-adapter-research.zh-CN.md). Planned features there are not all implemented in this slice.
 
 Feedback on event sources, metric definitions, and real-world edge cases is welcome through GitHub issues. Please redact prompts, code, credentials, and other sensitive data from examples.
+
+If real logs produce suspicious totals or import exclusions, use the [offline diagnostic export](docs/diagnostics.zh-CN.md) to share selected, pseudonymized timestamp records. Synthetic tests do not establish compatibility with a local installation.
