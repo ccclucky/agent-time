@@ -92,7 +92,7 @@ export class Directories {
       source,
       enabled: !!saved?.enabled,
       status,
-      supported: a === "codex" || a === "claude",
+      supported: a === "codex" || a === "claude" || a === "pi",
       history_subdirectories: RULES[a].logs,
       location_note: inferred.note,
       evidence_url: inferred.evidence_url,
