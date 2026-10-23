@@ -1,5 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import {
   mkdtempSync,
   mkdirSync,
@@ -298,4 +299,69 @@ test("token_usage rows are rewritten idempotently per source", () => {
     store.db.prepare("SELECT count(*) n FROM token_usage").get()!.n,
     1,
   );
+});
+
+// ---------------------------------------------------------------- slice C: migration
+
+test("opening an old-schema database migrates additively and preserves data", () => {
+  const { dir } = setup();
+  const dbPath = path.join(dir, "old.sqlite3");
+  // Schema as of the T2 integration commit (e654817): agent columns exist,
+  // but no topic column and no token_usage table.
+  const raw = new DatabaseSync(dbPath);
+  raw.exec(`CREATE TABLE source (
+ id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL,
+ project TEXT NOT NULL, client TEXT NOT NULL, issues TEXT NOT NULL,
+ config_root TEXT, agent TEXT NOT NULL DEFAULT 'Codex', imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE directory (agent TEXT PRIMARY KEY, path TEXT, enabled INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE event (
+ source_id TEXT NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+ key TEXT NOT NULL, turn_id TEXT NOT NULL, kind TEXT NOT NULL,
+ at_ms INTEGER NOT NULL, model TEXT, PRIMARY KEY(source_id,key)
+);`);
+  const OLD_KEY = "old-key";
+  raw.prepare(
+    "INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent) VALUES('old1','/old/path','oldsess','旧项目','cli','[]',NULL,'Codex')",
+  ).run();
+  raw.prepare(
+    "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model) VALUES('old1',?,'t1','start',?,NULL)",
+  ).run(OLD_KEY, BASE);
+  raw.close();
+
+  const store = new Store(dbPath);
+  const sessions = store.sessions();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].project, "旧项目");
+  assert.equal(sessions[0].topic ?? null, null);
+  assert.equal(sessions[0].turns[0].events[0].key, OLD_KEY);
+  assert.equal(sessions[0].tokens ?? null, null);
+  const cols = store.db.prepare("PRAGMA table_info(source)").all().map((r: any) => r.name);
+  assert(cols.includes("topic"), "topic column must be added");
+  const tables = store.db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+    .all().map((r: any) => r.name);
+  assert(tables.includes("token_usage"), "token_usage table must be created");
+  // new imports into the migrated DB carry topic + tokens end to end
+  const configRoot = path.join(dir, "codex-home");
+  sessionIndex(configRoot, [{ id: "s1", thread_name: "迁移后的新主题", updated_at: "2026-05-01T08:00:00Z" }]);
+  store.importFile(
+    file(
+      dir,
+      [
+        meta("s1"),
+        msg("task_started", 0, "t1"),
+        tokenRow(1, { total_token_usage: usage({ input_tokens: 10, output_tokens: 2, total_tokens: 12 }) }),
+        msg("task_complete", 2, "t1"),
+      ],
+      "fresh.jsonl",
+    ),
+    configRoot,
+  );
+  const all = store.sessions();
+  const fresh = all.find((s) => s.id === "s1")!;
+  assert.equal(fresh.topic, "迁移后的新主题");
+  assert.equal(fresh.tokens?.total_tokens, 12);
+  const old = all.find((s) => s.id === "oldsess")!;
+  assert.equal(old.project, "旧项目");
 });
