@@ -368,10 +368,11 @@ function funnel() {
 // ========================================================
 // 模块 3：Brush & Zoom 全景画卷带与无级拖拽视口滑块
 // 采用完整三态高饱和高对比拼接，消除 Primitive Obsession
+// 视口会话聚合数学由 computeTimelineModel() 抽出，
+// 供首页双列组合榜 (TOP 3 榜 + 视口操作分布) 复用
 // ========================================================
-function timeline() {
+function computeTimelineModel() {
   const sessions = state.report.sessions || [];
-  if (!sessions.length) return "";
 
   const allTurns = [];
   for (const s of sessions) {
@@ -384,8 +385,6 @@ function timeline() {
     }
   }
 
-  if (!allTurns.length) return "";
-
   // 严格按真实时间戳线性排序
   allTurns.sort((a, b) => (a.turn.start_ms || 0) - (b.turn.start_ms || 0));
 
@@ -397,24 +396,76 @@ function timeline() {
     state.zoomInitialized = true;
   }
 
-  if (!state.expandedSessionIds) {
-    state.expandedSessionIds = new Set();
-    // 默认展开前 2 个活跃会话
-    if (sessions.length > 0) state.expandedSessionIds.add(sessions[0].id);
-    if (sessions.length > 1) state.expandedSessionIds.add(sessions[1].id);
-  }
-
-  const firstTurn = allTurns[0].turn;
-  const lastTurn = allTurns[allTurns.length - 1].turn;
-  const minTime = firstTurn.start_ms || firstTurn.end_ms || Date.now();
-  const maxTime = lastTurn.end_ms || lastTurn.start_ms || minTime + 1000;
+  const firstTurn = allTurns[0]?.turn;
+  const lastTurn = allTurns[allTurns.length - 1]?.turn;
+  const minTime = firstTurn
+    ? firstTurn.start_ms || firstTurn.end_ms || Date.now()
+    : Date.now();
+  const maxTime = lastTurn
+    ? lastTurn.end_ms || lastTurn.start_ms || minTime + 1000
+    : minTime + 1000;
   const totalTimelineSpan = Math.max(1, maxTime - minTime);
 
   // 严格按选定物理时间范围过滤可视会话与轮次
   const rangeStartMs = minTime + (state.zoomStartPct / 100) * totalTimelineSpan;
   const rangeEndMs = minTime + (state.zoomEndPct / 100) * totalTimelineSpan;
 
-  // 80px 全景时间热力带：48 个等长聚合时间桶
+  // 方案 A：以会话为一级主体聚合 (Session-First)
+  const sessionSummaries = sessions.map((s) => {
+    let sWork = 0;
+    let sWait = 0;
+    let sStandby = 0;
+    let sMinTime = Infinity;
+    let sMaxTime = 0;
+
+    for (const t of s.turns) {
+      sWork += t.work_ms || 0;
+      sWait += t.review_wait_ms || 0;
+      sStandby += t.standby_ms || 0;
+      const st = t.start_ms || t.end_ms;
+      const en = t.end_ms || t.start_ms;
+      if (st && st < sMinTime) sMinTime = st;
+      if (en && en > sMaxTime) sMaxTime = en;
+    }
+    if (sMinTime === Infinity) sMinTime = minTime;
+    if (sMaxTime === 0) sMaxTime = maxTime;
+
+    const sSum = sWork + sWait + sStandby;
+    return {
+      session: s,
+      work: sWork,
+      wait: sWait,
+      standby: sStandby,
+      total: sSum,
+      minTime: sMinTime,
+      maxTime: sMaxTime,
+      turnsCount: s.turns.length,
+    };
+  });
+
+  // 按物理时间范围过滤可见会话
+  const visibleSessions = sessionSummaries.filter((item) => {
+    if (state.zoomStartPct <= 0 && state.zoomEndPct >= 100) return true;
+    return item.maxTime >= rangeStartMs && item.minTime <= rangeEndMs;
+  });
+
+  return {
+    sessions,
+    allTurns,
+    totalTurns,
+    minTime,
+    maxTime,
+    totalTimelineSpan,
+    sessionSummaries,
+    visibleSessions,
+  };
+}
+
+function timeline(model) {
+  const { sessions, allTurns, totalTurns, minTime, maxTime, totalTimelineSpan } = model;
+  if (!sessions.length || !allTurns.length) return "";
+
+  // 140px 全景时间热力带：48 个等长聚合时间桶
   const BUCKETS = 48;
   const bucketDuration = Math.max(1, totalTimelineSpan / BUCKETS);
   const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
@@ -476,153 +527,25 @@ function timeline() {
     })
     .join("");
 
-  // 方案 A：以会话为一级主体聚合 (Session-First)
-  const sessionSummaries = sessions.map((s) => {
-    let sWork = 0;
-    let sWait = 0;
-    let sStandby = 0;
-    let sMinTime = Infinity;
-    let sMaxTime = 0;
-
-    for (const t of s.turns) {
-      sWork += t.work_ms || 0;
-      sWait += t.review_wait_ms || 0;
-      sStandby += t.standby_ms || 0;
-      const st = t.start_ms || t.end_ms;
-      const en = t.end_ms || t.start_ms;
-      if (st && st < sMinTime) sMinTime = st;
-      if (en && en > sMaxTime) sMaxTime = en;
-    }
-    if (sMinTime === Infinity) sMinTime = minTime;
-    if (sMaxTime === 0) sMaxTime = maxTime;
-
-    const sSum = sWork + sWait + sStandby;
-    return {
-      session: s,
-      work: sWork,
-      wait: sWait,
-      standby: sStandby,
-      total: sSum,
-      minTime: sMinTime,
-      maxTime: sMaxTime,
-      turnsCount: s.turns.length,
-    };
-  });
-
-  // 按物理时间范围过滤可见会话
-  const visibleSessions = sessionSummaries.filter((item) => {
-    if (state.zoomStartPct <= 0 && state.zoomEndPct >= 100) return true;
-    return item.maxTime >= rangeStartMs && item.minTime <= rangeEndMs;
-  });
-
-  const maxSessionTotal = Math.max(1, ...visibleSessions.map((s) => s.total));
-
-  const sessionCards = visibleSessions.length > 0 ? visibleSessions.map(({ session: s, work, wait, standby, total, turnsCount }) => {
-    const isExpanded = state.expandedSessionIds.has(s.id);
-    const sessionBarWidthPct = total > 0 ? Math.max(4, Math.min(100, Math.round((total / maxSessionTotal) * 100))) : 0;
-    const sessionTitleAnchor = s.title || s.project || "未命名会话";
-
-    // 计算内部轮次的最大耗时以呈现真实相对条长
-    const maxTurnInSession = Math.max(1, ...s.turns.map((t) => {
-      const wall = t.elapsed_ms ?? (t.end_ms && t.start_ms ? t.end_ms - t.start_ms : 0);
-      const sum = (t.work_ms || 0) + (t.review_wait_ms || 0) + (t.standby_ms || 0);
-      return Math.max(wall, sum);
-    }));
-
-    const turnRows = s.turns.map((t, idx) => {
-      const turnIndex = idx + 1;
-      const wall = t.elapsed_ms ?? (t.end_ms && t.start_ms ? t.end_ms - t.start_ms : 0);
-      const tWork = t.work_ms || 0;
-      const tWait = t.review_wait_ms || 0;
-      const tStandby = t.standby_ms || 0;
-      const tSum = tWork + tWait + tStandby;
-      const tDuration = Math.max(wall, tSum);
-
-      const tBarWidthPct = tDuration > 0 ? Math.max(4, Math.min(100, Math.round((tDuration / maxTurnInSession) * 100))) : 0;
-
-      let modelName = t.models[0] || "";
-      if (modelName === "<synthetic>") modelName = "系统辅助";
-      else if (!modelName) modelName = "任务执行";
-
-      const isTurnSelected = state.selectedTurnId === t.id;
-
-      return `
-        <div class="turn-row ${isTurnSelected ? "active" : ""}" data-session-id="${h(s.id)}" data-turn-id="${h(t.id)}" tabindex="0" role="button" aria-label="查看轮次 #${turnIndex} 详情">
-          <div class="turn-num-col">
-            <span class="turn-seq">#${turnIndex}</span>
-          </div>
-          <span class="turn-desc-col" title="${h(modelName)}">${h(modelName)}</span>
-          <div class="turn-track-col">
-            ${tDuration > 0 ? `
-              <div class="turn-bar-wrapper" style="width: ${tBarWidthPct}%;">
-                ${tWork > 0 ? `<div style="background:var(--state-work); width:${(tWork / (tSum || 1)) * 100}%;" title="纯工作: ${fmt(tWork)}"></div>` : ""}
-                ${tWait > 0 ? `<div style="background:var(--state-wait); width:${(tWait / (tSum || 1)) * 100}%;" title="等待人审阅: ${fmt(tWait)}"></div>` : ""}
-                ${tStandby > 0 ? `<div style="background:#9E968B; width:${(tStandby / (tSum || 1)) * 100}%;" title="待命: ${fmt(tStandby)}"></div>` : ""}
-              </div>
-            ` : `
-              <span class="turn-no-data-tag">未产生记录耗时</span>
-            `}
-          </div>
-          <span class="turn-time-col">${tDuration > 0 ? fmt(tDuration) : "—"}</span>
-        </div>
-      `;
-    }).join("");
-
-    return `
-      <div class="session-timeline-card ${isExpanded ? "expanded" : ""}" data-session-id="${h(s.id)}">
-        <div class="session-card-header" role="button" tabindex="0" aria-expanded="${isExpanded}">
-          <div class="session-header-left">
-            <span class="session-expand-icon">${isExpanded ? "▼" : "▶"}</span>
-            ${s.title
-              ? `<span class="session-project-pill" title="${h(s.project)}">${h(s.project)}</span><span class="session-title-anchor" title="${h(s.title)}">${h(s.title)}</span>`
-              : `<span class="session-title-anchor" title="${h(s.project)}">${h(s.project)}</span>`}
-            <span class="session-turns-pill">${turnsCount} 轮</span>
-          </div>
-          <div class="session-track-col">
-            ${total > 0 ? `
-              <div class="session-bar-wrapper" style="width: ${sessionBarWidthPct}%;">
-                ${work > 0 ? `<div style="background:var(--state-work); width:${(work / total) * 100}%;" title="纯工作: ${fmt(work)}"></div>` : ""}
-                ${wait > 0 ? `<div style="background:var(--state-wait); width:${(wait / total) * 100}%;" title="等待人审阅: ${fmt(wait)}"></div>` : ""}
-                ${standby > 0 ? `<div style="background:#9E968B; width:${(standby / total) * 100}%;" title="待命: ${fmt(standby)}"></div>` : ""}
-              </div>
-            ` : `
-              <span class="turn-no-data-tag">未产生记录耗时</span>
-            `}
-          </div>
-          <div class="session-header-right">
-            <span class="session-duration-val">${total > 0 ? fmt(total) : "—"}</span>
-          </div>
-        </div>
-        ${isExpanded ? `
-          <div class="session-turns-container">
-            ${turnRows}
-          </div>
-        ` : ""}
-      </div>
-    `;
-  }).join("") : `
-    <div style="padding: 28px 16px; text-align: center; color: var(--fg-muted); font-size: var(--text-sm);">
-      所选时间区间内无交互会话，可拖动上方滑块或点击
-      <button class="filter-chip" id="btnResetTimelineZoomInline" style="margin-left: 6px; padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>
-    </div>
-  `;
+  // 方案 A：以会话为一级主体聚合 (Session-First) —— 模型已在 computeTimelineModel() 计算
+  const { visibleSessions } = model;
 
   return `
   <section class="timeline-card">
     <div class="section-header">
       <div>
-        <span class="section-title">会话时间流与轮次展开 (Session Timeline)</span>
-        <span class="section-subtitle">以会话为锚点查看各任务耗时分布 · 点击会话展开交互轮次</span>
+        <span class="section-title">全景时间轴与微缩视口 (Brush & Zoom Timeline)</span>
+        <span class="section-subtitle">140px 黄金高度 · 指数非线性波峰 · 拖动滑块聚焦下方榜单与操作分布</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         ${(state.zoomStartPct > 0 || state.zoomEndPct < 100) ? `
-          <button class="filter-chip" id="btnResetTimelineZoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
+          <button class="filter-chip js-reset-zoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
         ` : ""}
         <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话 (共 ${sessions.length} 个会话, ${totalTurns} 轮交互)</span>
       </div>
     </div>
 
-    <!-- 80px 全景热力画卷 -->
+    <!-- 140px 全景热力画卷 -->
     <div class="brush-section">
       <div class="brush-strip-track" id="brushTrack">
         ${stripBlocks}
@@ -638,14 +561,157 @@ function timeline() {
         <span>${h(stamp(maxTime))}</span>
       </div>
     </div>
-
-    <!-- 会话锚点时间流列表 -->
-    <div class="gantt-zoom-stage">
-      <div class="timeline-session-list">
-        ${sessionCards}
-      </div>
-    </div>
   </section>`;
+}
+
+// ========================================================
+// 方案 A 替换模块 1：双列组合榜
+// 左：会话耗时 TOP 3 榜 · 右：当前视口 Operations Breakdown
+// 聚合口径：仅统计当前热力图视口 (zoomStartPct..zoomEndPct) 内可见的会话
+// ========================================================
+function sessionWallMs(s) {
+  return s.measured_turns ? s.period_ms || 0 : 0;
+}
+
+function zoomedViewport() {
+  return state.zoomStartPct > 0 || state.zoomEndPct < 100;
+}
+
+function topSessionsCard(model) {
+  const top = model.visibleSessions
+    .map((item) => item.session)
+    .map((s) => ({ s, duration: sessionWallMs(s) }))
+    .filter((x) => x.duration > 0)
+    .sort((a, b) => b.duration - a.duration)
+    .slice(0, 3);
+
+  const rows = top
+    .map(({ s, duration }, idx) => {
+      return `
+        <div class="rank-mini-item" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
+          <span class="rank-num">${String(idx + 1).padStart(2, "0")}</span>
+          <div class="rank-main">
+            <span class="rank-title">${h(s.title || s.project)}</span>
+            <span class="rank-subline">${h(s.project)} · ${h(s.id.slice(0, 16))}</span>
+          </div>
+          <span class="rank-duration">${fmt(duration)}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="s1-box">
+      <div class="s1-title">会话耗时 TOP 3 榜 (Top Sessions · 当前视口)</div>
+      ${rows || `
+        <div class="s1-empty">
+          当前视口内没有已测量耗时的会话${zoomedViewport() ? "，可点击" : ""}
+          ${zoomedViewport() ? '<button class="filter-chip js-reset-zoom" style="margin-left: 6px; padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>' : "。"}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// 多维操作分段条 (Operations Breakdown Sparkline) 的四个维度
+const VIEWPORT_SEGMENTS = [
+  { key: "tool", label: "本地代码工具执行 (Bash / Edit / 其他本地操作)", color: "var(--color-mcp)" },
+  { key: "model", label: "AI 模型推理耗时", color: "var(--color-system)" },
+  { key: "wait", label: "等待人类审阅卡点 (Review Wait)", color: "var(--color-skills)" },
+  { key: "standby", label: "静默就绪与待命 (Standby)", color: "var(--state-standby)" },
+];
+
+function aggregateViewportBreakdown(visibleSessions) {
+  const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
+  for (const item of visibleSessions) {
+    for (const t of item.session.turns) {
+      // Codex 会话没有 breakdown，天然按 0 贡献并优雅降级
+      agg.tool += t.breakdown?.tool_execution_ms ?? 0;
+      agg.model += t.breakdown?.model_api_ms ?? 0;
+      agg.wait += t.review_wait_ms ?? 0;
+      agg.standby += t.standby_ms ?? 0;
+    }
+  }
+  return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
+}
+
+function viewportBreakdownCard(model) {
+  const agg = aggregateViewportBreakdown(model.visibleSessions);
+  const total = agg.total;
+
+  const segHtml =
+    total > 0
+      ? VIEWPORT_SEGMENTS.map((seg) => {
+          const pct = (agg[seg.key] / total) * 100;
+          return pct > 0
+            ? `<div style="width:${pct.toFixed(1)}%; background:${seg.color};" title="${h(seg.label)}: ${pct.toFixed(1)}%"></div>`
+            : "";
+        }).join("")
+      : "";
+
+  const legendHtml = VIEWPORT_SEGMENTS.map((seg) => {
+    const ms = agg[seg.key];
+    const pct = total > 0 ? ((ms / total) * 100).toFixed(1) : "0.0";
+    return `
+      <div class="seg-legend-row">
+        <span class="seg-legend-label">
+          <span class="seg-legend-swatch" style="background:${seg.color};"></span>
+          ${h(seg.label)}
+        </span>
+        <span class="seg-legend-val">${ms > 0 ? fmt(ms) : "—"} · <strong>${pct}%</strong></span>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="s1-box">
+      <div class="s1-title">当前视口操作与耗时分布 (Operations Breakdown · ${model.visibleSessions.length} 个会话)</div>
+      ${total > 0 ? `
+        <div class="multi-seg-bar">${segHtml}</div>
+        <div class="seg-legend">${legendHtml}</div>
+      ` : `
+        <div class="s1-empty">
+          当前视口内的会话暂无细粒度操作拆分 (Codex 会话不提供 breakdown 事件)${zoomedViewport() ? "，可点击" : ""}
+          ${zoomedViewport() ? '<button class="filter-chip js-reset-zoom" style="margin-left: 6px; padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>' : "。"}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// ========================================================
+// 方案 A 替换模块 2：纯会话流列表
+// 首页最小原子是会话 (Session)，绝不在首页平铺每一轮次；
+// 点击卡片写入 #session/:id 哈希，独立详情页由后续切片落地
+// ========================================================
+function sessionStream() {
+  const rows = (state.report.sessions || [])
+    .slice()
+    .sort((a, b) => sessionWallMs(b) - sessionWallMs(a));
+
+  return `
+    <div class="session-stream-head">
+      <h3>全部会话流 (点击任一卡片跳转至独立详情页)</h3>
+      <span class="sub">共 ${rows.length} 个会话</span>
+    </div>
+    ${rows
+      .map(
+        (s) => `
+      <div class="session-stream-card" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
+        <div class="stream-left">
+          <span class="stream-project-pill" title="${h(s.project)}">${h(s.project)}</span>
+          <strong class="stream-title">${h(s.title || s.project)}</strong>
+          <span class="stream-turns-pill">${s.turns.length} 轮交互</span>
+        </div>
+        <div class="stream-right">
+          <span class="stream-duration">${fmt(sessionWallMs(s) || null)}</span>
+          <span class="stream-enter-chip">进入会话详情页 →</span>
+        </div>
+      </div>
+    `,
+      )
+      .join("")}
+  `;
 }
 
 function bindBrushEvents() {
@@ -653,49 +719,12 @@ function bindBrushEvents() {
   const track = $("#brushTrack");
   if (!vp || !track) return;
 
-  const btnReset = $("#btnResetTimelineZoom");
-  if (btnReset) {
-    btnReset.onclick = () => {
+  // 重置视口按钮（时间轴头部与双列榜空态共用，class 委托避免重复 id）
+  document.querySelectorAll(".js-reset-zoom").forEach((btn) => {
+    btn.onclick = () => {
       state.zoomStartPct = 0;
       state.zoomEndPct = 100;
       render();
-    };
-  }
-  const btnResetInline = $("#btnResetTimelineZoomInline");
-  if (btnResetInline) {
-    btnResetInline.onclick = () => {
-      state.zoomStartPct = 0;
-      state.zoomEndPct = 100;
-      render();
-    };
-  }
-
-  // 点击会话卡片头部展开/折叠
-  document.querySelectorAll(".session-card-header").forEach((header) => {
-    header.onclick = (e) => {
-      const card = header.closest(".session-timeline-card");
-      if (!card) return;
-      const sid = card.dataset.sessionId;
-      if (!sid) return;
-      if (state.expandedSessionIds.has(sid)) {
-        state.expandedSessionIds.delete(sid);
-      } else {
-        state.expandedSessionIds.add(sid);
-      }
-      render();
-    };
-  });
-
-  // 点击轮次打开抽屉
-  document.querySelectorAll(".session-turns-container .turn-row").forEach((row) => {
-    row.onclick = (e) => {
-      e.stopPropagation();
-      const sid = row.dataset.sessionId;
-      const tid = row.dataset.turnId;
-      const sessions = state.report?.sessions || [];
-      const s = sessions.find((x) => x.id === sid);
-      const t = s?.turns?.find((x) => x.id === tid);
-      if (t && s) openDrawer(t, s);
     };
   });
 
@@ -943,29 +972,23 @@ function closeDrawer() {
   const d = $("#detailDrawer");
   if (d) d.classList.add("collapsed");
   state.selectedTurnId = null;
-  $$(".turn-row").forEach((r) => r.classList.remove("active"));
 }
 
 function overview() {
   const s = state.report.summary;
   if (!s.sessions) return noData();
 
+  const model = computeTimelineModel();
+
   return `
     ${stats()}
     ${funnel()}
-    ${timeline()}
-    <section class="panel">
-      <div class="panelhead">
-        <h2>贡献最多的活跃会话</h2>
-        <button class="textbtn" data-page="sessions">查看全部会话 →</button>
-      </div>
-      ${table(
-        state.report.sessions
-          .slice()
-          .sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
-          .slice(0, 5),
-      )}
-    </section>
+    ${timeline(model)}
+    <div class="s1-grid">
+      ${topSessionsCard(model)}
+      ${viewportBreakdownCard(model)}
+    </div>
+    ${sessionStream()}
   `;
 }
 
@@ -1375,24 +1398,15 @@ async function refresh() {
 
 // 全局事件监听委托
 document.addEventListener("click", async (e) => {
-  // 1. 甘特轮次行点击唤起下钻抽屉
-  const turnRow = e.target.closest(".turn-row");
-  if (turnRow) {
-    const sId = turnRow.dataset.sessionId;
-    const tId = turnRow.dataset.turnId;
-    const s = state.report.sessions.find((x) => x.id === sId);
-    if (s) {
-      const t = s.turns.find((x) => x.id === tId);
-      if (t) {
-        $$(".turn-row").forEach((r) => r.classList.remove("active"));
-        turnRow.classList.add("active");
-        openDrawer(t, s);
-        return;
-      }
-    }
+  // 0. 方案 A 会话卡片 / TOP 榜行：写入 #session/:id 哈希进入独立详情页
+  //    （路由解析由后续切片落地；id 内含 "/"，需 encodeURIComponent）
+  const sessionCard = e.target.closest("[data-open-session]");
+  if (sessionCard) {
+    location.hash = "#session/" + encodeURIComponent(sessionCard.dataset.openSession);
+    return;
   }
 
-  // 2. 会话弹窗内下钻按钮
+  // 1. 会话弹窗内下钻按钮
   const drillBtn = e.target.closest("[data-drill-turn]");
   if (drillBtn) {
     const sId = drillBtn.dataset.drillSession;
@@ -1514,6 +1528,16 @@ document.addEventListener("change", (e) => {
 
 // ESC 键随手关闭抽屉与弹层，支持 Tab 焦点陷阱 (Focus Trap)
 document.addEventListener("keydown", (e) => {
+  // 键盘可达性：会话卡片 / TOP 榜行支持 Enter / Space 激活
+  if ((e.key === "Enter" || e.key === " ") && e.target instanceof Element) {
+    const card = e.target.closest("[data-open-session]");
+    if (card) {
+      e.preventDefault();
+      location.hash = "#session/" + encodeURIComponent(card.dataset.openSession);
+      return;
+    }
+  }
+
   const dialog = $("#layer [role=dialog]");
   if (dialog) {
     if (e.key === "Escape") {
