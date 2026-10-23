@@ -66,10 +66,17 @@
       <aside class="drawer-panel collapsed" id="detailDrawer" aria-label="轮次明细抽屉">
         <div class="drawer-header">
           <div class="drawer-title">
-            <span class="drawer-badge-dot">●</span>
+            <svg class="icon" style="color:var(--state-work); width:14px; height:14px;" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="8"/>
+            </svg>
             <span id="drawerTurnTitle">轮次耗时深度剖析</span>
           </div>
-          <button class="drawer-close" data-action="close-drawer" aria-label="关闭抽屉 (ESC)">×</button>
+          <button class="drawer-close" data-action="close-drawer" aria-label="关闭抽屉 (ESC)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
         <div class="drawer-body" id="drawerBody">
           <!-- 动态渲染抽屉总账与工具明细 -->
