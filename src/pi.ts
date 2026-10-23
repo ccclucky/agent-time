@@ -4,11 +4,14 @@
  * Only timing metadata is read; message content is never persisted.
  */
 import { posix } from "node:path";
-import { lines, timestamp, hash, legacyJSON } from "./codex.js";
+import { lines, timestamp, hash, legacyJSON, ID } from "./codex.js";
 import { ValidationError, type Event } from "./types.js";
 
 const validId = (v: unknown): v is string =>
-  typeof v === "string" && /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/.test(v);
+  typeof v === "string" && ID.test(v);
+
+// Unicode-safe truncation by code points, never splitting a surrogate pair.
+const truncate = (s: string, n: number) => Array.from(s).slice(0, n).join("");
 
 // message.timestamp is epoch ms (request start / result creation per role).
 const epochMs = (v: unknown): number => {
@@ -103,7 +106,7 @@ export function parsePi(path: string) {
         const modelId = typeof r.modelId === "string" ? r.modelId.trim() : "";
         if (!provider || !modelId) continue;
         const at = iso(r.timestamp),
-          model = Array.from(provider + "/" + modelId).slice(0, 120).join("");
+          model = truncate(provider + "/" + modelId, 120);
         if (current) add(current, "model", at, model);
         else pendingModels.push({ at, model });
         continue;
@@ -112,7 +115,7 @@ export function parsePi(path: string) {
         if (!sid) continue;
         const level =
           typeof r.thinkingLevel === "string" && r.thinkingLevel.trim()
-            ? Array.from(r.thinkingLevel.trim()).slice(0, 40).join("")
+            ? truncate(r.thinkingLevel.trim(), 40)
             : null;
         if (!level) continue;
         currentThinking = level;
@@ -144,10 +147,10 @@ export function parsePi(path: string) {
           responseEnd = dur !== null ? requestStart + dur : recordAt;
         const level =
           typeof m.thinkingLevel === "string" && m.thinkingLevel.trim()
-            ? Array.from(m.thinkingLevel.trim()).slice(0, 40).join("")
+            ? truncate(m.thinkingLevel.trim(), 40)
             : currentThinking;
         if (typeof m.model === "string" && m.model.trim())
-          add(turn, "model", requestStart, Array.from(m.model).slice(0, 120).join(""), {
+          add(turn, "model", requestStart, truncate(m.model, 120), {
             end_ms: responseEnd,
             thinking_level: level,
           });
@@ -219,7 +222,7 @@ export function parsePi(path: string) {
     if (encoded.startsWith("--")) encoded = encoded.slice(2);
     if (encoded.endsWith("--")) encoded = encoded.slice(0, -2);
     const last = encoded.split("-").pop() ?? "";
-    project = last ? Array.from(last).slice(0, 100).join("") : "未知项目";
+    project = last ? truncate(last, 100) : "未知项目";
     issues.add("会话头缺少 cwd；项目名由编码目录名有损解码，可能不准确");
   }
   const unique = new Map(events.map((e) => [e.key, e]));
