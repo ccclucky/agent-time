@@ -834,7 +834,9 @@ export class Store {
       if (turns.some((t) => overLimit(t.thinking)))
         missing.push("部分轮次的思考文本超长，已截断至 8000 字符");
       if (agent === "Codex")
-        missing.push("Codex 来源未记录模型思考文本，思考与推理无法展示");
+        missing.push(
+          "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示",
+        );
       return { session_id: sessionId, turns, missing_fields: missing };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;

@@ -517,11 +517,93 @@ export async function parse(path: string): Promise<ParseResult> {
 }
 
 /** On-demand transcript extraction for Codex sessions (never persisted).
- *  Codex event_msg rows carry the user prompt text (user_message) and the
- *  model reply (agent_message) per turn_id. Codex sources record no thinking
- *  text and no per-turn tool-call text; the caller reports those honestly via
+ *  The user prompt is carried in two places across real rollouts: the classic
+ *  event_msg/user_message rows and response_item/message (role=user) rows —
+ *  many files have ONLY the latter. Environment/instruction wrapper messages
+ *  (<user_instructions>, <ENVIRONMENT_CONTEXT>, …) are excluded so the real
+ *  prompt surfaces; a turn with no real prompt stays honestly null.
+ *  Codex sources record no decryptable thinking text (OpenAI ZDR encryption)
+ *  and no per-turn tool-call text; the caller reports those honestly via
  *  missing_fields instead of fabricating them.
  */
+// Markers identifying host/tool-injected wrapper messages rather than real
+// user prompts. Matched anywhere in the text (wrappers embed AGENTS.md bodies,
+// environment snapshots, and permission preambles around the marker tags).
+const PROMPT_WRAPPER_MARKERS = [
+  "<user_instructions>",
+  "<app_context>",
+  "<app-context>",
+  "<ENVIRONMENT_CONTEXT>",
+  "<INSTRUCTIONS>",
+  "# AGENTS.md instructions",
+  "<turn_context>",
+  "<permissions",
+];
+const isPromptWrapper = (text: string) =>
+  PROMPT_WRAPPER_MARKERS.some((m) => text.includes(m));
+
+// Detail-line cap for tool calls (~120 code points, single line).
+const TOOL_DETAIL_LIMIT = 120;
+// Most-informative-first argument keys: the first string field that looks like
+// THE operation (the command / path / query) wins over metadata like timeout.
+const TOOL_DETAIL_KEYS = ["cmd", "command", "args", "path", "query"];
+const oneLine = (s: string) =>
+  truncateCodePoints(s.replace(/\s+/g, " ").trim(), TOOL_DETAIL_LIMIT);
+/** Extract a one-line operation detail from a tool-call payload: a JSON
+ *  arguments string (Codex function_call), an input string (Codex
+ *  custom_tool_call), or an already-parsed input object (Claude tool_use).
+ *  Returns null when nothing informative exists. */
+export function toolCallDetail(raw: unknown): string | null {
+  let value = raw;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return oneLine(trimmed); // plain string input (e.g. apply_patch bodies)
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (typeof value === "number" || typeof value === "boolean") return null;
+    return null;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const pick = (pair: [string, unknown] | undefined): string | null => {
+    if (!pair) return null;
+    const v = pair[1];
+    if (typeof v === "string" && v.trim()) return oneLine(v);
+    if (Array.isArray(v)) {
+      const joined = v
+        .filter((x) => typeof x === "string" && x.trim())
+        .join(" ");
+      return joined ? oneLine(joined) : null;
+    }
+    return null;
+  };
+  for (const key of TOOL_DETAIL_KEYS) {
+    const hit = pick(entries.find(([k]) => k === key));
+    if (hit) return hit;
+  }
+  for (const pair of entries) {
+    const hit = pick(pair);
+    if (hit) return hit;
+  }
+  return null;
+}
+// Join a response_item message content[] into one prompt string.
+const messageText = (content: unknown): string | null => {
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .map((b) =>
+      b && typeof b === "object" && !Array.isArray(b)
+        ? (b as Record<string, unknown>).text
+        : null,
+    )
+    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+  return parts.length ? parts.join("\n") : null;
+};
+
 export function extractCodexTranscript(path: string): TranscriptTurn[] {
   const turns = new Map<string, TranscriptTurn>();
   let lastTurnId: string | null = null;
@@ -533,6 +615,11 @@ export function extractCodexTranscript(path: string): TranscriptTurn[] {
       turns.set(tid, t);
     }
     return t;
+  };
+  const setPrompt = (t: TranscriptTurn | null, text: string | null) => {
+    if (!t || t.prompt !== null || !text || !text.trim()) return;
+    if (isPromptWrapper(text)) return;
+    t.prompt = truncateCodePoints(text);
   };
   for (const line of lines(path)) {
     if (!line.toString().trim()) continue;
@@ -562,6 +649,50 @@ export function extractCodexTranscript(path: string): TranscriptTurn[] {
         const t = get(tid);
         if (t && t.prompt === null && typeof p.message === "string" && p.message.trim())
           t.prompt = truncateCodePoints(p.message);
+        continue;
+      }
+      // response_item/function_call & custom_tool_call: capture the invocation
+      // (name + call_id + one-line operation detail) so the drawer can show
+      // WHAT ran, not just the raw builtin name.
+      if (
+        row.type === "response_item" &&
+        (p.type === "function_call" || p.type === "custom_tool_call")
+      ) {
+        const t = get(tid);
+        if (t) {
+          const detail =
+            p.type === "custom_tool_call"
+              ? toolCallDetail(p.input)
+              : toolCallDetail(p.arguments);
+          t.tool_calls.push({
+            name:
+              typeof p.name === "string" && p.name ? p.name : "tool",
+            duration_ms: null,
+            call_id: typeof p.call_id === "string" ? p.call_id : null,
+            detail,
+          });
+        }
+        continue;
+      }
+      // response_item/message (role=user): the prompt rows most real rollouts
+      // carry. They carry no turn_id — associate to the nearest preceding
+      // turn_context; a message arriving before any turn starts a turn keyed
+      // by its own message id.
+      if (row.type === "response_item" && p.type === "message") {
+        if (p.role !== "user") continue; // system/developer roles are wrappers by definition
+        const text = messageText(p.content);
+        if (!text || isPromptWrapper(text)) continue;
+        if (tid) setPrompt(get(tid), text);
+        else {
+          const ownId =
+            typeof p.id === "string" && ID.test(p.id) ? p.id : null;
+          if (ownId) {
+            const t = get(ownId);
+            setPrompt(t, text);
+            lastTurnId = ownId;
+          }
+        }
+        continue;
       }
     } catch {
       // Unreadable line: skip it; the store reports degradation honestly.

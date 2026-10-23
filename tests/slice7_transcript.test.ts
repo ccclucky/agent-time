@@ -263,6 +263,131 @@ test("Codex transcript extraction: prompt extracted, thinking honestly reported 
   );
 });
 
+// ---- Codex rollout where the prompt only exists as response_item/message rows:
+// many real files carry no event_msg/user_message at all, plus an environment
+// wrapper message and encrypted (ZDR) reasoning rows that must NOT leak in. ----
+const codexResponseItemRows = () => [
+  {
+    type: "session_meta",
+    timestamp: "2026-10-21T00:00:00Z",
+    payload: { id: "codex-t4", source: "cli", cwd: "/work/codex-project" },
+  },
+  {
+    // Environment/instruction wrapper: must be excluded from the user prompt.
+    type: "response_item",
+    timestamp: "2026-10-21T00:00:01Z",
+    payload: {
+      type: "message",
+      role: "user",
+      id: "msg-env",
+      content: [
+        { type: "text", text: "<user_instructions>\n# AGENTS.md instructions\n私有内容\n</user_instructions>" },
+      ],
+    },
+  },
+  {
+    // Real user prompt BEFORE any turn_context: starts a turn keyed by its id.
+    type: "response_item",
+    timestamp: "2026-10-21T00:00:02Z",
+    payload: {
+      type: "message",
+      role: "user",
+      id: "msg-first",
+      content: [
+        { type: "text", text: "独立首条消息" },
+      ],
+    },
+  },
+  {
+    type: "turn_context",
+    timestamp: "2026-10-21T00:00:03Z",
+    payload: { turn_id: "turn-9", model: "gpt-5.3" },
+  },
+  {
+    // Real user prompt AFTER turn_context: associates to the open turn.
+    type: "response_item",
+    timestamp: "2026-10-21T00:00:05Z",
+    payload: {
+      type: "message",
+      role: "user",
+      id: "msg-real",
+      content: [
+        { type: "text", text: "帮我把首页间距修好" },
+      ],
+    },
+  },
+  {
+    // Encrypted reasoning (OpenAI ZDR): summary empty, content encrypted.
+    type: "response_item",
+    timestamp: "2026-10-21T00:00:04Z",
+    payload: { type: "reasoning", summary: [], encrypted_content: "ZDR-encrypted-blob" },
+  },
+  {
+    type: "response_item",
+    timestamp: "2026-10-21T00:00:06Z",
+    payload: {
+      type: "function_call",
+      name: "exec",
+      call_id: "call-1",
+      arguments: '{"cmd":"ls -la","timeout":10000}',
+    },
+  },
+  {
+    type: "response_item",
+    timestamp: "2026-10-21T00:00:07Z",
+    payload: {
+      type: "custom_tool_call",
+      name: "apply_patch",
+      call_id: "call-2",
+      input: "*** Begin Patch\n+line\n*** End Patch",
+    },
+  },
+  {
+    type: "event_msg",
+    timestamp: "2026-10-21T00:01:00Z",
+    payload: { type: "task_complete", turn_id: "turn-9" },
+  },
+];
+
+test("Codex response_item prompts: real user text extracted, wrappers excluded, ZDR reasoning honestly missing", async () => {
+  const { dir, store } = setup();
+  const p = jsonl(dir, codexResponseItemRows());
+  await store.importFile(p, null, "codex");
+
+  const result = store.transcript("codex-t4");
+  assert.ok(result, "known session must return a transcript");
+  const turns = result!.turns;
+  assert.equal(turns.length, 2, "wrapper must not create a turn of its own");
+  const first = turns.find((t) => t.turn_id === "msg-first");
+  const main = turns.find((t) => t.turn_id === "turn-9");
+  assert.ok(first && main, "pre-turn message keys its own turn; post-turn message joins turn-9");
+  assert.equal(first.prompt, "独立首条消息");
+  assert.equal(main.prompt, "帮我把首页间距修好");
+  assert.deepEqual(main.models, ["gpt-5.3"]);
+  assert.equal(main.thinking, null, "ZDR reasoning must stay null, never fabricated");
+  assert.ok(
+    result!.missing_fields.some((m) => m.includes("ZDR") || m.includes("加密")),
+    "missing_fields must explain that Codex thinking is ZDR-encrypted, not just '未记录'",
+  );
+});
+
+test("Codex tool calls: function_call arguments and custom_tool_call input surface as a detail line", async () => {
+  const { dir } = setup();
+  const p = jsonl(dir, codexResponseItemRows());
+  const turns = extractCodexTranscript(p);
+  const main = turns.find((t) => t.turn_id === "turn-9");
+  assert.ok(main);
+  assert.equal(main.tool_calls.length, 2);
+  const exec = main.tool_calls.find((c) => c.name === "exec");
+  const patch = main.tool_calls.find((c) => c.name === "apply_patch");
+  assert.ok(exec && patch);
+  assert.equal(exec.call_id, "call-1");
+  assert.equal(exec.detail, "ls -la", "arguments JSON must yield the most informative string field");
+  assert.equal(patch.call_id, "call-2");
+  assert.match(patch.detail ?? "", /^\*\*\* Begin Patch/, "custom_tool_call input becomes the detail");
+  assert.ok(Array.from(patch.detail ?? "").length <= 120, "detail is truncated to ~120 code points");
+});
+
 test("Missing source file: transcript degrades to empty turns with an honest reason", () => {
   const { dir, store } = setup();
   const p = jsonl(dir, claudeTranscriptRows());

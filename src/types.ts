@@ -154,6 +154,12 @@ export interface Session {
 export interface TranscriptToolCall {
   name: string;
   duration_ms: number | null;
+  /** Tool invocation id when the source carries one (Codex call_id); lets the
+   *  drawer match transcript details onto event-stream tool calls. */
+  call_id?: string | null;
+  /** One-line human-readable operation detail (command, patch input, path…),
+   *  truncated to ~120 code points; null when the source carries nothing. */
+  detail?: string | null;
 }
 
 export interface TranscriptTurn {

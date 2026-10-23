@@ -129,6 +129,37 @@ const statuses = {
   invalid: "记录冲突",
 };
 
+// Codex 内建工具的友好显示名（仅展示名；原始 id 保留在 title / 明细行中）。
+const TOOL_LABELS = {
+  exec: "执行命令",
+  wait: "等待",
+  followup_task: "跟进任务",
+  apply_patch: "应用补丁",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  view_image: "查看图片",
+};
+
+// 工具名的统一展示入口：内建名映射为友好名，未知名原样透传
+function toolLabel(name) {
+  return TOOL_LABELS[name] || name || "本地工具";
+}
+
+// 首页/抽屉统一使用的接入工具徽标（内联 SVG，见 agentMark 定义处）
+function agentMark(agent) {
+  const marks = {
+    Codex: { glyph: "Cx", cls: "codex", label: "Codex" },
+    "Claude Code": { sunburst: true, cls: "claude", label: "Claude Code" },
+    Pi: { glyph: "π", cls: "pi", label: "Pi" },
+  };
+  const m = marks[agent];
+  if (!m) return "";
+  const glyph = m.sunburst
+    ? '<path d="M8 2.2v11.6M2.2 8h11.6M3.9 3.9l8.2 8.2M12.1 3.9l-8.2 8.2" stroke="#FAF9F5" stroke-width="1.9" stroke-linecap="round" fill="none"/>'
+    : `<text x="8" y="11.4" text-anchor="middle" font-size="8" font-weight="700" fill="#FAF9F5" font-family="JetBrains Mono, ui-monospace, monospace">${h(m.glyph)}</text>`;
+  return `<span class="agent-mark agent-mark-${m.cls}" title="${h(m.label)}" aria-label="${h(m.label)}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="0" y="0" width="16" height="16" rx="4.5" fill="currentColor"/>${glyph}</svg></span>`;
+}
+
 async function api(url, options) {
   const r = await fetch(url, options);
   const data = await r.json();
@@ -946,6 +977,7 @@ function perCallToolTimings(turn) {
     calls.push({
       name: u.tool_name || r.tool_name || "本地工具",
       duration_ms: duration,
+      callId: u.tool_id || null,
       turnId: turn.id,
     });
   }
@@ -1026,7 +1058,7 @@ function attributionLines(s) {
   const slow = slowToolCalls(s);
   lines.push(
     slow.length
-      ? `检测到 ${slow.length} 项 >15s 慢操作，最慢为 ${slow[0].name}（${fmt(slow[0].duration_ms)}，轮次 #${slow[0].turnIndex}）。`
+      ? `检测到 ${slow.length} 项 >15s 慢操作，最慢为 ${toolLabel(slow[0].name)}（${fmt(slow[0].duration_ms)}，轮次 #${slow[0].turnIndex}）。`
       : "未检测到 >15s 的慢操作，执行节奏平稳。",
   );
   return lines;
@@ -1094,8 +1126,8 @@ function sessionDetail() {
 
   const slowRows = slow.slice(0, 3).map(
     (c, i) => `
-      <div class="slow-tool-row" data-turn-capsule="${h(c.turnId)}" role="button" tabindex="0" aria-label="在抽屉中检视轮次 #${c.turnIndex} 的 ${h(c.name)}">
-        <span class="slow-tool-name"><strong class="slow-tool-rank">${i + 1}.</strong> ${h(c.name)}<span class="slow-tool-turn">轮次 #${c.turnIndex}</span></span>
+      <div class="slow-tool-row" data-turn-capsule="${h(c.turnId)}" role="button" tabindex="0" aria-label="在抽屉中检视轮次 #${c.turnIndex} 的 ${h(toolLabel(c.name))}">
+        <span class="slow-tool-name"><strong class="slow-tool-rank">${i + 1}.</strong> <span class="slow-tool-label" title="${h(c.name)}">${h(toolLabel(c.name))}</span><span class="slow-tool-turn">轮次 #${c.turnIndex}</span></span>
         <span class="slow-tool-time">${fmt(c.duration_ms)}</span>
       </div>`,
   );
@@ -1441,11 +1473,12 @@ function openDrawer(turn, session) {
     ? perCallStack.map((c) => {
         const isSlow = c.duration_ms > SLOW_OP_THRESHOLD_MS;
         return `
-          <div class="tool-exec-card${isSlow ? " slow" : ""}">
+          <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}">
             <div class="tool-exec-head">
-              <strong>${h(c.name)}</strong>
+              <strong title="${h(c.name)}">${h(toolLabel(c.name))}</strong>
               <span class="tool-exec-time${isSlow ? " slow" : ""}">${fmt(c.duration_ms)}${isSlow ? " (慢瓶颈)" : ""}</span>
             </div>
+            <div class="tool-exec-detail">${h(c.name)}</div>
           </div>
         `;
       }).join("")
@@ -1572,8 +1605,7 @@ function drawerHint(text) {
 // 把文本写进抽屉 DOM 前先确认抽屉仍停在这一轮，防止异步竞态串轮
 function renderDrawerTranscript(entry, session, turn) {
   if (state.activeSessionId !== session.id || state.selectedTurnId !== turn.id)
-    return;
-  const promptEl = $("#drawerPrompt");
+    return;  const promptEl = $("#drawerPrompt");
   const cotEl = $("#drawerThinking");
   if (!promptEl || !cotEl) return;
 
@@ -1589,30 +1621,58 @@ function renderDrawerTranscript(entry, session, turn) {
   const t = (entry.data?.turns || []).find((x) => x.turn_id === turn.id);
   const notes = entry.data?.missing_fields || [];
   if (!t) {
-    // 来源文件整体缺失/不可读时，后端会以 turns:[] + missing_fields 说明原因
-    const fileGone =
-      (entry.data?.turns || []).length === 0 && notes.length > 0;
-    promptEl.innerHTML = drawerHint(
-      fileGone
-        ? notes.join("；")
-        : "该轮次在本机源文件中未找到对应的提问文本（导入快照与来源文件可能存在差异）。",
+    // 来源文件整体缺失/不可读时，后端会以 turns:[] + missing_fields 说明原因；
+    // missing_fields 里可能混有思考链加密等与提问无关的说明，
+    // 提问槽位必须给出提问自己的诚实文案，绝不串槽。
+    promptEl.innerHTML = drawerHint("本机记录未包含该轮的用户输入文本。");
+    cotEl.innerHTML = drawerHint(
+      session.agent === "Codex"
+        ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
+        : "该来源未记录该轮的模型思考文本。",
     );
-    cotEl.innerHTML = drawerHint("该来源未记录该轮的模型思考文本。");
-    return;
+  } else {
+    if (t.prompt) promptEl.textContent = t.prompt;
+    else promptEl.innerHTML = drawerHint("本机记录未包含该轮的用户输入文本。");
+    if (t.thinking) cotEl.textContent = t.thinking;
+    else
+      cotEl.innerHTML = drawerHint(
+        session.agent === "Codex"
+          ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
+          : "该来源未记录该轮的模型思考文本。",
+      );
+    // 截断等诚实备注（missing_fields）只在抽屉内提示一次
+    if (notes.length && !$("#drawerTranscriptNote")) {
+      cotEl.insertAdjacentHTML(
+        "afterend",
+        `<p class="drawer-transcript-note" id="drawerTranscriptNote">${h(notes.join("；"))}</p>`,
+      );
+    }
+    // 工具调用明细行：transcript 中的 detail（命令 / 补丁内容）按 call_id 回填
+    applyDrawerToolDetails(entry, turn);
   }
-  if (t.prompt) promptEl.textContent = t.prompt;
-  else
-    promptEl.innerHTML = drawerHint("该来源未记录该轮的提问文本。");
-  if (t.thinking) cotEl.textContent = t.thinking;
-  else
-    cotEl.innerHTML = drawerHint("该来源未记录该轮的模型思考文本。");
-  // 截断等诚实备注（missing_fields）只在抽屉内提示一次
-  if (notes.length && !$("#drawerTranscriptNote")) {
-    cotEl.insertAdjacentHTML(
-      "afterend",
-      `<p class="drawer-transcript-note" id="drawerTranscriptNote">${h(notes.join("；"))}</p>`,
-    );
-  }
+}
+
+// 用按需读取的 transcript tool_calls[].detail 回填抽屉工具栈的第二行：
+// 有 detail 显示操作明细（命令、补丁内容…），没有则保留原始工具名
+function applyDrawerToolDetails(entry, turn) {
+  if (entry.status !== "ok") return;
+  const t = (entry.data?.turns || []).find((x) => x.turn_id === turn.id);
+  const calls = t?.tool_calls || [];
+  const byCall = new Map(
+    calls
+      .filter((c) => c.call_id && c.detail)
+      .map((c) => [c.call_id, c.detail]),
+  );
+  if (!byCall.size) return;
+  $$("#drawerBody .tool-exec-card[data-tool-call]").forEach((card) => {
+    const detail = byCall.get(card.dataset.toolCall);
+    if (!detail) return;
+    const line = card.querySelector(".tool-exec-detail");
+    if (line) {
+      line.textContent = detail;
+      line.title = detail;
+    }
+  });
 }
 
 function overview() {
@@ -2017,10 +2077,18 @@ async function refresh() {
       body: "{}",
     });
     await load();
+    // 失败 toast 点名具体文件（≤3 个 + 等 N 个），不再是无人格的计数
+    const failNames = [
+      ...new Set((r.failures || []).flatMap((f) => f.files || [])),
+    ];
+    const named = failNames.slice(0, 3).join("、");
+    const failDetail = named
+      ? `（${named}${r.failed > failNames.length ? ` 等 ${r.failed} 个` : ""}）`
+      : "";
     toast(
       `成功更新 ${r.updated} 个文件` +
         (r.excluded ? `，${r.excluded} 个分支副本按设计排除` : "") +
-        (r.failed ? `，${r.failed} 个失败` : ""),
+        (r.failed ? `，${r.failed} 个失败${failDetail}` : ""),
     );
     if (r.failed) {
       open(

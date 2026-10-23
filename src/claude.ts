@@ -9,6 +9,7 @@ import {
   hash,
   legacyJSON,
   truncateCodePoints,
+  toolCallDetail,
 } from "./codex.js";
 import { ValidationError, type Event, type TranscriptTurn } from "./types.js";
 
@@ -275,7 +276,7 @@ export function extractClaudeTranscript(path: string): TranscriptTurn[] {
   let current: string | null = null,
     lastTurnId: string | null = null,
     sid: string | null = null;
-  const pending = new Map<string, { name: string; at: number }>();
+  const pending = new Map<string, { name: string; at: number; detail: string | null }>();
   const get = (tid: string | null): TranscriptTurn | null => {
     if (!tid || !validId(tid)) return null;
     let t = turns.get(tid);
@@ -325,6 +326,8 @@ export function extractClaudeTranscript(path: string): TranscriptTurn[] {
                   t.tool_calls.push({
                     name: u.name,
                     duration_ms: Math.max(0, at - u.at),
+                    call_id: (b as ContentBlock).tool_use_id,
+                    detail: u.detail,
                   });
                   pending.delete((b as ContentBlock).tool_use_id!);
                 }
@@ -377,6 +380,7 @@ export function extractClaudeTranscript(path: string): TranscriptTurn[] {
             pending.set(block.id, {
               name: typeof block.name === "string" ? block.name : "tool",
               at,
+              detail: toolCallDetail(block.input),
             });
           }
         }

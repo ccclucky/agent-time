@@ -1915,6 +1915,17 @@ input[type="search"] {
   font-weight: 700;
 }
 
+/* 抽屉工具栈第二行：原始工具名或操作明细（命令 / 补丁内容），省略号安全 */
+.tool-exec-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 抽屉内的提问 / 思考文本区（按需读取，含诚实降级提示） */
 .drawer-section-label {
   font-size: 11px;
