@@ -665,6 +665,31 @@ test("first-time import failures report sanitized reasons without inventing an o
   assert(!JSON.stringify(result.failures).includes(home));
 });
 
+test("by-design exclusions are reported separately from failures", async () => {
+  const { store, dirs, home } = setup();
+  const root = path.join(home, ".codex");
+  file(path.join(root, "sessions"), rows());
+  file(
+    path.join(root, "sessions"),
+    [
+      {
+        ...meta("fork"),
+        payload: { ...meta("fork").payload, forked_from_id: "parent" },
+      },
+    ],
+    "fork-copy.jsonl",
+  );
+  dirs.save("codex", null, true);
+  const result = await store.refresh(dirs);
+  assert.equal(result.updated, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(result.excluded, 1);
+  assert.equal(result.exclusions.reduce((n, e) => n + e.count, 0), 1);
+  assert(!JSON.stringify(result.failures).includes("来源未知"));
+  assert.equal(store.sourceInfo().failed_sources, 0);
+  assert.equal(store.sessions().length, 1);
+});
+
 const claudeRow = (
   type: string,
   uuid: string,

@@ -1382,13 +1382,25 @@ async function refresh() {
       body: "{}",
     });
     await load();
-    toast(`成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个失败` : ""}`);
+    toast(
+      `成功更新 ${r.updated} 个文件` +
+        (r.excluded ? `，${r.excluded} 个分支副本按设计排除` : "") +
+        (r.failed ? `，${r.failed} 个失败` : ""),
+    );
     if (r.failed) {
       open(
         `${head("部分记录未能导入", `已更新 ${r.updated} 个文件，失败 ${r.failed} 个。`)}
          <p class="sub">首次导入失败的文件不会生成统计；此前已成功导入的记录会保留旧快照。</p>
+         ${r.excluded ? `<p class="sub">另有 ${r.excluded} 个分支副本按设计排除（见下方说明），不计入失败。</p>` : ""}
          <h3>失败原因</h3>
          ${(r.failures || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>服务未提供详细失败原因。</p>"}`,
+      );
+    } else if (r.excluded) {
+      open(
+        `${head("部分记录按设计排除", `已更新 ${r.updated} 个文件，无失败。`)}
+         <h3>排除原因</h3>
+         ${(r.exclusions || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>服务未提供详细说明。</p>"}
+         <p class="sub">这些文件是 Codex 为已导入会话生成的分叉快照：内容为父会话历史的复印件，不含子 Agent 的实际工作（子 Agent 机时已在父会话中计入）。导入它们会把同一段工作重复计时，因此保持排除。</p>`,
       );
     }
   } catch (e) {

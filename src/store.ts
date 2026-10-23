@@ -2,7 +2,13 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parse, hash, readSessionIndex, type IndexedThread } from "./codex.js";
+import {
+  parse,
+  hash,
+  readSessionIndex,
+  ExcludedSessionError,
+  type IndexedThread,
+} from "./codex.js";
 import { parseClaude } from "./claude.js";
 import { parsePi } from "./pi.js";
 import { SCHEMA } from "./schema.js";
@@ -446,11 +452,16 @@ export class Store {
     );
     for (const [p, r] of files) paths.set(p, r);
     const failures = new Map<string, string>();
+    // By-design exclusions (e.g. Codex fork copies of already-imported
+    // sessions) are not failures: they never generate statistics and must
+    // not read as errors in the UI or set last_error on any snapshot.
+    const exclusions = new Map<string, string>();
     // One shared index cache for the whole refresh: every config root's
     // session_index.jsonl is read and parsed at most once below.
     const indexCache: SessionIndexCache = new Map();
     let ok = 0,
       failed = 0,
+      excluded = 0,
       retired = 0;
     for (const [p, r] of [...paths].sort(([a], [b]) => a.localeCompare(b))) {
       try {
@@ -472,6 +483,11 @@ export class Store {
         );
         ok++;
       } catch (error) {
+        if (error instanceof ExcludedSessionError) {
+          excluded++;
+          exclusions.set(p, error.message);
+          continue;
+        }
         failed++;
         const code = (error as NodeJS.ErrnoException).code;
         failures.set(
@@ -517,10 +533,16 @@ export class Store {
     return {
       updated: ok,
       failed: failed - retired,
+      excluded,
       discovered: files.size,
       failures: [...new Set(failures.values())].map((reason) => ({
         reason,
         count: [...failures.values()].filter((value) => value === reason)
+          .length,
+      })),
+      exclusions: [...new Set(exclusions.values())].map((reason) => ({
+        reason,
+        count: [...exclusions.values()].filter((value) => value === reason)
           .length,
       })),
       relocated: retired,

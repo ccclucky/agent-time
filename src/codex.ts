@@ -273,7 +273,8 @@ export async function parse(path: string): Promise<ParseResult> {
       project: string;
       client: string;
     } | null = null,
-    excluded = false;
+    excluded = false,
+    unknownSource = false;
   const events: Omit<Event, "key">[] = [],
     issues = new Set<string>();
   // response_item / turn_context rows carry no turn_id: attribute them to the
@@ -318,9 +319,19 @@ export async function parse(path: string): Promise<ParseResult> {
       if (!p || typeof p !== "object" || Array.isArray(p)) continue;
       if (row.type === "session_meta") {
         if (typeof p.id !== "string" || !ID.test(p.id)) throw Error();
-        if (meta && meta.id !== p.id) excluded = true;
+        // Mixed session ids in one file is a data problem, not a designed
+        // exclusion: report it as a plain import failure.
+        if (meta && meta.id !== p.id) unknownSource = true;
+        // Recognized by-design markers (fork/subagent/rollback/remote) are
+        // excluded on purpose; an unrecognized source is a failure.
+        const sourceKnown =
+          ["cli", "vscode", "exec"].includes(p.source) ||
+          (p.source !== null &&
+            typeof p.source === "object" &&
+            typeof (p.source as Record<string, unknown>).subagent ===
+              "object");
+        if (!sourceKnown) unknownSource = true;
         if (
-          !["cli", "vscode", "exec"].includes(p.source) ||
           /cloud|remote/i.test(String(p.originator ?? "")) ||
           p.forked_from_id ||
           p.parent_thread_id ||
@@ -465,9 +476,13 @@ export async function parse(path: string): Promise<ParseResult> {
     }
   }
   if (!meta) throw new ValidationError("未找到有效 Codex 会话元数据");
+  if (unknownSource)
+    throw new ValidationError(
+      "来源未知或同一文件混合多个会话标识，无法安全解析；未导入",
+    );
   if (excluded)
     throw new ExcludedSessionError(
-      "来源未知、远程、子 Agent、分支继承或回滚记录暂不支持；未导入",
+      "远程/云端来源、子 Agent 分支副本或回滚记录按设计排除；未导入",
     );
   issues.add(
     "Codex：基于 task_started/task_complete、工具调用配对与 item_completed 锚点的三态切分；本地语料无审批事件，等待人审阅未单独计量",
