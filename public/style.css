@@ -50,6 +50,7 @@
   --color-system: #EA580C;      /* AI 模型推理耗时 */
   --color-skills: #D97706;      /* 等待人审阅卡点 */
   --state-standby: #9E968B;     /* 静默就绪待命 */
+  --state-token: #5E7A8B;       /* 石板蓝灰 - Token 用量下钻 */
 
   /* 5. 阴影系统 */
   --shadow-sm: 0 1px 3px rgba(31, 30, 29, 0.04);
@@ -992,6 +993,14 @@ h1#title {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+/* 会话主题可能较长：超出抽屉宽度时省略号截断，完整内容悬停可见 */
+.drawer-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .drawer-close {

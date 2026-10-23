@@ -13,12 +13,13 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.15.0"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc",
     "test": "tsx --test tests/*.test.ts",
+    "smoke:codex": "tsx scripts/smoke-codex.mts",
     "check": "tsc --noEmit",
     "prepack": "npm run build"
   },

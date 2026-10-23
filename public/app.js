@@ -107,6 +107,19 @@ const stamp = (ms) =>
         hour12: false,
       }).format(ms);
 
+// Token 数量紧凑格式：<1k 原样，<1M 保留一位小数的 k，再往上 M
+function fmtTokens(n) {
+  if (n === null || n === undefined) return "—";
+  if (n < 1000) return String(n);
+  if (n < 1000000) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return `${(n / 1000000).toFixed(2)}M`;
+}
+
+const tokenSub = (t) =>
+  t
+    ? `输入 ${fmtTokens(t.input_tokens)} · 缓存 ${fmtTokens(t.cached_input_tokens)} · 输出 ${fmtTokens(t.output_tokens)}`
+    : "源记录未携带 Token 快照";
+
 const statuses = {
   completed: "已完成",
   aborted: "已中止",
@@ -1250,8 +1263,11 @@ function openDrawer(turn, session) {
   if (titleEl) {
     titleEl.textContent =
       turnIndex === -1
-        ? `会话 ${session.project} · 轮次详情`
-        : `轮次 #${turnIndex + 1} 深度检视 · ${session.project}`;
+        ? session.title
+          ? `${session.title} · 轮次详情`
+          : `会话 ${session.project} · 轮次详情`
+        : `轮次 #${turnIndex + 1} 深度检视 · ${session.title || session.project}`;
+    titleEl.title = titleEl.textContent;
   }
 
   // 上/下一轮按钮：处于首/末轮时禁用
@@ -1397,7 +1413,7 @@ function openDrawer(turn, session) {
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
           <div class="drawer-kpi-title">模型推理耗时 (API)</div>
           <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : (work !== null ? fmt(work) : "—")}</div>
-          <div class="drawer-kpi-sub">${h(turn.models[0] || "模型上下文未知")}</div>
+          <div class="drawer-kpi-sub">${h(turn.models.join(" / ") || "模型上下文未知")}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
           <div class="drawer-kpi-title">工具执行耗时 (Tools)</div>
@@ -1413,6 +1429,19 @@ function openDrawer(turn, session) {
           <div class="drawer-kpi-title">单轮壁钟时长 (Wall Time)</div>
           <div class="drawer-kpi-val">${fmt(wall)}</div>
           <div class="drawer-kpi-sub">有效工作率: ${workRate !== null ? `${workRate}%` : "—"}</div>
+        </div>
+      </div>
+      <!-- Token / 模型下钻：与三态并排呈现；无快照如实留空，绝不 0 断言 -->
+      <div class="drawer-kpi-grid" style="margin-top:10px;">
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
+          <div class="drawer-kpi-title">本轮 Token 用量</div>
+          <div class="drawer-kpi-val">${fmtTokens(turn.tokens ? turn.tokens.total_tokens : null)}</div>
+          <div class="drawer-kpi-sub">${h(tokenSub(turn.tokens))}</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
+          <div class="drawer-kpi-title">会话累计 Token</div>
+          <div class="drawer-kpi-val">${fmtTokens(session.tokens ? session.tokens.total_tokens : null)}</div>
+          <div class="drawer-kpi-sub">${session.tokens ? "全部轮次快照差分累计" : "源记录未携带 Token 快照"}</div>
         </div>
       </div>
     </div>
@@ -1594,8 +1623,7 @@ function table(rows) {
 function filtered() {
   const needle = state.query.trim().toLowerCase();
   const rows = state.report.sessions.filter((s) =>
-    (s.project + " " + s.id + " " + s.agent + " " + (s.title || "")).toLowerCase().includes(needle),
-  );
+    (s.project + " " + s.id + " " + s.agent + " " + (s.title || "")).toLowerCase().includes(needle),  );
   return state.sort === "duration"
     ? rows.sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
     : rows;
@@ -1845,8 +1873,7 @@ function details(id) {
   }).join("");
 
   open(
-    `${head(s.title || s.project, `${s.project} · ${s.agent} · ${s.id}`)}
-     <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
+    `${head(s.title || s.project, `${s.project} · ${s.agent} · ${s.id}`)}     <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
      <div style="max-height:60vh; overflow-y:auto;">
        ${turnsHtml}
      </div>`,
@@ -1933,13 +1960,25 @@ async function refresh() {
       body: "{}",
     });
     await load();
-    toast(`成功更新 ${r.updated} 个文件${r.failed ? `，${r.failed} 个失败` : ""}`);
+    toast(
+      `成功更新 ${r.updated} 个文件` +
+        (r.excluded ? `，${r.excluded} 个分支副本按设计排除` : "") +
+        (r.failed ? `，${r.failed} 个失败` : ""),
+    );
     if (r.failed) {
       open(
         `${head("部分记录未能导入", `已更新 ${r.updated} 个文件，失败 ${r.failed} 个。`)}
          <p class="sub">首次导入失败的文件不会生成统计；此前已成功导入的记录会保留旧快照。</p>
+         ${r.excluded ? `<p class="sub">另有 ${r.excluded} 个分支副本按设计排除（见下方说明），不计入失败。</p>` : ""}
          <h3>失败原因</h3>
          ${(r.failures || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>服务未提供详细失败原因。</p>"}`,
+      );
+    } else if (r.excluded) {
+      open(
+        `${head("部分记录按设计排除", `已更新 ${r.updated} 个文件，无失败。`)}
+         <h3>排除原因</h3>
+         ${(r.exclusions || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>服务未提供详细说明。</p>"}
+         <p class="sub">这些文件是 Codex 为已导入会话生成的分叉快照：内容为父会话历史的复印件，不含子 Agent 的实际工作（子 Agent 机时已在父会话中计入）。导入它们会把同一段工作重复计时，因此保持排除。</p>`,
       );
     }
   } catch (e) {

@@ -124,13 +124,13 @@ test("Slice 6 Detail View: style.css ports the prototype detail-page classes", (
 
 test("Slice 6 Detail View: index.html keeps one shared cache-busting stamp for both assets", () => {
   const html = read("../public/index.html");
-  const cssV = html.match(/style\.css\?v=(\d+)/)![1];
-  const jsV = html.match(/app\.js\?v=(\d+)/)![1];
+  const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
+  const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
   assert.equal(
     cssV,
-    "144",
-    "version stamp must advance with each visual slice (143 → 144 in slice 3)",
+    "20261025-3",
+    "version stamp must advance with each visual slice (merge of PR #19: 20261025-2 → 20261025-3)",
   );
 });
 

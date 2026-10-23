@@ -124,12 +124,16 @@ test("Slice 7 Turn Inspector: style.css ports the prototype capsule and drawer c
   );
 });
 
-test("Slice 7 Turn Inspector: index.html bumps the cache-busting stamp to 144 and adds drawer step buttons", () => {
+test("Slice 7 Turn Inspector: index.html bumps the cache-busting stamp and adds drawer step buttons", () => {
   const html = read("../public/index.html");
-  const cssV = html.match(/style\.css\?v=(\d+)/)![1];
-  const jsV = html.match(/app\.js\?v=(\d+)/)![1];
+  const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
+  const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "144", "version stamp must be bumped 143 → 144");
+  assert.equal(
+    cssV,
+    "20261025-3",
+    "version stamp must be bumped past main's 20261025-2 after the PR #19 merge",
+  );
   assert.ok(
     html.includes("prev-turn") && html.includes("next-turn"),
     "drawer header must contain delegated prev/next buttons",

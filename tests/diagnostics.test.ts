@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { Store } from "../src/store.js";
 import { redactor } from "../scripts/export-diagnostics.mjs";
 
-test("diagnostic redaction retains relationships, timestamp facts and source shape without content", () => {
+test("diagnostic redaction retains relationships, timestamp facts and source shape without content", async () => {
   const redact = redactor(),
     secret = "PRIVATE_PROMPT_PASSWORD_PATH";
   const meta = redact(
@@ -69,7 +69,7 @@ test("diagnostic redaction retains relationships, timestamp facts and source sha
   );
 });
 
-test("offline CLI export preserves timing results, never changes input, and refuses overwrite", () => {
+test("offline CLI export preserves timing results, never changes input, and refuses overwrite", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "agenttime-diagnostic-test-"));
   let original: Store | undefined, sanitized: Store | undefined;
   try {
@@ -122,8 +122,8 @@ test("offline CLI export preserves timing results, never changes input, and refu
     );
     original = new Store(path.join(dir, "original.sqlite3"));
     sanitized = new Store(path.join(dir, "safe.sqlite3"));
-    original.importFile(input, null, "claude");
-    sanitized.importFile(safeFile, null, "claude");
+    await original.importFile(input, null, "claude");
+    await sanitized.importFile(safeFile, null, "claude");
     const originalTurn = original.sessions()[0].turns[0],
       safeTurn = sanitized.sessions()[0].turns[0];
     assert.equal(safeTurn.elapsed_ms, originalTurn.elapsed_ms);

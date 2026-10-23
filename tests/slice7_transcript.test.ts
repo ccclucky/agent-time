@@ -243,10 +243,11 @@ const codexTranscriptRows = () => [
   },
 ];
 
-test("Codex transcript extraction: prompt extracted, thinking honestly reported missing", () => {
+test("Codex transcript extraction: prompt extracted, thinking honestly reported missing", async () => {
   const { dir, store } = setup();
   const p = jsonl(dir, codexTranscriptRows());
-  store.importFile(p, null, "codex");
+  // Codex 导入经 zstd 流式适配后为异步：必须等待导入完成再查询 transcript。
+  await store.importFile(p, null, "codex");
 
   const result = store.transcript("codex-t3");
   assert.ok(result, "known session must return a transcript");

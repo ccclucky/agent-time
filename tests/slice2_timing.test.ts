@@ -21,7 +21,7 @@ const makeRow = (
   ...extra,
 });
 
-test("Slice 2: Claude Code three-state timing calculates work, review wait, standby and tool breakdown", () => {
+test("Slice 2: Claude Code three-state timing calculates work, review wait, standby and tool breakdown", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-slice2-"));
   const dbPath = path.join(tmpDir, "test.db");
   const store = new Store(dbPath);
@@ -77,7 +77,7 @@ test("Slice 2: Claude Code three-state timing calculates work, review wait, stan
   const jsonlPath = path.join(tmpDir, "claude-session.jsonl");
   fs.writeFileSync(jsonlPath, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
 
-  store.importFile(jsonlPath, null, "claude");
+  await store.importFile(jsonlPath, null, "claude");
 
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);

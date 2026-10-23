@@ -630,7 +630,7 @@ test("Pi: skips non-user-flow entries and unknown types; bad lines become issues
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi: rejects version > 3 sessions and mixed session ids", () => {
+test("Pi: rejects version > 3 sessions and mixed session ids", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
   const future = writeSession(tmpDir, "future.jsonl", [
     {
@@ -690,7 +690,7 @@ test("Pi: rejects version > 3 sessions and mixed session ids", () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi: missing cwd falls back to decoding the encoded directory name with an issue", () => {
+test("Pi: missing cwd falls back to decoding the encoded directory name with an issue", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
   // Encoding rule: strip leading /, replace / \ : with -, wrap in --.
   // /Users/demo/work/my_first_network -> --Users-demo-work-my_first_network--
@@ -734,7 +734,7 @@ test("Pi: missing cwd falls back to decoding the encoded directory name with an 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi: imports through Store.importFile into sessions() with end_ms/thinking_level columns", () => {
+test("Pi: imports through Store.importFile into sessions() with end_ms/thinking_level columns", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
   const T = (s: string) => Date.parse(s);
   const p = writeSession(tmpDir, "store-import.jsonl", [
@@ -811,7 +811,7 @@ test("Pi: imports through Store.importFile into sessions() with end_ms/thinking_
   ]);
 
   const store = new Store(path.join(tmpDir, "test.db"));
-  const result = store.importFile(p, null, "pi");
+  const result = await store.importFile(p, null, "pi");
   assert.ok(result.events > 0);
 
   const sessions = store.sessions();
@@ -912,7 +912,7 @@ test("Pi: Store migrates a legacy event table by adding end_ms and thinking_leve
       },
     },
   ]);
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const sessions = store.sessions();
   assert.equal(sessions.length, 1);
   const model = sessions[0].turns[0].events.find((e) => e.kind === "model")!;
@@ -922,7 +922,7 @@ test("Pi: Store migrates a legacy event table by adding end_ms and thinking_leve
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi: session_info names the session; latest wins and an empty name clears it", () => {
+test("Pi: session_info names the session; latest wins and an empty name clears it", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
   const header = {
     type: "session",
@@ -970,7 +970,7 @@ test("Pi: session_info names the session; latest wins and an empty name clears i
     tmpDir,
     "2026-10-10T10-00-00-000Z_01ab0001-0000-4000-8000-000000000001.jsonl",
   );
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const row = store.db
     .prepare("SELECT title FROM source WHERE session_id=?")
     .get("pi/01ab0001-0000-4000-8000-000000000001") as { title: string | null };
@@ -980,7 +980,7 @@ test("Pi: session_info names the session; latest wins and an empty name clears i
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi: reconstructs the active branch — abandoned subtree is excluded with an issue", () => {
+test("Pi: reconstructs the active branch — abandoned subtree is excluded with an issue", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
   const T = (s: string) => Date.parse(s);
   // u1 -> a1(complete); abandoned branch u2 -> a2 hangs off a1; the user
@@ -1006,7 +1006,7 @@ test("Pi: reconstructs the active branch — abandoned subtree is excluded with 
   assert.ok(data.issues.some((i) => i.includes("被放弃的分支记录")));
 
   const store = new Store(path.join(tmpDir, "branch.db"));
-  store.importFile(p, null, "pi");
+  await store.importFile(p, null, "pi");
   const s = store.sessions()[0];
   assert.equal(s.turns.length, 2);
   assert.equal(s.turns[0].id, "u1");
@@ -1017,7 +1017,7 @@ test("Pi: reconstructs the active branch — abandoned subtree is excluded with 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("Pi: automatic retries after stopReason error stay in the originating turn", () => {
+test("Pi: automatic retries after stopReason error stay in the originating turn", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
   const T = (s: string) => Date.parse(s);
   const assistant = (id: string, parent: string, stop: string, atIso: string, reqAt: number, dur: number) => ({
@@ -1036,7 +1036,7 @@ test("Pi: automatic retries after stopReason error stay in the originating turn"
     assistant("a2", "a1", "stop", "2026-10-09T22:01:05.000Z", T("2026-10-09T22:01:03.000Z"), 2000),
   ]);
   const store = new Store(path.join(tmpDir, "retry.db"));
-  store.importFile(retry, null, "pi");
+  await store.importFile(retry, null, "pi");
   const s = store.sessions()[0];
   assert.equal(s.turns.length, 1);
   assert.equal(s.turns[0].status, "completed");
@@ -1051,7 +1051,7 @@ test("Pi: automatic retries after stopReason error stay in the originating turn"
     { type: "message", id: "u2", parentId: "a1", timestamp: "2026-10-09T22:02:00.000Z", message: { role: "user", content: [{ type: "text", text: "again" }], timestamp: T("2026-10-09T22:02:00.000Z") } },
     assistant("a2", "u2", "stop", "2026-10-09T22:02:05.000Z", T("2026-10-09T22:02:03.000Z"), 2000),
   ]);
-  store.importFile(terminal, null, "pi");
+  await store.importFile(terminal, null, "pi");
   const s2 = store.sessions().find((x) => x.id === "pi/aaaabbbb-cccc-dddd-eeee-ffff00000062")!;
   assert.equal(s2.turns.length, 2);
   assert.equal(s2.turns[0].status, "failed");

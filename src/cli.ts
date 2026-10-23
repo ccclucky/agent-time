@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { Store } from "./store.js";
 import { makeServer } from "./server.js";
+import { isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
 import { ValidationError, type AdapterName, isAdapterName } from "./types.js";
 export function defaultDb() {
@@ -27,7 +28,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude|pi FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令）\n默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude|pi FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，claude 与 pi 支持 .jsonl）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
@@ -74,7 +75,7 @@ async function main() {
   }
   try {
     if (command === "refresh") {
-      const result = store.refresh();
+      const result = await store.refresh();
       console.log(JSON.stringify(result));
       process.exitCode = result.failed ? 1 : 0;
       return;
@@ -86,7 +87,10 @@ async function main() {
         if (e.isSymbolicLink()) continue;
         const p = path.join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (e.isFile() && p.endsWith(".jsonl")) {
+        else if (
+          e.isFile() &&
+          isSessionFile(values.agent ?? "", p)
+        ) {
           paths.push(p);
           if (paths.length > 5000)
             throw new ValidationError(
@@ -97,13 +101,14 @@ async function main() {
     };
     if (statSync(selected).isFile()) paths.push(selected);
     else walk(selected);
-    if (!paths.length) throw new ValidationError("指定目录没有 .jsonl 文件");
+    if (!paths.length)
+      throw new ValidationError("指定目录没有 .jsonl 或 .jsonl.zst 文件");
     let good = 0,
       failed = 0,
       warnings = 0;
     for (const p of paths.sort()) {
       try {
-        const result = store.importFile(
+        const result = await store.importFile(
           p,
           null,
           values.agent as AdapterName,
