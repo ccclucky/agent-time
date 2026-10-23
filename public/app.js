@@ -594,8 +594,8 @@ function openDrawer(turn, session) {
     .slice()
     .sort((a, b) => b.duration_ms - a.duration_ms);
   const breakdownRow = (label, ms) => `
-    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 12px; border-top:1px solid rgba(0,0,0,0.05);">
-      <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-title);">${h(label)}</span>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 12px; border-top:1px solid var(--line-subtle);">
+      <span style="font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg-title);">${h(label)}</span>
       <span class="tool-time">${fmt(ms)}</span>
     </div>
   `;
@@ -603,16 +603,16 @@ function openDrawer(turn, session) {
     ? `
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-        <span style="font-size:12px; font-weight:700; color:var(--fg-title);">模型与思考等级分项</span>
-        <span style="font-size:11px; color:var(--fg-muted);">仅统计已落盘的事件耗时</span>
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">模型与思考等级分项</span>
+        <span style="font-size:var(--text-xs); color:var(--fg-muted);">仅统计已落盘的事件耗时</span>
       </div>
-      <div style="border:1px solid rgba(0,0,0,0.06); border-radius:8px; overflow:hidden;">
+      <div style="border:1px solid var(--line); border-radius:8px; overflow:hidden;">
         ${modelBreakdown.length ? `
-          <div style="padding:7px 12px; background:rgba(0,0,0,0.03); font-size:11px; font-weight:600; color:var(--fg-title);">模型请求耗时分布</div>
+          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title);">模型推理耗时分布</div>
           ${modelBreakdown.map((m) => breakdownRow(m.model, m.duration_ms)).join("")}
         ` : ""}
         ${thinkingBreakdown.length ? `
-          <div style="padding:7px 12px; background:rgba(0,0,0,0.03); font-size:11px; font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid rgba(0,0,0,0.08);">思考等级耗时分布</div>
+          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid var(--line);">思考等级耗时分布</div>
           ${thinkingBreakdown.map((t) => breakdownRow(`思考等级 ${t.level}`, t.duration_ms)).join("")}
         ` : ""}
       </div>
