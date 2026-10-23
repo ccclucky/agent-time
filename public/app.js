@@ -452,8 +452,9 @@ function timeline() {
   const stripBlocks = buckets
     .map((b, idx) => {
       const totalActivity = b.workMs + b.waitMs;
-      // 80px 高度下，设置最小可见高度与舒展的动态范围
-      const heightPct = totalActivity > 0 ? Math.max(12, Math.min(100, Math.round((totalActivity / maxBucketActivity) * 100))) : 6;
+      // 使用次方根非线性缩放 (power scale)，避免单个超长会话峰值把其余中短活跃期压成贴地平线
+      const activityRatio = totalActivity > 0 ? Math.pow(totalActivity / maxBucketActivity, 0.42) : 0;
+      const heightPct = totalActivity > 0 ? Math.max(18, Math.min(100, Math.round(activityRatio * 100))) : 4;
       const workRatio = totalActivity > 0 ? Math.round((b.workMs / totalActivity) * 100) : 0;
       const waitRatio = totalActivity > 0 ? 100 - workRatio : 0;
       const isMuted = totalActivity === 0;

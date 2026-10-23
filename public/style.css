@@ -682,9 +682,10 @@ h1#title {
 .timeline-session-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   max-height: 520px;
   overflow-y: auto;
+  padding-right: 4px;
 }
 
 .session-timeline-card {
@@ -693,6 +694,7 @@ h1#title {
   background: #FAF8F5;
   transition: all 0.15s ease;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .session-timeline-card:hover {
@@ -709,11 +711,13 @@ h1#title {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 12px 14px;
+  padding: 10px 14px;
+  min-height: 48px;
   cursor: pointer;
   user-select: none;
   background: #FAF9F5;
   transition: background 0.15s ease;
+  box-sizing: border-box;
 }
 
 .session-card-header:hover {
@@ -758,7 +762,7 @@ h1#title {
 .session-title-anchor {
   font-size: var(--text-sm);
   font-weight: 700;
-  color: var(--fg);
+  color: var(--fg-title);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
