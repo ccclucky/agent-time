@@ -527,6 +527,58 @@ test("Pi timing: marker events without end_ms and invalid spans contribute zero,
   assert.deepEqual(timing.breakdown.thinking_breakdown, []);
 });
 
+test("Pi timing: assistant response without a model name still counts its duration as 未知模型", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
+  // a1 omits message.model entirely: the response span [B+500, B+2000) is
+  // still first-hand evidence and must land in work_ms, bucketed as
+  // 未知模型 in model_api_breakdown instead of being silently dropped.
+  const p = writeSession(tmpDir, "no-model.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "pit-0000-0000-0000-000000000007",
+      timestamp: iso(B),
+      cwd: "/work/demo_app",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: iso(B),
+      message: { role: "user", content: [{ type: "text", text: "q" }], timestamp: B },
+    },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: iso(B + 2000),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        stopReason: "stop",
+        timestamp: B + 500,
+        durationMs: 1500,
+        thinkingLevel: "low",
+      },
+    },
+  ]);
+  const store = new Store(path.join(tmpDir, "test.db"));
+  store.importFile(p, null, "pi");
+  const turn = store.sessions()[0].turns[0];
+  assert.equal(turn.status, "completed");
+  assert.equal(turn.work_ms, 1500);
+  assert.equal(turn.breakdown?.model_api_ms, 1500);
+  assert.deepEqual(turn.breakdown?.model_api_breakdown, [
+    { model: "未知模型", duration_ms: 1500 },
+  ]);
+  assert.deepEqual(turn.breakdown?.thinking_breakdown, [
+    { level: "low", duration_ms: 1500 },
+  ]);
+
+  store.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test("Pi timing: open turns keep null timing instead of guessing", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pit-"));
   const p = writeSession(tmpDir, "open-turn.jsonl", [

@@ -149,11 +149,17 @@ export function parsePi(path: string) {
           typeof m.thinkingLevel === "string" && m.thinkingLevel.trim()
             ? truncate(m.thinkingLevel.trim(), 40)
             : currentThinking;
-        if (typeof m.model === "string" && m.model.trim())
-          add(turn, "model", requestStart, truncate(m.model, 120), {
-            end_ms: responseEnd,
-            thinking_level: level,
-          });
+        const model =
+          typeof m.model === "string" && m.model.trim()
+            ? truncate(m.model, 120)
+            : null;
+        // Always emit the model event: even without a model name the response
+        // span is first-hand timing evidence for work_ms; the null model is
+        // bucketed as 未知模型 downstream.
+        add(turn, "model", requestStart, model, {
+          end_ms: responseEnd,
+          thinking_level: level,
+        });
         if (Array.isArray(m.content))
           for (const b of m.content) {
             if (!b || typeof b !== "object" || Array.isArray(b)) continue;

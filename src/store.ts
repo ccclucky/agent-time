@@ -179,8 +179,10 @@ export function calculatePiTiming(
     if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
     const dur = e.end_ms - e.at_ms;
     modelApiMs += dur;
-    if (e.model)
-      modelTotals.set(e.model, (modelTotals.get(e.model) ?? 0) + dur);
+    // Response spans recorded without a model name (message.model absent)
+    // still carry timing evidence; bucket them instead of dropping.
+    const modelKey = e.model ?? "未知模型";
+    modelTotals.set(modelKey, (modelTotals.get(modelKey) ?? 0) + dur);
     if (e.thinking_level)
       thinkingTotals.set(
         e.thinking_level,
