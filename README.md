@@ -1,12 +1,31 @@
 # AgentTime
 
+[![npm version](https://img.shields.io/npm/v/@ccclucky/agent-time.svg)](https://www.npmjs.com/package/@ccclucky/agent-time)
+
 AI Agent Time & Efficiency Analytics.
 
 AgentTime is a lightweight, local-first time ledger for AI coding agents. See recorded time costs, inspect overlapping execution, and follow a total down to individual sessions and timestamped events.
 
-**Status: early MVP.** The working adapters import selected local Codex rollout and Claude Code transcript JSONL files into a local SQLite database and serve a browser interface. It measures recorded processing intervals, not pure agent work: approval waits cannot be reconstructed reliably from these history files. Claude Code reports user-message-to-explicit-end **record timestamp spans**, which are a different basis from Codex execution boundaries. Other integrations remain planned. Compatibility has been checked against pinned upstream source and synthetic fixtures; validation with users’ local installations is still needed.
+## Quick Start (npm)
 
-## Run locally
+Install globally:
+
+```sh
+npm install -g @ccclucky/agent-time
+agenttime
+```
+
+Or run instantly without installation:
+
+```sh
+npx @ccclucky/agent-time
+```
+
+The web dashboard opens at `http://127.0.0.1:8765`. Press `Ctrl+C` to stop the server.
+
+---
+
+## Run from source
 
 Requires **Node.js 22.13+** (Node 24 LTS recommended) and npm. SQLite is provided by Node; there is no Python runtime or native-addon build requirement. Node 22 may print its built-in SQLite experimental warning. The browser interface uses native HTML/CSS/JavaScript and the backend uses TypeScript. An account or API key is not needed.
 
@@ -16,9 +35,10 @@ From this checkout:
 npm ci
 npm run dev
 ```
+
 Open **配置与接入 (Configuration & sources)** in the interface. Codex defaults to `~/.codex`; Claude Code defaults to `~/.claude` (transcripts under `projects`). For either tool, enable **从此目录读取会话 (Read sessions from this directory)** and save to import its history. Change the directory or restore its default in the same page. No command-line import is needed for this workflow.
 
-The default listener is `127.0.0.1:8765`, accessible only on this machine. A custom port is available with `serve --port 8766`. `Ctrl+C` stops the server. The npm package has not been published. For a package-level trial, run `npm pack` and then, from any directory, `npx --package /absolute/path/agenttime-0.1.0.tgz agenttime`. Do not use a bare `npx agenttime` yet: the registry name has not been verified or claimed. The package is marked private to prevent accidental publication.
+The default listener is `127.0.0.1:8765`, accessible only on this machine. A custom port is available with `npm run dev -- serve --port 8766`. `Ctrl+C` stops the server.
 
 By default, metadata is stored at `$XDG_DATA_HOME/agenttime/agenttime.sqlite3`, or `~/.local/share/agenttime/agenttime.sqlite3` when the variable is unset. To choose a different location, use the same `--db` path for every command:
 
