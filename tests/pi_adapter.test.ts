@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { parsePi } from "../src/pi.js";
+import { ValidationError } from "../src/types.js";
 
 const writeSession = (dir: string, name: string, rows: object[]) => {
   const p = path.join(dir, name);
@@ -623,6 +624,110 @@ test("Pi: skips non-user-flow entries and unknown types; bad lines become issues
   assert.ok(
     data.issues.some((i) => i.includes("无法解析")),
     "malformed line becomes an issue",
+  );
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: rejects version > 3 sessions and mixed session ids", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  const future = writeSession(tmpDir, "future.jsonl", [
+    {
+      type: "session",
+      version: 4,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000021",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+  ]);
+  assert.throws(() => parsePi(future), ValidationError);
+
+  // Older versions within the known contract are accepted.
+  const v1 = writeSession(tmpDir, "v1.jsonl", [
+    {
+      type: "session",
+      version: 1,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000022",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: "2026-10-09T22:03:05.000Z",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "q" }],
+        timestamp: Date.parse("2026-10-09T22:03:05.000Z"),
+      },
+    },
+  ]);
+  const d1 = parsePi(v1);
+  assert.equal(d1.session.id, "pi/aaaabbbb-cccc-dddd-eeee-ffff00000022");
+  assert.equal(d1.events.length, 1);
+
+  // A second, different session header in the same file means mixed content.
+  const mixed = writeSession(tmpDir, "mixed.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000023",
+      timestamp: "2026-10-09T22:03:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+    {
+      type: "session",
+      version: 3,
+      id: "aaaabbbb-cccc-dddd-eeee-ffff00000024",
+      timestamp: "2026-10-09T22:04:00.000Z",
+      cwd: "/Users/demo/work/my_project",
+    },
+  ]);
+  assert.throws(() => parsePi(mixed), ValidationError);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Pi: missing cwd falls back to decoding the encoded directory name with an issue", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agenttime-pi-"));
+  // Encoding rule: strip leading /, replace / \ : with -, wrap in --.
+  // /Users/demo/work/my_first_network -> --Users-demo-work-my_first_network--
+  const encodedDir = path.join(tmpDir, "--Users-demo-work-my_first_network--");
+  fs.mkdirSync(encodedDir);
+  const p = path.join(
+    encodedDir,
+    "2026-10-09T22-03-15-000Z_aaaabbbb-cccc-dddd-eeee-ffff00000031.jsonl",
+  );
+  fs.writeFileSync(
+    p,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "aaaabbbb-cccc-dddd-eeee-ffff00000031",
+        timestamp: "2026-10-09T22:03:00.000Z",
+        // cwd intentionally absent (v1-era session).
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: "2026-10-09T22:03:05.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "q" }],
+          timestamp: Date.parse("2026-10-09T22:03:05.000Z"),
+        },
+      }),
+    ].join("\n") + "\n",
+  );
+
+  const data = parsePi(p);
+  assert.equal(data.session.project, "my_first_network");
+  assert.ok(
+    data.issues.some((i) => i.includes("cwd") && i.includes("解码")),
+    "cwd fallback must be flagged as lossy-decoded",
   );
 
   fs.rmSync(tmpDir, { recursive: true, force: true });

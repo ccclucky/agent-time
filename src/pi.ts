@@ -211,7 +211,17 @@ export function parsePi(path: string) {
   if (!sid) throw new ValidationError("未找到有效 Pi 会话元数据");
   if (excluded)
     throw new ValidationError("Pi 混合会话记录暂不支持；未导入");
-  if (project === null) project = "未知项目";
+  if (project === null) {
+    // v1-era sessions have no cwd header; the session directory name encodes
+    // the original cwd lossily (all path separators became "-"), so take the
+    // final segment and flag the uncertainty.
+    let encoded = posix.basename(posix.dirname(path));
+    if (encoded.startsWith("--")) encoded = encoded.slice(2);
+    if (encoded.endsWith("--")) encoded = encoded.slice(0, -2);
+    const last = encoded.split("-").pop() ?? "";
+    project = last ? Array.from(last).slice(0, 100).join("") : "未知项目";
+    issues.add("会话头缺少 cwd；项目名由编码目录名有损解码，可能不准确");
+  }
   const unique = new Map(events.map((e) => [e.key, e]));
   return {
     session: {
