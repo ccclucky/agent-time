@@ -178,11 +178,11 @@ test("frontend copy includes Pi and drawer renders optional breakdown sections",
     "utf8",
   );
   assert.ok(
-    js.includes("当前接入 Codex、Claude Code、Pi、Antigravity 与 DeepSeek Harness"),
+    js.includes("当前接入 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 与 Oh-My-Pi"),
   );
   assert.ok(!js.includes("当前接入 Codex 和 Claude Code"));
   assert.ok(
-    js.includes("启用 Codex、Claude Code、Pi、Antigravity 或 DeepSeek Harness 数据目录"),
+    js.includes("启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 或 Oh-My-Pi 数据目录"),
   );
   assert.ok(js.includes("model_api_breakdown"));
   assert.ok(js.includes("thinking_breakdown"));

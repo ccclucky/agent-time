@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { Store } from "../src/store.js";
-import { parse, ExcludedSessionError } from "../src/codex.js";
+import { parse, ExcludedSessionError, lines } from "../src/codex.js";
 import { ValidationError } from "../src/types.js";
 import { report } from "../src/metrics.js";
 
@@ -460,4 +460,39 @@ realTest("real multi-turn .jsonl.zst samples produce non-null three-state timing
   }
   assert.ok(measured >= 2, "expected at least two measured turns");
   assert.ok(withStandby >= 1, "expected at least one standby gap");
+});
+
+// Regression (spec #7, ADR 0004): lines() reuses one 64 KiB chunk buffer, and
+// the splitter's carry-over used to hold a zero-copy view into it — the next
+// readSync overwrote the bytes before the spanning line was concatenated, so
+// every line crossing a chunk boundary came back with a stale garbage head.
+// First mass-exposed by Oh-My-Pi's long-line corpus (31 corrupt lines in one
+// 2.7 MiB file); a >64 KiB single record deterministically crosses the
+// boundary, and the trailing record catches tail corruption.
+test("lines(): spanning-line carry-over survives chunk buffer reuse", () => {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "agenttime-lsplit-")));
+  try {
+    const long = "x".repeat(70_000);
+    const file = path.join(dir, "big.jsonl");
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: "head", n: 1 }),
+        JSON.stringify({ type: "custom", data: { blob: long } }),
+        JSON.stringify({ type: "tail", n: 3 }),
+      ].join("\n") + "\n",
+    );
+    // Parse inside the loop: lines() yields zero-copy views that are only
+    // valid until the next chunk read, matching every real consumer.
+    const got: unknown[] = [];
+    for (const b of lines(file))
+      got.push(JSON.parse(new TextDecoder().decode(b)));
+    assert.equal(got.length, 3);
+    assert.equal((got[1] as { data: { blob: string } }).data.blob.length, long.length);
+    assert.equal((got[1] as { data: { blob: string } }).data.blob, long);
+    assert.deepEqual(got[0], { type: "head", n: 1 });
+    assert.deepEqual(got[2], { type: "tail", n: 3 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -27,6 +27,7 @@ import {
   readConversationIndex,
   type ConversationIndexEntry,
 } from "./antigravity.js";
+import { parseOmp, extractOmpTranscript } from "./omp.js";
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
@@ -65,6 +66,7 @@ const TRANSCRIPT_EXTRACTORS: Record<
   Codex: extractCodexTranscript,
   Antigravity: extractAntigravityTranscript,
   "DeepSeek Harness": extractDshTranscript,
+  "Oh-My-Pi": extractOmpTranscript,
 };
 
 // conversation_summaries.db is read once per config root per refresh/import
@@ -409,7 +411,9 @@ export class Store {
             ? parseAntigravity(p)
             : adapter === "pi"
               ? parsePi(p)
-              : parseDsh(p)),
+              : adapter === "omp"
+                ? parseOmp(p)
+                : parseDsh(p)),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -577,7 +581,9 @@ export class Store {
                   ? "antigravity"
                   : savedAgent === "DeepSeek Harness"
                     ? "dsh"
-                    : "codex"),
+                    : savedAgent === "Oh-My-Pi"
+                      ? "omp"
+                      : "codex"),
           indexCache,
           convIndexCache,
         );
@@ -829,7 +835,9 @@ export class Store {
         elapsed !== null &&
         start !== null &&
         end !== null &&
-        (sessionObj.agent === "Pi" || sessionObj.agent === "DeepSeek Harness")
+        (sessionObj.agent === "Pi" ||
+          sessionObj.agent === "DeepSeek Harness" ||
+          sessionObj.agent === "Oh-My-Pi")
       ) {
         applyTiming(calculatePiTiming(entries, start, end, elapsed));
       }
