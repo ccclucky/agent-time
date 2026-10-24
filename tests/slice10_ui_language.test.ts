@@ -29,7 +29,10 @@ const BANNED_ZH = [
 ];
 
 // English display annotations. Only definitions() may use them.
-// Phrases (not bare words) so code identifiers cannot trip the assertion.
+// The list mixes multi-word phrases with bare glossary words (Standby,
+// Attribution, Completed, ...). Bare words collide with camelCase identifiers
+// (the `sStandby` accumulator), so every probe requires word boundaries: the
+// display copy "Standby Duration" hits, the identifier `sStandby` does not.
 const BANNED_EN = [
   "WALL TIME",
   "ACTIVE WORK",
@@ -57,6 +60,11 @@ const BANNED_EN = [
 // English bare parenthetical suffixes that must be deleted outright.
 const BANNED_SUFFIXES = ["(API)", "(Tools)", "(Session)", "(Wall Time)"];
 
+// Word-boundary probe so identifiers such as `sStandby` are not mistaken for
+// display copy while a standalone "Standby" annotation is still caught.
+const bannedPhraseIn = (source: string, phrase: string) =>
+  new RegExp(`(?<![A-Za-z0-9_])${phrase}(?![A-Za-z0-9_])`).test(source);
+
 // Slice out a top-level function body so the definitions() glossary block
 // (the one legitimate English surface) is not counted as display copy.
 function sliceFunction(js: string, signature: string): string {
@@ -64,6 +72,38 @@ function sliceFunction(js: string, signature: string): string {
   assert.notEqual(start, -1, `${signature} must exist in public/app.js`);
   const next = js.indexOf("\nfunction ", start + signature.length);
   return js.slice(start, next === -1 ? js.length : next);
+}
+
+// Extract every balanced `name(...)` call. TypeScript/JS string literals in
+// these call sites keep parentheses balanced, so depth counting is enough.
+function callBlocks(js: string, name: string): string[] {
+  const blocks: string[] = [];
+  let from = 0;
+  for (;;) {
+    const start = js.indexOf(`${name}(`, from);
+    if (start === -1) break;
+    let depth = 0;
+    let i = js.indexOf("(", start);
+    for (; i < js.length; i += 1) {
+      if (js[i] === "(") depth += 1;
+      else if (js[i] === ")") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    blocks.push(js.slice(start, i + 1));
+    from = i + 1;
+  }
+  return blocks;
+}
+
+function dimensionMeta(source: string) {
+  const block = source.match(/const BREAKDOWN_DIMENSIONS = \[[\s\S]*?\];/);
+  assert.ok(block, "BREAKDOWN_DIMENSIONS must exist");
+  const entries = [
+    ...block![0].matchAll(/key: "([^"]+)",\s*\n\s*label: "([^"]+)"/g),
+  ].map((m) => ({ key: m[1], label: m[2] }));
+  return { block: block![0], entries };
 }
 
 const definitionsBody = () => sliceFunction(app(), "function definitions()");
@@ -90,7 +130,7 @@ test("Slice 10 UI language: default layer has no English annotations (definition
     ["public/index.html", html()],
     ["public/style.css", css()],
   ] as const) {
-    const hits = BANNED_EN.filter((phrase) => source.includes(phrase));
+    const hits = BANNED_EN.filter((phrase) => bannedPhraseIn(source, phrase));
     assert.deepEqual(
       hits,
       [],
@@ -106,13 +146,23 @@ test("Slice 10 UI language: default layer has no English annotations (definition
 });
 
 test("Slice 10 UI language: time-flow funnel reads 记录总时长 → 扣除等待确认 → 扣除待命 → 剩下 AI 工作", () => {
-  const body = sliceFunction(app(), "function funnel()");
+  const source = app();
+  const body = sliceFunction(source, "function funnel()");
   assert.ok(
     body.includes("时间流向"),
     "funnel section title must be 时间流向",
   );
-  const labels = [...body.matchAll(/<span>\d\.\s*([^<]+)<\/span>/g)].map((m) =>
-    m[1].trim(),
+  // Stages 2/3 derive their noun from the shared dimension table, so resolve
+  // dimensionTitle("wait"|"standby") before reading the rendered labels.
+  const byKey = Object.fromEntries(
+    dimensionMeta(source).entries.map((e) => [e.key, e.label]),
+  );
+  const resolved = body.replace(
+    /\$\{h\(dimensionTitle\("([^"]+)"\)\)\}/g,
+    (_m, key) => byKey[key] ?? `未知维度(${key})`,
+  );
+  const labels = [...resolved.matchAll(/<span>\d\.\s*([^<]+)<\/span>/g)].map(
+    (m) => m[1].trim(),
   );
   assert.deepEqual(
     labels,
@@ -127,39 +177,81 @@ test("Slice 10 UI language: time-flow funnel reads 记录总时长 → 扣除等
 
 test("Slice 10 UI language: one truth source drives the four dimension labels everywhere", () => {
   const source = app();
-  const block = source.match(/const BREAKDOWN_DIMENSIONS = \[[\s\S]*?\];/);
-  assert.ok(block, "BREAKDOWN_DIMENSIONS must exist");
-  const labels = [...block![0].matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+  const { block, entries } = dimensionMeta(source);
+  const labels = entries.map((e) => e.label);
   assert.deepEqual(labels, ["本地工具", "模型推理", "等待确认", "待命"]);
 
   assert.match(
     source,
-    /const VIEWPORT_SEGMENTS = BREAKDOWN_DIMENSIONS\.map/,
-    "VIEWPORT_SEGMENTS must derive from BREAKDOWN_DIMENSIONS",
+    /const VIEWPORT_SEGMENTS = BREAKDOWN_DIMENSIONS;/,
+    "VIEWPORT_SEGMENTS must alias BREAKDOWN_DIMENSIONS (one truth source)",
   );
   assert.match(
     source,
-    /const DETAIL_BREAKDOWN_ROWS = BREAKDOWN_DIMENSIONS\.map/,
-    "DETAIL_BREAKDOWN_ROWS must derive from BREAKDOWN_DIMENSIONS",
+    /const DETAIL_BREAKDOWN_ROWS = BREAKDOWN_DIMENSIONS;/,
+    "DETAIL_BREAKDOWN_ROWS must alias BREAKDOWN_DIMENSIONS (one truth source)",
   );
 
-  // No render site may re-hardcode a dimension display label.
-  const outside = source.replace(block![0], "");
+  // No render site may re-hardcode a dimension display label, as data or text.
+  // definitions() is the glossary surface, so its table cells are exempt.
+  const outside = source
+    .replace(block, "")
+    .replace(definitionsBody(), "");
   for (const word of labels) {
     assert.equal(
       outside.includes(`label: "${word}"`),
       false,
       `dimension label "${word}" must only live in BREAKDOWN_DIMENSIONS`,
     );
+    assert.equal(
+      outside.includes(`>${word}<`),
+      false,
+      `dimension label "${word}" must not be hardcoded in render copy`,
+    );
   }
+  // Exactly one label declaration per dimension across the whole file.
+  const declared = [...source.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+  for (const word of labels) {
+    assert.equal(
+      declared.filter((x) => x === word).length,
+      1,
+      `"${word}" must be declared exactly once (BREAKDOWN_DIMENSIONS)`,
+    );
+  }
+
+  // Drawer cards derive label + tooltip from the shared table.
+  const drawer = sliceFunction(source, "function openDrawer(");
+  for (const key of ["model", "tool", "wait"]) {
+    assert.ok(
+      drawer.includes(`dimensionTitle("${key}")`),
+      `drawer ${key} card title must come from dimensionTitle("${key}")`,
+    );
+    assert.ok(
+      drawer.includes(`dimensionHint("${key}")`),
+      `drawer ${key} card tooltip must come from dimensionHint("${key}")`,
+    );
+  }
+  const capsule = sliceFunction(source, "function capsuleBarHtml(");
+  assert.ok(
+    capsule.includes("dimensionHint(x.key)"),
+    "capsule segments must reuse the shared dimension hint",
+  );
 });
 
 test("Slice 10 UI language: drawer four cards read 模型推理 / 本地工具 / 等待确认 / 本轮时长", () => {
   const body = sliceFunction(app(), "function openDrawer(");
-  const titles = [...body.matchAll(/class="drawer-kpi-title"[^>]*>([^<]+)</g)].map(
-    (m) => m[1].trim(),
+  const keys = [
+    ...body.matchAll(/class="drawer-kpi-title">\$\{h\(dimensionTitle\("([^"]+)"\)\)\}/g),
+  ].map((m) => m[1]);
+  assert.deepEqual(
+    keys,
+    ["model", "tool", "wait"],
+    "the first three cards must be the shared 模型推理/本地工具/等待确认 dimensions",
   );
-  assert.deepEqual(titles.slice(0, 4), ["模型推理", "本地工具", "等待确认", "本轮时长"]);
+  assert.ok(
+    body.includes('class="drawer-kpi-title">本轮时长<'),
+    "the fourth card must read 本轮时长",
+  );
   assert.ok(body.includes("你的提问"), "prompt slot must read 你的提问");
   assert.ok(body.includes("模型思考过程"), "CoT slot must read 模型思考过程");
   assert.ok(body.includes("本轮时间构成"), "rollup section must read 本轮时间构成");
@@ -193,19 +285,28 @@ test("Slice 10 UI language: tooltips expose the glossary layer on stats, funnel,
   );
 
   const funnel = sliceFunction(source, "function funnel()");
-  const funnelTitles = [
-    ...funnel.matchAll(/<div class="funnel-bar-row" title="口径：([^"]+)"/g),
-  ].map((m) => m[1]);
-  assert.equal(funnelTitles.length, 4, "each funnel stage row needs a 口径 tooltip");
-  for (const field of [
-    "work_ms",
-    "review_wait_ms",
-    "standby_ms",
-    "模型推理 + 本地工具",
-  ]) {
-    assert.ok(
-      funnelTitles.some((t) => t.includes(field)),
-      `funnel tooltips must mention ${field}: ${funnelTitles.join(" | ")}`,
+  const funnelRows = [...funnel.matchAll(/<div class="funnel-bar-row"/g)].length;
+  assert.equal(funnelRows, 4, "each funnel stage row needs a 口径 tooltip");
+  // Stage 1 (composite) and stage 4 (AI work = model + tool) stay explicit.
+  assert.match(
+    funnel,
+    /<div class="funnel-bar-row" title="口径：记录总时长 = AI 工作 work_ms/,
+    "stage 1 tooltip must name the composite breakdown fields",
+  );
+  assert.match(
+    funnel,
+    /<div class="funnel-bar-row" title="口径：AI 工作 work_ms = 模型推理 \+ 本地工具"/,
+    "stage 4 tooltip must name the AI work components",
+  );
+  // Stages 2/3 must derive their tooltip from the shared dimension table
+  // instead of re-copying the hint strings.
+  for (const key of ["wait", "standby"]) {
+    assert.match(
+      funnel,
+      new RegExp(
+        `<div class="funnel-bar-row" title="\\$\\{h\\(dimensionHint\\("${key}"\\)\\)\\}"`,
+      ),
+      `stage tooltip must derive from dimensionHint("${key}")`,
     );
   }
 
@@ -217,17 +318,19 @@ test("Slice 10 UI language: tooltips expose the glossary layer on stats, funnel,
   );
 
   const detail = sliceFunction(source, "function sessionDetail(");
-  for (const field of [
-    "sessionWallSpan",
-    "work_ms",
-    "autonomy_rate",
-    "slow_ops",
-  ]) {
+  const kpiCalls = callBlocks(detail, "detailKpiCard");
+  assert.equal(kpiCalls.length, 4, "sessionDetail must render four KPI cards");
+  const kpiFields = ["sessionWallSpan", "work_ms", "autonomy_rate", "slow_ops"];
+  kpiCalls.forEach((block, i) => {
     assert.ok(
-      detail.includes(`口径：`) && detail.includes(field),
-      `KPI tooltips must name ${field}`,
+      block.includes("口径："),
+      `KPI card ${i + 1} must carry its own 口径 tooltip: ${block}`,
     );
-  }
+    assert.ok(
+      block.includes(kpiFields[i]),
+      `KPI card ${i + 1} must name ${kpiFields[i]}: ${block}`,
+    );
+  });
   const kpi = sliceFunction(source, "function detailKpiCard(");
   assert.match(
     kpi,
@@ -245,36 +348,31 @@ test("Slice 10 UI language: definitions() carries the full three-layer mapping t
   for (const header of ["展示词", "口径术语", "字段 / 计算式"]) {
     assert.ok(body.includes(header), `definitions table header must include ${header}`);
   }
-  for (const field of [
-    "processing_ms",
-    "processing_union_ms",
-    "sessionWallSpan",
-    "elapsed_ms",
-    "work_ms",
-    "review_wait_ms",
-    "standby_ms",
-    "autonomy_rate",
-    "slow_ops",
-    "model_ms",
-    "tool execution",
-  ]) {
-    assert.ok(body.includes(field), `definitions table must map ${field}`);
-  }
-  for (const display of [
-    "累计工作时长",
-    "并行去重时长",
-    "总时长",
-    "本轮时长",
-    "AI 工作",
-    "等待确认",
-    "待命",
-    "自动完成度",
-    "超 15s 慢操作",
-    "本地工具",
-    "模型推理",
-  ]) {
-    assert.ok(body.includes(display), `definitions table must list display word ${display}`);
-  }
+  // Parse the rendered rows so each display word must sit next to its own
+  // glossary term and field — independent `includes` would pass trivially.
+  const cell = (html: string) => html.replace(/<[^>]+>/g, "").trim();
+  const rows = [
+    ...body.matchAll(
+      /<tr><td>(.*?)<\/td><td class="sub">(.*?)<\/td><td>(.*?)<\/td><\/tr>/g,
+    ),
+  ].map((m) => [cell(m[1]), cell(m[2]), cell(m[3])]);
+  assert.deepEqual(rows, [
+    ["累计工作时长", "—", "processing_ms"],
+    ["并行去重时长", "—", "processing_union_ms"],
+    ["总时长", "wall time", "sessionWallSpan"],
+    ["本轮时长", "wall time", "elapsed_ms"],
+    ["AI 工作", "Active Work Duration", "work_ms = model_ms + tool execution"],
+    ["等待确认", "Review Wait", "review_wait_ms"],
+    ["待命", "Standby Duration", "standby_ms"],
+    ["自动完成度", "Autonomy Rate", "autonomy_rate"],
+    ["超 15s 慢操作", "Slow Operation Count", "slow_ops"],
+    ["本地工具", "Tool Execution Duration", "tool execution"],
+    ["模型推理", "Model API Duration", "model_ms"],
+  ]);
+  assert.ok(
+    body.includes("「—」表示 GLOSSARY 无独立条目，口径以字段名为准。"),
+    "the table must explain that — means no standalone glossary entry",
+  );
   assert.ok(
     body.includes("Autonomy Rate"),
     "the glossary column must keep Autonomy Rate for 自动完成度",
