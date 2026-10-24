@@ -37,8 +37,8 @@ export const SOURCES = [
   },
   {
     agent: "Antigravity",
-    status: "数据格式待验证",
-    supported: false,
-    note: "尚无经过验证的稳定本地导入格式。",
+    status: "只读导入 · 事件流三态切分",
+    supported: true,
+    note: "读取 brain/<会话>/.system_generated/logs/transcript.jsonl 事件流；ask_question 阻断计入等待人审阅，后台任务按完成标记计入工具执行。仅导入携带 transcript.jsonl 的会话，标题与项目来自 conversation_summaries.db 富化。",
   },
 ];
