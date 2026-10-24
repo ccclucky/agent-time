@@ -54,8 +54,8 @@ test("Pi can be enabled and the preference persists; others still cannot", () =>
   assert.equal(new Directories(store, "/other-home").get("pi").enabled, true);
   dirs.save("pi", null, false);
   assert.equal(dirs.get("pi").enabled, false);
-  // OpenCode is an implemented adapter now; antigravity stays unsupported.
-  assert.throws(() => dirs.save("antigravity", null, true), /不能启用/);
+  // OpenCode and Antigravity are implemented adapters now; OMP stays unsupported.
+  assert.throws(() => dirs.save("omp", null, true), /不能启用/);
 });
 
 const piRows = () => [
@@ -163,10 +163,10 @@ test("CLI import accepts --agent pi, advertises it in help and rejects others", 
     p,
   ]);
   assert.notEqual(bad.status, 0);
-  assert.match(bad.stderr, /codex\|claude\|pi\|dsh\|opencode/);
+  assert.match(bad.stderr, /codex\|claude\|pi\|antigravity\|dsh\|opencode/);
   const help = cli(["--help"]);
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /codex\|claude\|pi\|dsh\|opencode/);
+  assert.match(help.stdout, /codex\|claude\|pi\|antigravity\|dsh\|opencode/);
 });
 test("Pi is advertised as a supported source with three-state event split", () => {
   const pi = SOURCES.find((s) => s.agent === "Pi")!;
@@ -180,9 +180,13 @@ test("frontend copy includes Pi and drawer renders optional breakdown sections",
     new URL("../public/app.js", import.meta.url).pathname,
     "utf8",
   );
-  assert.ok(js.includes("当前接入 Codex、Claude Code、Pi、DeepSeek Harness 与 OpenCode"));
+  assert.ok(
+    js.includes("当前接入 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 与 OpenCode"),
+  );
   assert.ok(!js.includes("当前接入 Codex 和 Claude Code"));
-  assert.ok(js.includes("启用 Codex、Claude Code、Pi、DeepSeek Harness 或 OpenCode 数据目录"));
+  assert.ok(
+    js.includes("启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 或 OpenCode 数据目录"),
+  );
   assert.ok(js.includes("model_api_breakdown"));
   assert.ok(js.includes("thinking_breakdown"));
   // 防御性访问：字段缺失时不渲染该小节（沿用 breakdown?. 可选链风格）

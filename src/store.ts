@@ -22,6 +22,12 @@ import { parseClaude, extractClaudeTranscript } from "./claude.js";
 import { parsePi, extractPiTranscript } from "./pi.js";
 import { parseDsh, extractDshTranscript } from "./dsh.js";
 import {
+  parseAntigravity,
+  extractAntigravityTranscript,
+  readConversationIndex,
+  type ConversationIndexEntry,
+} from "./antigravity.js";
+import {
   parseOpencode,
   extractOpencodeTranscript,
 } from "./opencode.js";
@@ -61,8 +67,14 @@ const TRANSCRIPT_EXTRACTORS: Record<
   "Claude Code": extractClaudeTranscript,
   Pi: extractPiTranscript,
   Codex: extractCodexTranscript,
+  Antigravity: extractAntigravityTranscript,
   "DeepSeek Harness": extractDshTranscript,
 };
+
+// conversation_summaries.db is read once per config root per refresh/import
+// call, mirroring the session_index cache above.
+type ConversationIndexCache = Map<string, Map<string, ConversationIndexEntry>>;
+
 function sessionIndex(
   configRoot: string,
   cache: SessionIndexCache,
@@ -90,6 +102,8 @@ function savedAgentAdapter(agent: string | undefined | null): AdapterName {
       return "claude";
     case "Pi":
       return "pi";
+    case "Antigravity":
+      return "antigravity";
     case "DeepSeek Harness":
       return "dsh";
     case "OpenCode":
@@ -99,6 +113,16 @@ function savedAgentAdapter(agent: string | undefined | null): AdapterName {
         `已登记会话的 Agent 标识无法识别（${agent}）；已跳过该文件，防止误按 Codex 口径分流`,
       );
   }
+}
+
+function conversationIndex(
+  configRoot: string,
+  cache: ConversationIndexCache,
+): Map<string, ConversationIndexEntry> {
+  const key = path.resolve(configRoot);
+  let index = cache.get(key);
+  if (!index) cache.set(key, (index = readConversationIndex(key)));
+  return index;
 }
 
 interface Source {
@@ -517,6 +541,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
     configRoot: string | null = null,
     adapter: AdapterName = "codex",
     indexCache: SessionIndexCache = new Map(),
+    convIndexCache: ConversationIndexCache = new Map(),
   ): Promise<{
     events: number;
     issues: string[];
@@ -557,11 +582,13 @@ ALTER TABLE source_migrated RENAME TO source;`,
       ? [codex]
       : adapter === "claude"
         ? [parseClaude(p)]
-        : adapter === "pi"
-          ? [parsePi(p)]
-          : adapter === "opencode"
-            ? parseOpencode(p)
-            : [parseDsh(p)];
+        : adapter === "antigravity"
+          ? [parseAntigravity(p)]
+          : adapter === "pi"
+            ? [parsePi(p)]
+            : adapter === "opencode"
+              ? parseOpencode(p)
+              : [parseDsh(p)];
     const after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -570,19 +597,28 @@ ALTER TABLE source_migrated RENAME TO source;`,
       for (const data of parsed) {
         const sid = multi ? hash(p + "\u0000" + data.session.id) : hash(p),
           m = data.session;
-        // session_index.jsonl lives under the config root the file was discovered
-        // in (CODEX_HOME-aware); CLI imports without a config root stay untitled.
-        // The title is recomputed on every import, so an entry dropped from the
-        // index clears the stored title rather than leaving a stale one.
+        // Title/projects are single-channel enriched from each harness's global
+        // registry (Codex: session_index.jsonl; Antigravity: conversation_summaries.db;
+        // Claude/Pi: title inside the session file itself). Recomputed on every
+        // import, so a dropped registry entry clears the stored value rather
+        // than leaving a stale one.
+        const conversation =
+          adapter === "antigravity" && configRoot
+            ? conversationIndex(configRoot, convIndexCache).get(m.id.replace(/^antigravity\//, ""))
+            : undefined;
         const title =
           adapter === "codex" && configRoot
             ? (sessionIndex(configRoot, indexCache).get(m.id)?.name ?? "").slice(
                 0,
                 100,
               ) || null
-            : ((m as { title?: string | null }).title ?? null);
-        // Codex diffs cumulative snapshots; DSH and OpenCode already emit
-        // per-request usage summed per turn, so both arrive as ready token rows.
+            : adapter === "antigravity"
+              ? (conversation?.title ?? null)
+              : ((m as { title?: string | null }).title ?? null);
+        const project =
+          adapter === "antigravity" ? (conversation?.project ?? m.project) : m.project;
+        // Codex diffs cumulative snapshots; DSH, Antigravity and OpenCode already
+        // emit per-request usage summed per turn, so all arrive as ready token rows.
         const tokens = codex
           ? codex.tokens
           : "tokens" in data
@@ -596,7 +632,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
             sid,
             p,
             m.id,
-            m.project,
+            project,
             m.client,
             JSON.stringify(data.issues),
             configRoot,
@@ -694,6 +730,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
     // One shared index cache for the whole refresh: every config root's
     // session_index.jsonl is read and parsed at most once below.
     const indexCache: SessionIndexCache = new Map();
+    const convIndexCache: ConversationIndexCache = new Map();
     let ok = 0,
       failed = 0,
       excluded = 0,
@@ -719,6 +756,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
           r,
           agents.get(p) ?? savedAgentAdapter(savedAgent),
           indexCache,
+          convIndexCache,
         );
         ok++;
       } catch (error) {
@@ -959,7 +997,9 @@ ALTER TABLE source_migrated RENAME TO source;`,
         elapsed !== null &&
         start !== null &&
         end !== null &&
-        (sessionObj.agent === "Claude Code" || sessionObj.agent === "Codex")
+        (sessionObj.agent === "Claude Code" ||
+          sessionObj.agent === "Codex" ||
+          sessionObj.agent === "Antigravity")
       ) {
         applyTiming(calculateEventTiming(entries, start, end, elapsed));
       } else if (

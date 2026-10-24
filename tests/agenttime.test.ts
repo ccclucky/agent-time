@@ -306,10 +306,10 @@ test("default directories are metadata-only, disabled and evidence-backed", asyn
   assert(list.every((i) => !i.enabled));
   assert.equal(store.sessions().length, 0);
   assert.equal(list.find((i) => i.agent === "omp")!.path, "~/.omp/agent");
-  assert.equal(list.find((i) => i.agent === "antigravity")!.path, null);
+  // Antigravity 与 DSH 位置均已在本机实测验证，但上游无公开目录规范，
+  // evidence_url 保持留空（诚实口径，不伪造出处）。
+  assert.equal(list.find((i) => i.agent === "antigravity")!.path, "~/.gemini/antigravity");
   assert.equal(list.find((i) => i.agent === "dsh")!.path, "~/.dsh");
-  // DSH has no public upstream rule document; its path is verified against
-  // local real samples and noted in the rule itself.
   assert(
     list
       .filter((i) => i.agent !== "antigravity" && i.agent !== "dsh")
@@ -447,8 +447,8 @@ test("missing directories are saved without creation and unsupported adapters ca
   dirs.save("codex", p, true);
   assert(!existsSync(p));
   assert.equal(dirs.get("codex").status, "missing");
-  // OpenCode is an implemented adapter now; antigravity stays unsupported.
-  assert.throws(() => dirs.save("antigravity", null, true));
+  // OpenCode and Antigravity are implemented adapters now; OMP stays unsupported.
+  assert.throws(() => dirs.save("omp", null, true));
   for (const raw of ["", home, "/", "relative", "~someone/x", 123])
     assert.throws(() => dirs.save("codex", raw, false));
 });

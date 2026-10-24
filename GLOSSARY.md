@@ -56,3 +56,11 @@ _Avoid_: Token 求和, 单次响应用量
 DSH 与 OpenCode 的轮次用量口径：assistant 每条记录自带本次请求的真实用量（实测 inputTokens/outputTokens 逐请求重置，非累计快照；OpenCode 的 total 字段恒等于分量之和，亦非累计），轮次用量为其在轮内各步的合计。与「快照差分」是来源不同的两种计量口径，禁止互相套用；reasoning 用量源中不存在时记 0 而非推断。
 _Avoid_: 快照差分（用于 DSH/OpenCode）, Token 累计快照（用于 DSH/OpenCode）
 
+**ask_question 阻断 (Antigravity Review Wait)**:
+Antigravity 以 `ask_question` 工具调用向用户提问，其结果记录在用户作答时才落盘；调用到结果记录的区间即为等待人审阅，完整落在轮次内，与待命时长不重复计量。
+_Avoid_: 提问耗时, 对话框时间
+
+**后台任务完成标记 (Background Task Completion Receipt)**:
+Antigravity 把长命令转为进程内后台任务（task id 形如 `<会话 ID>/task-N`），后续以轮询与 `SYSTEM_MESSAGE` 完成回执落盘；工具耗时按完成回执时刻结算，未完成的不计（不编造）。`invoke_subagent` 派生按同机制打 `agent_id` 标供下钻。
+_Avoid_: 后台耗时估算, 子任务时长
+

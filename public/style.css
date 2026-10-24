@@ -1095,6 +1095,9 @@ h1#title {
   color: var(--state-idle); /* 深亚麻灰 */
 }
 
+.agent-mark-antigravity {
+  color: var(--state-token); /* 石板蓝灰令牌：与 DSH 品牌蓝、Codex 深石板均可区分 */
+}
 .agent-mark-dsh {
   color: #4D6BFE; /* DeepSeek 品牌蓝 */
 }

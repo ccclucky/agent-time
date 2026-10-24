@@ -25,13 +25,17 @@ export const NAMES: Record<Agent, string> = {
   antigravity: "Antigravity",
 };
 // Single source of truth for which filenames count as session files per
-// agent: Codex accepts .jsonl and .jsonl.zst, DSH .jsonl and .jsonl.zstd,
-// OpenCode the session database (.db), every other adapter only .jsonl. The
-// two compressed suffixes are distinct (".zst" does not match ".zstd") and
-// each is checked explicitly — never rely on the endsWith coincidence the
-// shared ".jsonl" prefix would allow. Shared by the CLI import walk,
-// directory discovery, and Store.importFile so the three can never drift.
+// agent: Codex accepts .jsonl and .jsonl.zst, DSH .jsonl and .jsonl.zstd
+// (the two compressed suffixes are distinct and each is checked explicitly),
+// Antigravity only the canonical transcript.jsonl (transcript_full.jsonl is a
+// mirror and would double-count), OpenCode the session database (.db), every
+// other adapter only .jsonl. Shared by the CLI import walk, directory
+// discovery, and Store.importFile so the three can never drift apart.
 export function isSessionFile(agent: string, file: string): boolean {
+  if (agent === "antigravity")
+    // Canonical name only: transcript_full.jsonl is a mirror and would
+    // double-count; the basename check implies .jsonl.
+    return path.basename(file) === "transcript.jsonl";
   return (
     file.endsWith(".jsonl") ||
     (agent === "codex" && file.endsWith(".jsonl.zst")) ||

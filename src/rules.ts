@@ -41,9 +41,9 @@ export const RULES = {
     note: "这是数据目录，不是配置目录。稳定渠道通常使用 opencode.db；数据库文件名可随渠道或 OPENCODE_DB 改变。",
   },
   antigravity: {
-    root: null,
-    logs: [],
+    root: "~/.gemini/antigravity",
+    logs: ["brain"],
     evidence: null,
-    note: "尚无已验证的 Antigravity IDE 会话位置规则，留空；不把其他产品或 CLI 的配置路径当作会话目录。",
+    note: "会话位于 brain/<会话 ID>/.system_generated/logs/transcript.jsonl（2026-10 本机实测验证）；上游未公开目录规范，如位置有变请手动指定。",
   },
 };
