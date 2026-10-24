@@ -20,6 +20,7 @@ import {
 } from "./codex.js";
 import { parseClaude, extractClaudeTranscript } from "./claude.js";
 import { parsePi, extractPiTranscript } from "./pi.js";
+import { parseDsh, extractDshTranscript } from "./dsh.js";
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
@@ -56,6 +57,7 @@ const TRANSCRIPT_EXTRACTORS: Record<
   "Claude Code": extractClaudeTranscript,
   Pi: extractPiTranscript,
   Codex: extractCodexTranscript,
+  "DeepSeek Harness": extractDshTranscript,
 };
 
 function sessionIndex(
@@ -368,7 +370,9 @@ export class Store {
       throw new ValidationError(
         adapter === "codex"
           ? "请选择支持的 Agent .jsonl 或 .jsonl.zst 会话文件"
-          : "请选择支持的 Agent .jsonl 会话文件",
+          : adapter === "dsh"
+            ? "请选择 DSH .jsonl 或 .jsonl.zstd 会话文件"
+            : "请选择支持的 Agent .jsonl 会话文件",
       );
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
@@ -377,7 +381,11 @@ export class Store {
     const codex = adapter === "codex" ? await parse(p) : null,
       data =
         codex ??
-        (adapter === "claude" ? parseClaude(p) : parsePi(p)),
+        (adapter === "claude"
+          ? parseClaude(p)
+          : adapter === "pi"
+            ? parsePi(p)
+            : parseDsh(p)),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -394,7 +402,9 @@ export class Store {
             100,
           ) || null
         : ((m as { title?: string | null }).title ?? null);
-    const tokens = codex ? codex.tokens : [];
+    // Codex diffs cumulative snapshots; DSH already emits per-request usage
+    // that parseDsh sums per turn, so both arrive as ready token rows.
+    const tokens = codex ? codex.tokens : "tokens" in data ? data.tokens : [];
     this.transaction(() => {
       this.db
         .prepare(
@@ -529,7 +539,9 @@ export class Store {
               ? "claude"
               : savedAgent === "Pi"
                 ? "pi"
-                : "codex"),
+                : savedAgent === "DeepSeek Harness"
+                  ? "dsh"
+                  : "codex"),
           indexCache,
         );
         ok++;
@@ -778,7 +790,7 @@ export class Store {
         elapsed !== null &&
         start !== null &&
         end !== null &&
-        sessionObj.agent === "Pi"
+        (sessionObj.agent === "Pi" || sessionObj.agent === "DeepSeek Harness")
       ) {
         applyTiming(calculatePiTiming(entries, start, end, elapsed));
       }

@@ -8,7 +8,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        node: ["22.13.0", "24"]
+        # 22.15.0 is the engines floor and the first Node with the zstd API:
+        # keeping it in the matrix stops the zstd-backed suites (Codex .zst,
+        # DSH multi-frame) from silently skipping in CI.
+        node: ["22.15.0", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

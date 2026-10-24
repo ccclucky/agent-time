@@ -302,14 +302,17 @@ test("default directories are metadata-only, disabled and evidence-backed", asyn
   const { store, dirs, home } = setup();
   file(path.join(home, ".codex", "sessions"), rows());
   const list = dirs.list();
-  assert.equal(list.length, 6);
+  assert.equal(list.length, 7);
   assert(list.every((i) => !i.enabled));
   assert.equal(store.sessions().length, 0);
   assert.equal(list.find((i) => i.agent === "omp")!.path, "~/.omp/agent");
   assert.equal(list.find((i) => i.agent === "antigravity")!.path, null);
+  assert.equal(list.find((i) => i.agent === "dsh")!.path, "~/.dsh");
+  // DSH has no public upstream rule document; its path is verified against
+  // local real samples and noted in the rule itself.
   assert(
     list
-      .filter((i) => i.agent !== "antigravity")
+      .filter((i) => i.agent !== "antigravity" && i.agent !== "dsh")
       .every((i) => !!i.evidence_url),
   );
 });

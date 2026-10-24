@@ -1,4 +1,10 @@
 export const RULES = {
+  dsh: {
+    root: "~/.dsh",
+    logs: ["sessions"],
+    evidence: null,
+    note: "会话位于 sessions/<编码工作目录>/<sessionId>/session[.v4].jsonl.zstd，为多帧 zstd 压缩的 JSONL 事件流。DeepSeek Harness 无公开上游规则文档，路径按本机真实样本核实。",
+  },
   codex: {
     root: "~/.codex",
     logs: ["sessions", "archived_sessions"],

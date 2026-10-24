@@ -1095,6 +1095,10 @@ h1#title {
   color: var(--state-idle); /* 深亚麻灰 */
 }
 
+.agent-mark-dsh {
+  color: #4D6BFE; /* DeepSeek 品牌蓝 */
+}
+
 /* TOP 3 榜副行：徽标 + 项目/ID 单行省略 */
 .rank-subline {
   display: flex;

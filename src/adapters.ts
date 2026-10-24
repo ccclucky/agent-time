@@ -6,6 +6,12 @@ export const SOURCES = [
     note: "基于 task_started/task_complete 轮次边界、call_id 工具配对与 item_completed 完成锚点的三态切分；本地格式无审批事件，等待人审阅未单独计量（记 0）。",
   },
   {
+    agent: "DeepSeek Harness",
+    status: "只读导入 · 事件流三态切分",
+    supported: true,
+    note: "读取 sessions/<编码工作目录> 的多帧 zstd 事件流，按模型推理与工具执行跨度切分纯工作；等待人审阅仅在审批阻断事件可测时计入，本地语料未出现（记未知）。",
+  },
+  {
     agent: "Claude Code",
     status: "只读导入 · 消息记录跨度",
     supported: true,
