@@ -82,6 +82,33 @@ const state = {
   transcriptCache: new Map(),
 };
 
+// 视图状态持久化：日期区段（预设 + 自选）写入 localStorage，刷新页面不再丢失
+// （反馈轮 4 #3/#4/#5 的状态面）。只接受格式合法且跨度 ≤367 天的历史值。
+const VIEW_KEY = "agenttime.view.v1";
+function saveView() {
+  try {
+    localStorage.setItem(
+      VIEW_KEY,
+      JSON.stringify({ range: state.range, start: state.start, end: state.end }),
+    );
+  } catch {}
+}
+function restoreView() {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY) || "null");
+    const iso = (x) =>
+      typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : null;
+    const start = iso(v?.start),
+      end = iso(v?.end);
+    if (!start || !end || start > end) return;
+    if ((new Date(end) - new Date(start)) / 86400000 > 366) return;
+    if (!["today", "week", "month", "custom"].includes(v.range)) return;
+    state.range = v.range;
+    state.start = start;
+    state.end = end;
+  } catch {}
+}
+
 let focusBeforeDialog = null;
 let requestVersion = 0;
 
@@ -142,18 +169,20 @@ const statuses = {
 // - Pi：Pi-agent 新版像素标（4×4 像素网格，crispEdges，三色像素），
 //   不再使用旧版 π 字母（pi.dev favicon 是旧 logo，勿引用）
 // - Antigravity：Google Antigravity 官方 mark 单色剪影（lobe-icons 收录的
-//   官方 path，viewBox 0 0 24 24；simple-icons 尚未收录，勿自绘臆造）
-// - Oh-My-Pi：官方 mark（can1357/oh-my-pi assets/icon.svg，π 符号 + 插件
-//   连接器，viewBox 0 0 120 90；官方 rect/circle 原样内嵌，勿自绘臆造）
-const OMP_MARK_SHAPES =
-  '<rect x="10" y="8" width="100" height="12" rx="2" fill="#fafafa"/>' +
-  '<rect x="25" y="20" width="12" height="62" rx="2" fill="#fafafa"/>' +
-  '<rect x="75" y="20" width="12" height="45" rx="2" fill="#fafafa"/>' +
-  '<rect x="71" y="55" width="20" height="16" rx="3" fill="#f97316"/>' +
-  '<rect x="76" y="59" width="3" height="8" rx="1" fill="#0d0d0d"/>' +
-  '<rect x="82" y="59" width="3" height="8" rx="1" fill="#0d0d0d"/>' +
-  '<circle cx="18" cy="14" r="2" fill="#f97316" opacity="0.8"/>' +
-  '<circle cx="102" cy="14" r="2" fill="#f97316" opacity="0.8"/>';
+//   官方 path，viewBox 0 0 24 24；simple-icons 尚未收录，勿自绘臆造。
+//   官方 svg 带 fill-rule="evenodd"，漏写会把镂空填成实心色块）
+// - Oh-My-Pi：官方主视觉 π 标（can1357/oh-my-pi assets/hero.png 几何实测：
+//   横梁 178×37、左腿 x25 宽 37 高 125、右腿 x121 宽 37 全高 169，右腿更长；
+//   粉→紫→蓝垂直渐变采样自 hero 原像素。仓库 assets/icon.svg 的细腿 π+插件头
+//   是另一版图形，12px 下不可辨，品牌认知以 hero 为准）
+const OMP_PI_GRADIENT =
+  '<defs><linearGradient id="omp-g" x1="0" y1="0" x2="0" y2="1">' +
+  '<stop offset="0" stop-color="#C758D9"/><stop offset="0.5" stop-color="#B364E5"/>' +
+  '<stop offset="1" stop-color="#859CE8"/></linearGradient></defs>';
+const OMP_PI_SHAPES =
+  '<rect x="25" y="0" width="37" height="125" rx="10" fill="url(#omp-g)"/>' +
+  '<rect x="121" y="0" width="37" height="169" rx="10" fill="url(#omp-g)"/>' +
+  '<rect x="0" y="0" width="178" height="37" rx="8" fill="url(#omp-g)"/>';
 const OPENAI_MARK_PATH =
   "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
 
@@ -176,6 +205,8 @@ const PI_PIXEL_RECTS = [
 // Antigravity 官方 mark 单色剪影（lobe-icons antigravity.svg，官方 path）
 const ANTIGRAVITY_MARK_PATH =
   "M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z";
+// OpenCode 官方方环标（simple-icons 单 path，viewBox 0 0 24 24，evenodd 镂空，勿自绘）
+const OPENCODE_MARK_PATH = "M22 24H2V0h20zM17 4.8H7v14.4h10z";
 // DeepSeek 官方鲸鱼标（simple-icons 单 path，viewBox 0 0 24 24，勿自绘）
 const DEEPSEEK_MARK_PATH =
   "M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45";
@@ -199,7 +230,7 @@ function agentMark(agent) {
       label: "Pi",
     },
     Antigravity: {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${ANTIGRAVITY_MARK_PATH}" fill="#FAF9F5"/></svg>`,
+      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${ANTIGRAVITY_MARK_PATH}" fill-rule="evenodd" fill="#FAF9F5"/></svg>`,
       cls: "antigravity",
       label: "Antigravity",
     },
@@ -209,14 +240,13 @@ function agentMark(agent) {
       label: "DeepSeek Harness",
     },
     "Oh-My-Pi": {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 120 90" aria-hidden="true">${OMP_MARK_SHAPES}</svg>`,
+      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 178 169" aria-hidden="true">${OMP_PI_GRADIENT}${OMP_PI_SHAPES}</svg>`,
       cls: "omp",
       label: "Oh-My-Pi",
     },
-    // OpenCode 无稳定单色官方标；用终端尖括号（代码会话语义）代替，勿自绘复杂 logo。
     OpenCode: {
-      glyph:
-        '<path d="M6 5L3 8l3 3M10 5l3 3-3 3" stroke="#FAF9F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+      // simple-icons 已收录官方方环标（evenodd 镂空），不再用自绘尖括号
+      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${OPENCODE_MARK_PATH}" fill-rule="evenodd" fill="#FAF9F5"/></svg>`,
       cls: "opencode",
       label: "OpenCode",
     },
@@ -290,6 +320,13 @@ function render() {
     ["today", "今天"],
     ["week", "近 7 天"],
     ["month", "近 30 天"],
+    // 自选段：激活时把实际区段直接写在按钮上，用户无需回忆选过什么（反馈轮 4 #4）
+    [
+      "custom",
+      state.range === "custom"
+        ? `自选 ${state.start.slice(5)} ~ ${state.end.slice(5)}`
+        : "自选",
+    ],
   ]
     .map(
       ([k, t]) =>
@@ -2272,6 +2309,46 @@ function sources() {
   `;
 }
 
+// 单卡与全局同步共用同一份请求体语义：路径未编辑/已清空/显式恢复默认都回落到默认位置。
+function directoryPayload(agent, draft) {
+  const item = state.directories.find((x) => x.agent === agent);
+  return {
+    agent,
+    path:
+      draft.reset ||
+      draft.path === "" ||
+      (!draft.pathEdited && item.source !== "custom")
+        ? null
+        : draft.path,
+    enabled: draft.enabled,
+  };
+}
+
+async function persistDirectory(agent, draft) {
+  await api("/api/directories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
+    body: JSON.stringify(directoryPayload(agent, draft)),
+  });
+  delete state.drafts[agent];
+}
+
+// 全局「同步记录」的先决步骤：把所有未保存的接入草稿批量落盘。勾选开关只写
+// 前端草稿，而 /api/refresh 按服务端已保存配置同步——不先落盘，用户「勾完直接
+// 点同步」会表现为没有任何效果（反馈轮 4 #2/#5 同根因）。
+async function persistDrafts() {
+  let saved = 0;
+  for (const agent of Object.keys(state.drafts)) {
+    if (!state.directories.some((x) => x.agent === agent)) {
+      delete state.drafts[agent];
+      continue;
+    }
+    await persistDirectory(agent, directoryDraft(state.directories.find((x) => x.agent === agent)));
+    saved++;
+  }
+  return saved;
+}
+
 async function saveDirectory(agent) {
   if (state.saving.has(agent) || state.busy) return;
   const item = state.directories.find((x) => x.agent === agent);
@@ -2279,21 +2356,7 @@ async function saveDirectory(agent) {
   state.saving.add(agent);
   render();
   try {
-    await api("/api/directories", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
-      body: JSON.stringify({
-        agent,
-        path:
-          draft.reset ||
-          draft.path === "" ||
-          (!draft.pathEdited && item.source !== "custom")
-            ? null
-            : draft.path,
-        enabled: draft.enabled,
-      }),
-    });
-    delete state.drafts[agent];
+    await persistDirectory(agent, draft);
     await load();
     if (draft.enabled) await refresh();
     else toast("目录设置已保存。");
@@ -2454,6 +2517,8 @@ async function refresh() {
   $("#refresh").disabled = true;
   $("#refresh").textContent = "同步中…";
   try {
+    // 先落盘所有未保存的接入改动，再按服务端配置同步（反馈轮 4 #2/#5）
+    const savedCount = await persistDrafts();
     const r = await api("/api/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
@@ -2469,7 +2534,8 @@ async function refresh() {
       ? `（${named}${r.failed > failNames.length ? ` 等 ${r.failed} 个` : ""}）`
       : "";
     toast(
-      `成功更新 ${r.updated} 个文件` +
+      (savedCount ? `已保存 ${savedCount} 项接入设置，` : "") +
+        `成功更新 ${r.updated} 个文件` +
         (r.excluded ? `，${r.excluded} 个分支副本按设计排除` : "") +
         (r.failed ? `，${r.failed} 个失败${failDetail}` : ""),
     );
@@ -2556,13 +2622,19 @@ document.addEventListener("click", async (e) => {
   }
 
   if (b.dataset.range) {
-    state.range = b.dataset.range;
-    state.end = localDate();
-    state.start = previous(
-      state.end,
-      state.range === "today" ? 0 : state.range === "week" ? 6 : 29,
-    );
-    await load();
+    if (b.dataset.range === "custom") {
+      // 自选段按钮：直接打开日期选择（选中态与区段展示由下方 ranges 渲染承担）
+      document.querySelector('[data-action="dates"]')?.click();
+    } else {
+      state.range = b.dataset.range;
+      state.end = localDate();
+      state.start = previous(
+        state.end,
+        state.range === "today" ? 0 : state.range === "week" ? 6 : 29,
+      );
+      saveView();
+      await load();
+    }
   }
 
   if (b.dataset.session) {
@@ -2630,6 +2702,7 @@ document.addEventListener("click", async (e) => {
       state.start = a;
       state.end = z;
       state.range = "custom";
+      saveView();
       close();
       await load();
       break;
@@ -2729,6 +2802,8 @@ document.addEventListener("keydown", (e) => {
 // #session/:id 哈希路由：deep-link、浏览器前进/后退、卡片点击统一由此驱动
 window.addEventListener("hashchange", applyRoute);
 
-// 首次引导：先解析地址栏深链（如 #session/claude%2Fxxx），再拉取数据渲染
+// 首次引导：先恢复持久化的视图状态（日期区段），再解析地址栏深链（如
+// #session/claude%2Fxxx）并拉取数据渲染
+restoreView();
 applyRoute();
 load();
