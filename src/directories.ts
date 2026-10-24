@@ -166,6 +166,34 @@ export class Directories {
       }
       const root = item.resolved_path!;
       let count = 0;
+      // Shared registration shape for both walk styles below: resolve the
+      // real path, refuse records that escape the data root via links,
+      // dedupe through the maps, and enforce the global file cap. Keeps the
+      // OpenCode root-level scan and the recursive walk from drifting.
+      const register = (p: string) => {
+        const real = realpathSync(p),
+          rel = path.relative(root, real);
+        if (
+          rel === ".." ||
+          rel.startsWith(".." + path.sep) ||
+          path.isAbsolute(rel)
+        ) {
+          notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
+          return;
+        }
+        if (
+          item.agent === "claude" &&
+          path.basename(real).startsWith("agent-")
+        )
+          return;
+        files.set(real, root);
+        agents.set(real, item.agent as AdapterName);
+        count++;
+        if (files.size > 5000)
+          throw new ValidationError(
+            "配置目录内超过 5000 个会话文件，请缩小数据目录范围",
+          );
+      };
       const walk = (dir: string) => {
         for (const entry of readdirSync(dir, { withFileTypes: true }).sort(
           (a, b) => a.name.localeCompare(b.name),
@@ -175,28 +203,7 @@ export class Directories {
           if (entry.isDirectory()) {
             if (item.agent !== "claude" || entry.name !== "subagents") walk(p);
           } else if (entry.isFile() && isSessionFile(item.agent, p)) {
-            const real = realpathSync(p),
-              rel = path.relative(root, real);
-            if (
-              rel === ".." ||
-              rel.startsWith(".." + path.sep) ||
-              path.isAbsolute(rel)
-            ) {
-              notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
-              continue;
-            }
-            if (
-              item.agent === "claude" &&
-              path.basename(real).startsWith("agent-")
-            )
-              continue;
-            files.set(real, root);
-            agents.set(real, item.agent as AdapterName);
-            count++;
-            if (files.size > 5000)
-              throw new ValidationError(
-                "配置目录内超过 5000 个会话文件，请缩小数据目录范围",
-              );
+            register(p);
           }
         }
       };
@@ -208,26 +215,8 @@ export class Directories {
           // level only: channel/OPENCODE_DB variants may rename the file but
           // keep it at the root (see docs/directories.zh-CN.md).
           for (const entry of readdirSync(root, { withFileTypes: true })) {
-            if (!entry.isFile()) continue;
             const p = path.join(root, entry.name);
-            if (!isSessionFile(item.agent, p)) continue;
-            const real = realpathSync(p),
-              rel = path.relative(root, real);
-            if (
-              rel === ".." ||
-              rel.startsWith(".." + path.sep) ||
-              path.isAbsolute(rel)
-            ) {
-              notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
-              continue;
-            }
-            files.set(real, root);
-            agents.set(real, item.agent as AdapterName);
-            count++;
-            if (files.size > 5000)
-              throw new ValidationError(
-                "配置目录内超过 5000 个会话文件，请缩小数据目录范围",
-              );
+            if (entry.isFile() && isSessionFile(item.agent, p)) register(p);
           }
         }
         for (const sub of RULES[item.agent].logs) {

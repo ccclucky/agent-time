@@ -14,7 +14,12 @@ export type Kind =
   | "review_wait_start"
   | "review_wait_end"
   | "tool_use"
-  | "tool_result";
+  | "tool_result"
+  // OpenCode reasoning part spans (at_ms/end_ms = part time.{start,end}).
+  // Timing filters only consume the kinds they know, so the new kind is
+  // invisible to Claude/Codex/Pi calculators; the OpenCode calculator turns
+  // it into breakdown.thinking_breakdown (a sub-drill of the model span).
+  | "thinking";
 
 export type Status =
   | "completed"

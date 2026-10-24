@@ -1779,7 +1779,7 @@ function openDrawer(turn, session) {
     ? `
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">模型与思考等级分项</span>
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">模型与思考分项</span>
         <span style="font-size:var(--text-xs); color:var(--fg-muted);">仅统计已落盘的事件耗时</span>
       </div>
       <div style="border:1px solid var(--line); border-radius:8px; overflow:hidden;">
@@ -1788,8 +1788,8 @@ function openDrawer(turn, session) {
           ${modelBreakdown.map((m) => breakdownRow(m.model, m.duration_ms)).join("")}
         ` : ""}
         ${thinkingBreakdown.length ? `
-          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid var(--line);">思考等级耗时分布</div>
-          ${thinkingBreakdown.map((t) => breakdownRow(`思考等级 ${t.level}`, t.duration_ms)).join("")}
+          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid var(--line);">思考耗时分布</div>
+          ${thinkingBreakdown.map((t) => breakdownRow(`思考 · ${t.level}`, t.duration_ms)).join("")}
         ` : ""}
       </div>
     </div>

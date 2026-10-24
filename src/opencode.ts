@@ -13,18 +13,31 @@
  *   message/part time_updated (the import moment), and message.time_updated
  *   diverges from data.time.completed on 377/443 rows. Only the JSON payload
  *   fields are first-hand: message.data.time.created / time.completed, and
- *   part.data inner `time` objects. The SQL columns are never read.
+ *   part.data inner `time` objects. DEVIATION, declared: the SQL time_created/
+ *   time_updated columns are never read — they would fabricate identical
+ *   import-moment timelines for every session.
  * - Turn shape: one user message, then every assistant message whose
  *   data.parentID points at it (verified 0 exceptions in 443 rows). A turn
  *   completes at the LAST assistant message's time.completed; a trailing
  *   user message without replies stays honestly open.
  * - Model generation (术语表 模型推理耗时): the assistant message span
- *   [time.created, time.completed]. Chosen over part-level evidence because
- *   text parts carry start == end (no duration) while reasoning parts only
- *   cover thinking bursts — the message span is the one first-hand measure
- *   that covers the whole streaming step. Verified containment: all tool
- *   state.time spans and reasoning spans sit inside their message span
- *   (1703-part corpus: 0 outside), and adjacent steps never overlap.
+ *   [time.created, time.completed]. Deviation from the spec's literal
+ *   reasoning|text-part basis, declared on purpose: 90 text parts carry
+ *   start==end on 88 of them (no duration) and reasoning parts only cover
+ *   thinking bursts, so no part-level measure covers the whole streaming
+ *   step. The message span therefore counts intra-message streaming gaps as
+ *   model generation — measured on the 1703-part corpus the message-span
+ *   figure is ~4x the reasoning+text part-duration sum (6,292,879 ms vs
+ *   1,589,825 ms). Verified containment: all tool state.time spans and
+ *   reasoning spans sit inside their message span (0 outside), and adjacent
+ *   steps never overlap.
+ * - Reasoning parts (fine-grained part timing, 285/285 carry time.start,
+ *   282 also a credible end): treated as thinking bursts INSIDE the message
+ *   span, not additive work. Sampled against the parent message span on the
+ *   real database: 282/285 fully contained, 0 ending after completed — the
+ *   timestamps are trustworthy; the 3 rows missing an end are skipped with
+ *   an issue instead of guessed. They surface as "thinking" events so the
+ *   turn breakdown can show a per-model thinking drill-down.
  * - Tools: part.data.state.time.{start,end} (ms) on every tool part
  *   (450/450 present, 0 inverted); status completed|error both carry real
  *   execution. Several tools may run in parallel inside one step, so the
@@ -117,8 +130,10 @@ const tokensOf = (raw: unknown): TokenUsage | null => {
     cache_write_input_tokens: num(cache.write),
     output_tokens: output,
     reasoning_output_tokens: reasoning,
-    // `total`, when present, equals the component sum in real data; deriving
-    // it keeps rows with a missing total comparable.
+    // `total` is present on only 130/379 assistant messages in the real
+    // corpus, and on every one of those it equals the component sum; the
+    // other 249 rows carry no total, so deriving it keeps all rows
+    // comparable rather than claiming a field the source omits.
     total_tokens: input + output + reasoning + num(cache.read) + num(cache.write),
   };
 };
@@ -260,7 +275,9 @@ export interface OpencodeParsed {
     title: string | null;
   };
   events: Event[];
-  tokens: { turn_id: string; input_tokens: number; cached_input_tokens: number; cache_write_input_tokens: number; output_tokens: number; reasoning_output_tokens: number; total_tokens: number }[];
+  // Same shared shape every adapter hands to the store: per-turn usage keyed
+  // by turn_id (TokenUsage & { turn_id }), no adapter-local field ladder.
+  tokens: ({ turn_id: string } & TokenUsage)[];
   issues: string[];
 }
 
@@ -386,6 +403,24 @@ function parseSession(
             prev[f] += step.tokens[f];
       }
       for (const part of step.parts) {
+        // Reasoning spans are first-hand thinking bursts INSIDE the message
+        // span (285/285 carry start; sampled containment 282/285, none past
+        // completed), so they are emitted as "thinking" events for the
+        // breakdown drill-down — never added to work on top of the span.
+        // Rows without a credible end stay skipped with an issue, not guessed.
+        if (part.type === "reasoning") {
+          if (
+            part.reasoningStart != null &&
+            part.reasoningEnd != null &&
+            part.reasoningEnd >= part.reasoningStart
+          )
+            add(tid, "thinking", part.reasoningStart, step.model, {
+              end_ms: part.reasoningEnd,
+            });
+          else
+            issues.add("部分 reasoning 段缺少有效起止时间戳；未计入思考耗时");
+          continue;
+        }
         if (part.type !== "tool") continue;
         const name = part.tool ?? "tool";
         if (part.toolStart == null) {

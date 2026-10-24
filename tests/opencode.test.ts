@@ -272,12 +272,18 @@ sql("parseOpencode: events, spans, per-turn token sums, project and title", () =
       "model",
       "model",
       "start",
+      "thinking",
       "tool_result",
       "tool_result",
       "tool_use",
       "tool_use",
     ].sort(),
   );
+  // The reasoning part's real span becomes a thinking event inside the turn.
+  const thinking = t1.find((e) => e.kind === "thinking")!;
+  assert.equal(thinking.at_ms, T0 + 210);
+  assert.equal(thinking.end_ms, T0 + 260);
+  assert.equal(thinking.model, "google/gemini-3-pro");
   const start = t1.find((e) => e.kind === "start")!;
   assert.equal(start.at_ms, T0 + 100);
   const model1 = t1.find(
@@ -317,10 +323,17 @@ sql("parseOpencode: parallel tools are unioned, not double counted", () => {
   const result = parseOpencode(file);
   const t1 = result[0].events.filter((e) => e.turn_id === "turn-1");
   // spans 500 + 400 = 900; tool union [300,550] = 250 → model api 650.
-  const timing = calculateOpencodeTiming(t1, T0 + 100, T0 + 1200, 1100);
+  const timing = calculateOpencodeTiming(t1);
   assert.equal(timing.work_ms, 900);
   assert.equal(timing.breakdown.tool_execution_ms, 250);
   assert.equal(timing.breakdown.model_api_ms, 650);
+  // Intra-turn step gap (step 1 completes at +700, step 2 starts at +800):
+  // reported as unclassified delay, never folded into work.
+  assert.equal(timing.breakdown.unclassified_delay_ms, 100);
+  // Reasoning burst is a sub-drill under the model span, per model.
+  assert.deepEqual(timing.breakdown.thinking_breakdown, [
+    { level: "google/gemini-3-pro", duration_ms: 50 },
+  ]);
   // No approval evidence exists in the database: honestly unknown.
   assert.equal(timing.review_wait_ms, null);
   const tools = timing.breakdown.tools.sort((a, b) => a.name.localeCompare(b.name));
@@ -349,6 +362,10 @@ sql("store roundtrip: OpenCode three-state timing and standby", async () => {
   assert.equal(t1.review_wait_ms, null);
   assert.equal(t1.breakdown?.model_api_ms, 650);
   assert.equal(t1.breakdown?.tool_execution_ms, 250);
+  assert.equal(t1.breakdown?.unclassified_delay_ms, 100);
+  assert.deepEqual(t1.breakdown?.thinking_breakdown, [
+    { level: "google/gemini-3-pro", duration_ms: 50 },
+  ]);
   assert.equal(t1.tokens?.total_tokens, 455);
   const t2 = s.turns.find((t) => t.id === "turn-2")!;
   assert.equal(t2.status, "open");
@@ -479,6 +496,80 @@ sql("error tools still count as executed work with their own timestamps", () => 
   assert.equal(toolResult.at_ms, T0 + 300);
   assert.equal(toolResult.end_ms, T0 + 301);
   assert.equal(toolResult.tool_name, "skill");
+});
+
+sql("reasoning parts without a credible end are skipped with an issue, not guessed", () => {
+  const { dir } = setup();
+  const file = path.join(dir, "opencode.db");
+  const db = buildDb(file);
+  insertSession(db, {
+    users: [{ id: "u1", at: T0 + 100 }],
+    steps: [
+      {
+        id: "a1",
+        created: T0 + 200,
+        completed: T0 + 600,
+        // Real corpus: 3/285 reasoning rows carry no time.end.
+        reasoning: { text: "思考中断的段落", start: T0 + 210, end: T0 + 260 },
+        tools: [],
+      },
+      {
+        id: "a2",
+        created: T0 + 700,
+        completed: T0 + 900,
+        // A degenerate burst with no end at all is skipped with an issue.
+      },
+    ],
+  });
+  // Overwrite step a2's reasoning part with a missing end directly.
+  db.prepare(
+    "INSERT INTO part(id,message_id,session_id,time_created,time_updated,data) VALUES(?,?,?,?,?,?)",
+  ).run(
+    "rp_endless",
+    "ses_a_a2",
+    "ses_a",
+    T0 + 999_999,
+    T0 + 999_999,
+    JSON.stringify({ type: "reasoning", text: "无结束时间", time: { start: T0 + 720 } }),
+  );
+  db.close();
+  const result = parseOpencode(file)[0];
+  // Only the well-formed burst becomes a thinking event.
+  const thinking = result.events.filter((e) => e.kind === "thinking");
+  assert.equal(thinking.length, 1);
+  assert.equal(thinking[0].at_ms, T0 + 210);
+  assert.equal(thinking[0].end_ms, T0 + 260);
+  assert.ok(
+    result.issues.some((i) => i.includes("reasoning 段缺少有效起止时间戳")),
+    `issues: ${JSON.stringify(result.issues)}`,
+  );
+});
+
+sql("refresh: an unknown saved agent name fails loudly instead of falling back to codex", async () => {
+  const { store, dir } = setup();
+  const file = path.join(dir, "opencode.db");
+  twoTurnDb(file);
+  await store.importFile(file, null, "opencode");
+  // Simulate a snapshot row stamped with an agent name no adapter claims:
+  // the old ternary silently re-imported it as Codex (mis-routed parse).
+  store.db
+    .prepare("UPDATE source SET agent=?, path=?")
+    .run("MysteryAgent", file);
+  const result = await store.refresh();
+  assert.equal(result.failed, 1);
+  assert.deepEqual(
+    result.failures.map((f) => f.reason),
+    [
+      "已登记会话的 Agent 标识无法识别（MysteryAgent）；已跳过该文件，防止误按 Codex 口径分流",
+    ],
+  );
+  // The stale snapshot keeps its rows rather than being overwritten with
+  // wrong-adapter statistics.
+  const row = store.db
+    .prepare("SELECT agent, last_error FROM source")
+    .get() as unknown as { agent: string; last_error: string | null };
+  assert.equal(row.agent, "MysteryAgent");
+  assert.ok(row.last_error);
 });
 
 sql("one .db file with several sessions registers one snapshot per session", async () => {

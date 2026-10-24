@@ -73,6 +73,34 @@ function sessionIndex(
   return index;
 }
 
+// Saved-snapshot agent name → adapter for refresh re-imports that directory
+// discovery did not classify (files imported via CLI whose directory entry is
+// disabled or gone). The previous nested ternary silently fell back to
+// "codex" for ANY unknown name, mis-routing foreign snapshots through the
+// wrong parser; unknown names now fail loudly so the file surfaces as a sync
+// failure instead of wrong-adapter statistics. A missing name keeps the
+// historical Codex default: the agent column was added via ALTER TABLE with
+// NOT NULL DEFAULT 'Codex', so every pre-existing row is stamped 'Codex'.
+function savedAgentAdapter(agent: string | undefined | null): AdapterName {
+  if (agent == null) return "codex";
+  switch (agent) {
+    case "Codex":
+      return "codex";
+    case "Claude Code":
+      return "claude";
+    case "Pi":
+      return "pi";
+    case "DeepSeek Harness":
+      return "dsh";
+    case "OpenCode":
+      return "opencode";
+    default:
+      throw new ValidationError(
+        `已登记会话的 Agent 标识无法识别（${agent}）；已跳过该文件，防止误按 Codex 口径分流`,
+      );
+  }
+}
+
 interface Source {
   agent: string;
   id: string;
@@ -312,13 +340,22 @@ export function calculatePiTiming(
  *  not be subtracted twice), tool execution is that union, and work is
  *  their sum (the full streaming spans). Review wait stays unknown: the
  *  permission table is ephemeral upstream and empty locally.
+ *
+ *  Two honest side-ledgers, neither folded into work:
+ *  - unclassified_delay_ms: gaps between consecutive steps inside a turn
+ *    (step N completed → step N+1 created). Real corpus: 315/315 gaps
+ *    positive, 5,999 ms total, max 203 ms — neither streaming nor tool
+ *    execution; attribution unknown (scheduling, extensions), so it is
+ *    reported separately like Pi's tool-ready gap.
+ *  - thinking_breakdown: reasoning-part spans emitted as "thinking" events.
+ *    They sit INSIDE the model span (sampled containment 282/285, none past
+ *    completed), so they are a sub-drill of model_api_ms, never additive.
+ *
+ *  Signature takes only the event entries: every duration is first-hand
+ *  evidence on the events; the turn's wall-clock start/end/elapsed play no
+ *  role in the split and the parameters were dead weight.
  */
-export function calculateOpencodeTiming(
-  entries: Event[],
-  start: number,
-  end: number,
-  elapsed: number,
-): {
+export function calculateOpencodeTiming(entries: Event[]): {
   work_ms: number;
   review_wait_ms: number | null;
   breakdown: TurnBreakdown;
@@ -330,13 +367,36 @@ export function calculateOpencodeTiming(
   const toolMs = unionMs(toolIntervals);
 
   const modelTotals = new Map<string, number>();
+  const modelSpans: [number, number][] = [];
   let modelSpanMs = 0;
   for (const e of entries) {
     if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
     const dur = e.end_ms - e.at_ms;
     modelSpanMs += dur;
+    modelSpans.push([e.at_ms, e.end_ms]);
     const modelKey = e.model ?? "未知模型";
     modelTotals.set(modelKey, (modelTotals.get(modelKey) ?? 0) + dur);
+  }
+  // Intra-turn step gaps: wall-clock between consecutive streaming spans
+  // that no measurement covers. Unioned so overlapping steps (none in the
+  // verified corpus) cannot double count.
+  modelSpans.sort((a, b) => a[0] - b[0]);
+  const delayIntervals: [number, number][] = [];
+  for (let i = 1; i < modelSpans.length; i++)
+    if (modelSpans[i][0] > modelSpans[i - 1][1])
+      delayIntervals.push([modelSpans[i - 1][1], modelSpans[i][0]]);
+  const unclassifiedDelayMs = unionMs(delayIntervals);
+
+  // Reasoning bursts: a per-model drill-down under the model spans.
+  const thinkingTotals = new Map<string, number>();
+  for (const e of entries) {
+    if (e.kind !== "thinking" || e.end_ms == null || e.end_ms < e.at_ms)
+      continue;
+    const modelKey = e.model ?? "未知模型";
+    thinkingTotals.set(
+      modelKey,
+      (thinkingTotals.get(modelKey) ?? 0) + (e.end_ms - e.at_ms),
+    );
   }
   // Per-call durations stay raw (matching the client-side slow-operation
   // pairing); the union above keeps the turn total free of parallel overlap.
@@ -357,10 +417,14 @@ export function calculateOpencodeTiming(
     breakdown: {
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
+      unclassified_delay_ms: unclassifiedDelayMs,
       tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
       model_api_breakdown: [...modelTotals.entries()]
         .map(([model, duration_ms]) => ({ model, duration_ms }))
         .sort((a, b) => a.model.localeCompare(b.model)),
+      thinking_breakdown: [...thinkingTotals.entries()]
+        .map(([level, duration_ms]) => ({ level, duration_ms }))
+        .sort((a, b) => a.level.localeCompare(b.level)),
     },
   };
 }
@@ -653,16 +717,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
         await this.importFile(
           p,
           r,
-          agents.get(p) ??
-            (savedAgent === "Claude Code"
-              ? "claude"
-              : savedAgent === "Pi"
-                ? "pi"
-                : savedAgent === "DeepSeek Harness"
-                  ? "dsh"
-                  : savedAgent === "OpenCode"
-                    ? "opencode"
-                    : "codex"),
+          agents.get(p) ?? savedAgentAdapter(savedAgent),
           indexCache,
         );
         ok++;
@@ -920,7 +975,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
         end !== null &&
         sessionObj.agent === "OpenCode"
       ) {
-        applyTiming(calculateOpencodeTiming(entries, start, end, elapsed));
+        applyTiming(calculateOpencodeTiming(entries));
       }
 
       const turnSubagents = groupSubagents(entries);
