@@ -34,11 +34,11 @@
   --fg-inverse: #FAF9F5;    /* 反色暖白 */
 
   /* 4. 三态核心语义色 (提升对比度，杜绝看不清) */
-  --state-work: #CC785C;        /* Claude 标志陶土橙 - 纯工作耗时 */
+  --state-work: #CC785C;        /* Claude 标志陶土橙：AI 工作（work_ms） */
   --state-work-light: #F7EAE3;  /* 陶土浅衬底 */
   --state-work-border: #B8674D; /* 陶土深边 */
 
-  --state-wait: #C68A4C;        /* 高对比琥珀金 - 等待人审阅卡点 */
+  --state-wait: #C68A4C;        /* 高对比琥珀金：等待确认（review_wait_ms） */
   --state-wait-light: #FBF3E8;  /* 琥珀浅底 */
   --state-wait-border: #A36B32; /* 琥珀深边 */
 
@@ -46,13 +46,13 @@
   --state-idle-light: #EEEAE2;  /* 亚麻浅底 */
 
   /* 4.1 方案 A 多维操作分段色 (SSOT: prototypes/session-first-detail-view.html)
-     等待人审阅统一口径：--color-skills 与 --state-wait 收敛为同一琥珀金
+     等待确认统一口径：--color-skills 与 --state-wait 收敛为同一琥珀金
      #C68A4C（评审决策：热力图/漏斗已大面积使用该色，收敛到它对已评审
      原型的整体视觉偏移最小；原型中的 #D97706 弃用），同一维度绝不出两色 */
-  --color-mcp: #2563EB;         /* 本地工具执行 (Bash / Edit / Playwright) */
-  --color-system: #EA580C;      /* AI 模型推理耗时 */
-  --color-skills: #C68A4C;      /* 等待人审阅卡点 (= --state-wait 琥珀金) */
-  --state-standby: #9E968B;     /* 静默就绪待命 */
+  --color-mcp: #2563EB;         /* 本地工具（Bash / Edit / Playwright） */
+  --color-system: #EA580C;      /* 模型推理（model_ms） */
+  --color-skills: #C68A4C;      /* 等待确认（= --state-wait 琥珀金） */
+  --state-standby: #9E968B;     /* 待命（standby_ms） */
   --state-token: #5E7A8B;       /* 石板蓝灰 - Token 用量下钻 */
 
   /* 5. 阴影系统 */
@@ -439,7 +439,7 @@ h1#title {
 }
 
 /* ========================================================
-   核心大盘：耗时蒸发漏斗 (Time Drop Funnel)
+   核心大盘：时间流向
    ======================================================== */
 .funnel-card {
   background: var(--card-bg);
@@ -568,7 +568,7 @@ h1#title {
 }
 
 /* ========================================================
-   时序交互：全景微缩视口滑块 (Brush & Zoom) 与三态甘特
+   时序交互：全景时间轴滑块与三态甘特
    ======================================================== */
 .timeline-card {
   background: var(--card-bg);
@@ -796,7 +796,7 @@ h1#title {
   flex-shrink: 0;
 }
 
-/* 多维操作分段占比条 (Operations Breakdown Sparkline) */
+/* 多维操作分段占比条 */
 .multi-seg-bar {
   height: 7px;
   border-radius: 4px;
@@ -863,7 +863,7 @@ h1#title {
 }
 
 /* ========================================================
-   首页维度聚合统计（反馈轮 3 Fix 3）：按 Harness / 按项目 / 按工具
+   首页维度聚合统计（反馈轮 3 Fix 3）：按接入工具 / 按项目 / 按工具
    复用 .s1-box 卡片令牌；三列在窄屏折行为单列。
    占比条为线性份额（数值就在条旁，无需非线性缩放），
    fill 保底 2% 防极小份额被压成 0px 不可见细线。
@@ -1592,7 +1592,7 @@ tr:hover td {
   color: var(--fg-muted);
 }
 
-/* 耗时蒸发漏斗窄条外部标签与提示 */
+/* 时间流向窄条外部标签与提示 */
 .funnel-outside-label {
   display: flex;
   align-items: center;
@@ -1793,7 +1793,7 @@ input[type="search"] {
   letter-spacing: -0.01em;
 }
 
-/* 首屏第一视觉：会话专属 Operations Breakdown */
+/* 首屏第一视觉：会话专属操作与耗时分布 */
 .session-breakdown-full {
   background: var(--card-muted);
   border: 2px solid var(--line);

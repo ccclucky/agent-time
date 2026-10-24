@@ -86,7 +86,7 @@ test("Feedback: agentMark badges render inline SVG across stream, TOP3, detail n
 test("Feedback: drawer copy separates the honest prompt slot from the Codex ZDR thinking note", () => {
   const js = read("../public/app.js");
   assert.ok(
-    js.includes("本机记录未包含该轮的用户输入文本"),
+    js.includes("本机记录未包含该轮的提问文本"),
     "a null prompt must show its own honest copy, never the thinking note",
   );
   assert.ok(
