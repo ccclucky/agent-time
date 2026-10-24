@@ -150,7 +150,7 @@ const tokenSub = (t) =>
     : "源记录未携带 Token 快照";
 
 const statuses = {
-  completed: "已完成",
+  completed: "已完结",
   aborted: "已中止",
   failed: "执行失败",
   open: "暂无结束记录",
@@ -483,10 +483,10 @@ function funnel() {
       </div>
 
       <!-- 阶段 2：扣除等待确认（review_wait_ms） -->
-      <div class="funnel-bar-row" title="口径：等待确认 review_wait_ms = 工具授权与方案确认的挂起时长">
+      <div class="funnel-bar-row" title="${h(dimensionHint("wait"))}">
         <div class="stage-label">
           <span style="color:var(--state-wait);">●</span>
-          <span>2. 扣除等待确认</span>
+          <span>2. 扣除${h(dimensionTitle("wait"))}</span>
         </div>
         <div class="funnel-track">
           ${renderFunnelStageTrack(waitPct, "var(--state-wait)", `-${waitPct}% 工具权限审批与方案决策`)}
@@ -495,10 +495,10 @@ function funnel() {
       </div>
 
       <!-- 阶段 3：扣除待命（standby_ms） -->
-      <div class="funnel-bar-row" title="口径：待命 standby_ms = 上轮答复完毕至下一轮开始">
+      <div class="funnel-bar-row" title="${h(dimensionHint("standby"))}">
         <div class="stage-label">
           <span style="color:var(--state-idle);">●</span>
-          <span>3. 扣除待命</span>
+          <span>3. 扣除${h(dimensionTitle("standby"))}</span>
         </div>
         <div class="funnel-track">
           ${renderFunnelStageTrack(standbyPct, "#7A7268", `-${standbyPct}% 答复完毕至人类再次唤醒`)}
@@ -523,8 +523,8 @@ function funnel() {
 
 // ========================================================
 // 模块 3：全景时间轴与无级拖拽视口滑块
-// 采用完整三态高饱和高对比拼接，避免过度原始主义的碎片切分
-// 视口会话聚合数学由 computeTimelineModel() 抽出，
+// 设计意图：按三态整段着色（工作 / 等待确认 / 待命），避免同一维度
+// 被拆成难以辨认的碎片；视口会话聚合数学由 computeTimelineModel() 抽出，
 // 供首页双列组合榜（TOP 3 榜 + 视口操作分布）复用
 // ========================================================
 function computeTimelineModel() {
@@ -570,14 +570,14 @@ function computeTimelineModel() {
   const sessionSummaries = sessions.map((s) => {
     let sWork = 0;
     let sWait = 0;
-    let sIdle = 0;
+    let sStandby = 0;
     let sMinTime = Infinity;
     let sMaxTime = 0;
 
     for (const t of s.turns) {
       sWork += t.work_ms || 0;
       sWait += t.review_wait_ms || 0;
-      sIdle += t.standby_ms || 0;
+      sStandby += t.standby_ms || 0;
       const st = t.start_ms || t.end_ms;
       const en = t.end_ms || t.start_ms;
       if (st && st < sMinTime) sMinTime = st;
@@ -586,12 +586,12 @@ function computeTimelineModel() {
     if (sMinTime === Infinity) sMinTime = minTime;
     if (sMaxTime === 0) sMaxTime = maxTime;
 
-    const sSum = sWork + sWait + sIdle;
+    const sSum = sWork + sWait + sStandby;
     return {
       session: s,
       work: sWork,
       wait: sWait,
-      standby: sIdle,
+      standby: sStandby,
       total: sSum,
       minTime: sMinTime,
       maxTime: sMaxTime,
@@ -776,44 +776,42 @@ function topSessionsCard(model) {
 }
 
 // 四维配置（维度键 + 短标签 + 分段色 + 口径提示）的唯一真理源：
-// 首页视口分段条（VIEWPORT_SEGMENTS）、详情页明细行（DETAIL_BREAKDOWN_ROWS）、
-// 轮次胶囊条与会话流迷你条均由此派生，杜绝同一维度在多个视图漂移出两种颜色或两种写法
+// 首页视口分段条、详情页明细行、轮次胶囊条与会话流迷你条均直接别名或派生自此表，
+// 杜绝同一维度在多个视图漂移出两种颜色或两种写法
 const BREAKDOWN_DIMENSIONS = [
   {
     key: "tool",
     label: "本地工具",
     color: "var(--color-mcp)",
-    field: "tool execution",
     hint: "本地工具 tool execution = 工具调用执行耗时（Bash / Edit 等）",
   },
   {
     key: "model",
     label: "模型推理",
     color: "var(--color-system)",
-    field: "model_ms",
     hint: "模型推理 model_ms = 模型调用耗时",
   },
   {
     key: "wait",
     label: "等待确认",
     color: "var(--color-skills)",
-    field: "review_wait_ms",
     hint: "等待确认 review_wait_ms = 工具授权与方案确认的挂起时长",
   },
   {
     key: "standby",
     label: "待命",
     color: "var(--state-standby)",
-    field: "standby_ms",
     hint: "待命 standby_ms = 上轮答复完毕至下一轮开始",
   },
 ];
 
 const breakdownDimension = (key) =>
   BREAKDOWN_DIMENSIONS.find((d) => d.key === key);
-
-const breakdownColor = (key) =>
-  breakdownDimension(key)?.color ?? "var(--state-standby)";
+const dimensionTitle = (key) => breakdownDimension(key)?.label ?? "";
+const dimensionHint = (key) => {
+  const d = breakdownDimension(key);
+  return d ? `口径：${d.hint}` : "";
+};
 
 // 四维耗时累加器（键序与 BREAKDOWN_DIMENSIONS 一致）：
 // Codex 会话 breakdown 为 null，天然按 0 贡献并优雅降级
@@ -828,9 +826,9 @@ function sumBreakdown(agg) {
   return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
 }
 
-// 多维操作分段条（首页视口图例）的四个维度：标签与配色全部派生自唯一真理源，
+// 多维操作分段条（首页视口图例）的四个维度：直接别名唯一真理源，
 // 渲染处只负责布局与百分比，不再复制一份用户可见长文案
-const VIEWPORT_SEGMENTS = BREAKDOWN_DIMENSIONS.map((d) => ({ ...d }));
+const VIEWPORT_SEGMENTS = BREAKDOWN_DIMENSIONS;
 
 function aggregateViewportBreakdown(visibleSessions) {
   const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
@@ -1498,8 +1496,8 @@ function detailKpiCard(label, val, sub, tone = "", hint = "") {
     </div>`;
 }
 
-// 详情页四维明细行：标签、颜色与口径提示全部派生自 BREAKDOWN_DIMENSIONS
-const DETAIL_BREAKDOWN_ROWS = BREAKDOWN_DIMENSIONS.map((d) => ({ ...d }));
+// 详情页四维明细行：直接别名 BREAKDOWN_DIMENSIONS，标签、颜色与口径提示同源
+const DETAIL_BREAKDOWN_ROWS = BREAKDOWN_DIMENSIONS;
 
 function sessionDetail() {
   const s = detailSession();
@@ -1636,34 +1634,34 @@ function sessionDetail() {
 // ========================================================
 
 // 单轮 260px 迷你占比条：模型推理 / 本地工具 / 等待确认 / 待命，
-// 标签与颜色全部派生自 BREAKDOWN_DIMENSIONS（保持既有视觉顺序）。
+// 标签、颜色与口径提示全部来自 BREAKDOWN_DIMENSIONS（保持既有视觉顺序）。
 // Codex 会话 turn.breakdown 为 null → 不伪造分段，诚实退化为单色总时长条。
 function capsuleBarHtml(t) {
-  const tool = t.breakdown?.tool_execution_ms ?? 0;
-  const model = t.breakdown?.model_api_ms ?? 0;
-  const wait = t.review_wait_ms ?? 0;
-  const standby = t.standby_ms ?? 0;
-  const known = tool + model + wait + standby;
+  // 先按固定维度键取毫秒值，再与维度配置合并：
+  // 避免 breakdownDimension(undefined) 产出 {} 让渲染侧读到空颜色/空提示
+  const msByKey = {
+    model: t.breakdown?.model_api_ms ?? 0,
+    tool: t.breakdown?.tool_execution_ms ?? 0,
+    wait: t.review_wait_ms ?? 0,
+    standby: t.standby_ms ?? 0,
+  };
+  const known = Object.values(msByKey).reduce((sum, ms) => sum + ms, 0);
   // 顺序沿用原视觉：模型推理 → 本地工具 → 等待确认 → 待命
-  const segs = [
-    { key: "model", ms: model },
-    { key: "tool", ms: tool },
-    { key: "wait", ms: wait },
-    { key: "standby", ms: standby },
-  ]
-    .map((x) => ({ ...x, ...breakdownDimension(x.key) }))
-    .filter((x) => x.ms > 0);
+  const segs = ["model", "tool", "wait", "standby"]
+    .filter((key) => msByKey[key] > 0)
+    .map((key) => ({ key, ms: msByKey[key], dim: breakdownDimension(key) }))
+    .filter((x) => x.dim);
   if (known > 0 && segs.length) {
     return segs
       .map(
         (x) =>
-          `<div style="width:${((x.ms / known) * 100).toFixed(1)}%; background:${x.color};" title="口径：${h(x.hint)} · ${fmt(x.ms)}"></div>`,
+          `<div style="width:${((x.ms / known) * 100).toFixed(1)}%; background:${x.dim.color};" title="${h(dimensionHint(x.key))} · ${fmt(x.ms)}"></div>`,
       )
       .join("");
   }
   const total = t.elapsed_ms ?? t.period_ms ?? null;
   const why = total
-    ? "该轮无细分耗时数据（该来源不提供细分数据），仅按总时长展示"
+    ? "该轮无细分耗时数据（该来源不提供细分数据），仅按本轮时长展示"
     : "该轮无细分耗时数据，且缺少可测量时长";
   return `<div style="width:100%; background:var(--state-standby);" title="${why}"></div>`;
 }
@@ -1937,18 +1935,18 @@ function openDrawer(turn, session) {
         <span style="font-size:11px; color:var(--state-work); font-weight:600;">一手数据核算</span>
       </div>
       <div class="drawer-kpi-grid">
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="口径：模型推理 model_ms = 模型调用耗时">
-          <div class="drawer-kpi-title">模型推理</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="${h(dimensionHint("model"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("model"))}</div>
           <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : "—"}</div>
           <div class="drawer-kpi-sub">${h(apiMs !== null ? turn.models.join(" / ") || "模型上下文未知" : rollupEvidenceNote(turn) || "模型上下文未知")}</div>
         </div>
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="口径：本地工具 tool execution = 工具调用执行耗时（Bash / Edit 等）">
-          <div class="drawer-kpi-title">本地工具</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="${h(dimensionHint("tool"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("tool"))}</div>
           <div class="drawer-kpi-val">${toolMs !== null ? fmt(toolMs) : "—"}</div>
           <div class="drawer-kpi-sub">${h(toolMs !== null ? `${toolsList.length} 项工具执行${rollup.toolBackfilled ? " · 逐次调用累计" : ""}` : rollupEvidenceNote(turn) || "0 项工具执行")}</div>
         </div>
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);" title="口径：等待确认 review_wait_ms = 工具授权与方案确认的挂起时长">
-          <div class="drawer-kpi-title">等待确认</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);" title="${h(dimensionHint("wait"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("wait"))}</div>
           <div class="drawer-kpi-val">${wait !== null ? fmt(wait) : "—"}</div>
           <div class="drawer-kpi-sub">${h(wait !== null ? waitCaption : rollupEvidenceNote(turn) || waitCaption)}</div>
         </div>
@@ -2064,7 +2062,7 @@ function renderDrawerTranscript(entry, session, turn) {
     promptEl.innerHTML = drawerHint("本机记录未包含该轮的提问文本。");
     cotEl.innerHTML = drawerHint(
       session.agent === "Codex"
-        ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
+        ? "Codex 官方记录对模型思考链加密，本机无法解密展示。"
         : "该来源未记录该轮的模型思考文本。",
     );
   } else {
@@ -2074,7 +2072,7 @@ function renderDrawerTranscript(entry, session, turn) {
     else
       cotEl.innerHTML = drawerHint(
         session.agent === "Codex"
-          ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
+          ? "Codex 官方记录对模型思考链加密，本机无法解密展示。"
           : "该来源未记录该轮的模型思考文本。",
       );
     // 截断等诚实备注（missing_fields）只在抽屉内提示一次；
@@ -2458,7 +2456,7 @@ function details(id) {
         </div>
         <p class="sub" style="margin-bottom:8px;">${h(t.models.join(" / ") || "模型上下文未知")}</p>
         <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:10px;">
-          <span>完整单轮跨度: <strong>${fmt(t.elapsed_ms)}</strong></span>
+          <span>本轮时长: <strong>${fmt(t.elapsed_ms)}</strong></span>
           <span>本期分摊计入: <strong>${fmt(t.period_ms)}</strong></span>
           <span>AI 工作：<strong>${t.work_ms !== null ? fmt(t.work_ms) : "未切分"}</strong></span>
         </div>
@@ -2488,10 +2486,10 @@ function definitions() {
            <tr><th>展示词</th><th>口径术语</th><th>字段 / 计算式</th></tr>
          </thead>
          <tbody>
-           <tr><td>累计工作时长</td><td class="sub">Recorded processing</td><td><code>processing_ms</code></td></tr>
-           <tr><td>并行去重时长</td><td class="sub">Union Span</td><td><code>processing_union_ms</code></td></tr>
-           <tr><td>总时长</td><td class="sub">Wall Time</td><td>wall time · <code>sessionWallSpan</code></td></tr>
-           <tr><td>本轮时长</td><td class="sub">Turn Wall Time</td><td><code>elapsed_ms</code></td></tr>
+           <tr><td>累计工作时长</td><td class="sub">—</td><td><code>processing_ms</code></td></tr>
+           <tr><td>并行去重时长</td><td class="sub">—</td><td><code>processing_union_ms</code></td></tr>
+           <tr><td>总时长</td><td class="sub">wall time</td><td><code>sessionWallSpan</code></td></tr>
+           <tr><td>本轮时长</td><td class="sub">wall time</td><td><code>elapsed_ms</code></td></tr>
            <tr><td>AI 工作</td><td class="sub">Active Work Duration</td><td><code>work_ms</code> = <code>model_ms</code> + tool execution</td></tr>
            <tr><td>等待确认</td><td class="sub">Review Wait</td><td><code>review_wait_ms</code></td></tr>
            <tr><td>待命</td><td class="sub">Standby Duration</td><td><code>standby_ms</code></td></tr>
@@ -2502,7 +2500,8 @@ function definitions() {
          </tbody>
        </table>
      </div>
-     <p class="sub" style="margin-top:10px; font-size:12px;">说明：「自动完成度」是同一指标的展示层说法，口径术语仍为 Autonomy Rate；GLOSSARY 本轮不变。</p>`,
+     <p class="sub" style="margin-top:10px; font-size:12px;">「—」表示 GLOSSARY 无独立条目，口径以字段名为准。</p>
+     <p class="sub" style="margin-top:6px; font-size:12px;">说明：「自动完成度」是同一指标的展示层说法，口径术语仍为 Autonomy Rate；GLOSSARY 本轮不变。</p>`,
     true,
   );
 }
