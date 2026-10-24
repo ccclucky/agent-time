@@ -478,7 +478,15 @@ test("Privacy copy states that turn prompt/CoT text is read on demand from local
   assert.match(privacy, /不上传/);
 });
 
-test("Codex .jsonl.zst: transcript extraction decompresses instead of reading raw bytes", () => {
+// zstd APIs landed in Node 22.15; on older runners (22.13) skip like the
+// other zst suites instead of failing on the missing compress helper.
+const zstTranscript =
+  typeof zlib.zstdCompressSync === "function" &&
+  typeof zlib.zstdDecompressSync === "function"
+    ? test
+    : test.skip;
+
+zstTranscript("Codex .jsonl.zst: transcript extraction decompresses instead of reading raw bytes", () => {
   const { dir } = setup();
   const rows = codexResponseItemRows();
   const zstPath = path.join(dir, "rollout.jsonl.zst");
