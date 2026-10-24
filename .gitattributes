@@ -1,0 +1,4 @@
+# Language stats: prototypes/ are design artifacts (large one-off HTML
+# mockups), not the project's implementation language — exclude from GitHub
+# language classification. Real code: TypeScript backend + vanilla frontend.
+prototypes/** linguist-documentation
