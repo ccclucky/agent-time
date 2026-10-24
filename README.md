@@ -6,7 +6,7 @@
 
 **给 AI Coding Agent 记一本时间账。**
 
-[![CI](https://github.com/ccclucky/agent-time/actions/workflows/ci.yml/badge.svg)](https://github.com/ccclucky/agent-time/actions/workflows/ci.yml)
+[![Test](https://github.com/ccclucky/agent-time/actions/workflows/test.yml/badge.svg)](https://github.com/ccclucky/agent-time/actions/workflows/test.yml)
 [![npm](https://img.shields.io/npm/v/@ccclucky/agent-time.svg)](https://www.npmjs.com/package/@ccclucky/agent-time)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.15-58a6ff.svg)](#快速开始)
