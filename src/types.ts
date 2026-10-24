@@ -1,6 +1,15 @@
 /** Adapter ids with an implemented read-only importer — the single list both
  * the CLI/directory surfaces and Store.importFile dispatch on. */
-export const ADAPTERS = ["codex", "claude", "pi", "antigravity", "dsh", "opencode", "omp"] as const;export type AdapterName = (typeof ADAPTERS)[number];
+export const ADAPTERS = [
+  "codex",
+  "claude",
+  "pi",
+  "antigravity",
+  "dsh",
+  "opencode",
+  "omp",
+] as const;
+export type AdapterName = (typeof ADAPTERS)[number];
 export const isAdapterName = (v: string): v is AdapterName =>
   (ADAPTERS as readonly string[]).includes(v);
 

@@ -145,6 +145,10 @@ class LineSplitter {
     return tail;
   }
 }
+// lines() yields zero-copy views valid only until the consumer's NEXT line
+// request (the chunk buffer is reused): every consumer must parse each yielded
+// line before requesting the next one; collecting lines for later processing
+// will observe overwritten bytes.
 // Transcript extraction reads one file synchronously per drawer fetch. Unlike
 // the import path it must branch on .zst here too — iterating lines() over a
 // compressed file yields binary garbage that fails JSON parsing line-by-line
