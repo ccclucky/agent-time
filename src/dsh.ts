@@ -59,11 +59,14 @@ const MAX_FRAME_OUTPUT = 2 * 1024 * 1024 * 1024;
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
 /** DSH JSONL lines, transparently decoding the multi-frame zstd container.
- *  Frame boundaries are located by scanning the magic; a boundary candidate
- *  that fails to decode means the magic bytes collided with frame payload, so
- *  the window widens to the next magic and retries — a truncated frame never
- *  decodes "successfully" because zstd frames are terminated by an explicit
- *  end block (plus checksum when present). Plain .jsonl files (no leading
+ *  Frame boundaries are located by scanning the magic. A candidate boundary
+ *  that fails to decode is either a magic collision inside the current frame
+ *  (astronomically rare in entropy-coded output — none found across ~16 MiB
+ *  of measured frames — but handled anyway) or a stray magic between frames;
+ *  the walk keeps the frame start fixed and widens through further candidates,
+ *  and only when every candidate to EOF fails does it discard the start as
+ *  bogus and rescan from the first candidate. A genuinely truncated tail then
+ *  exhausts both strategies and fails loudly. Plain .jsonl files (no leading
  *  magic) fall through to the shared sync line reader. */
 export function* dshLines(path: string): Generator<string> {
   const buf = readFileSync(path);
@@ -75,20 +78,30 @@ export function* dshLines(path: string): Generator<string> {
   }
   let i = 0;
   for (;;) {
-    const next = buf.indexOf(ZSTD_MAGIC, i + 1);
-    const end = next < 0 ? buf.length : next;
-    let frame: Buffer;
-    try {
-      frame = zlib.zstdDecompressSync(buf.subarray(i, end), {
-        maxOutputLength: MAX_FRAME_OUTPUT,
-      });
-    } catch {
-      if (next < 0)
-        throw new ValidationError("zstd 解压失败；文件可能已损坏，未导入");
-      i = next;
-      continue;
+    let next = buf.indexOf(ZSTD_MAGIC, i + 1);
+    let frame: Buffer | null = null;
+    for (;;) {
+      try {
+        frame = zlib.zstdDecompressSync(
+          buf.subarray(i, next < 0 ? buf.length : next),
+          { maxOutputLength: MAX_FRAME_OUTPUT },
+        );
+        break;
+      } catch {
+        if (next < 0) {
+          // Every candidate from this start failed: the start is a stray
+          // magic (skip it) or the tail is corrupt (no further magic — fail).
+          const fallback = buf.indexOf(ZSTD_MAGIC, i + 1);
+          if (fallback < 0)
+            throw new ValidationError("zstd 解压失败；文件可能已损坏，未导入");
+          i = fallback;
+          next = buf.indexOf(ZSTD_MAGIC, i + 1);
+          continue;
+        }
+        next = buf.indexOf(ZSTD_MAGIC, next + 1);
+      }
     }
-    for (const line of frame.toString("utf8").split("\n")) yield line;
+    for (const line of frame!.toString("utf8").split("\n")) yield line;
     if (next < 0) return;
     i = next;
   }
@@ -342,7 +355,9 @@ export function parseDsh(path: string) {
 
   if (project === null) {
     // Header cwd missing: the encoded directory name is a lossy cwd fallback.
-    let encoded = posix.basename(posix.dirname(path));
+    // DSH nests one level deeper than Pi (sessions/<proj>/<sessionId>/file),
+    // so the project directory is the file's grandparent.
+    let encoded = posix.basename(posix.dirname(posix.dirname(path)));
     if (encoded.startsWith("--")) encoded = encoded.slice(2);
     if (encoded.endsWith("--")) encoded = encoded.slice(0, -2);
     const last = encoded.split("-").pop() ?? "";

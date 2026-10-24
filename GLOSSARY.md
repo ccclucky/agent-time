@@ -52,3 +52,7 @@ _Avoid_: 导入会话, 迁移轮次
 基于源记录中的会话级累计 Token 快照，按"轮末快照减去前轮末快照"差分得到的轮次用量；各轮差分之和精确等于会话最后快照。缺失快照时不计入，绝不以 0 冒充。
 _Avoid_: Token 求和, 单次响应用量
 
+**Token 用量（逐请求合计） (Token Usage by Per-Request Sum)**:
+DeepSeek Harness (DSH) 专用的轮次用量口径：assistant/message 每条记录自带本次请求的真实用量（实测 inputTokens 逐请求重置，非累计快照），轮次用量为其在轮内各步的合计。与「快照差分」是来源不同的两种计量口径，禁止互相套用；reasoning 用量源中不存在，记 0 而非推断。
+_Avoid_: 快照差分（用于 DSH）, Token 累计快照（用于 DSH）
+

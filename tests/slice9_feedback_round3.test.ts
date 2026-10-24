@@ -333,10 +333,10 @@ test("Fix 4: badges carry the real OpenAI mark for Codex and the new Pi pixel ma
   assert.match(js, /<svg viewBox="0 0 16 16"[^>]*><rect x="0" y="0" width="16" height="16" rx="4\.5" fill="currentColor"\/>/);
 });
 
-test("Version stamp: both assets advance to 20261025-6", () => {
+test("Version stamp: both assets advance to 20261025-7", () => {
   const html = read("../public/index.html");
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261025-6", "stamp must advance per AGENTS.md (5 → 6)");
+  assert.equal(cssV, "20261025-7", "stamp must advance per AGENTS.md (6 → 7)");
 });

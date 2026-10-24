@@ -287,6 +287,29 @@ zst("parseDsh: mixed session ids are a plain failure", () => {
   assert.throws(() => parseDsh(file), ValidationError, /混合多个会话标识/);
 });
 
+zst("parseDsh: missing cwd degrades to the encoded project directory name", () => {
+  const { dir } = setup();
+  // Two-level layout without a cwd header: project comes from the
+  // GRANDPARENT of the file (sessions/<proj>/<sessionId>/file), flagged as
+  // lossy, never from the sessionId directory one level up.
+  const file = path.join(
+    dir,
+    "sessions",
+    "--tmp-proj-x--",
+    "session-abc",
+    "session.v4.jsonl.zstd",
+  );
+  const headerNoCwd = { type: "session", version: 4, id: "session-abc", createdAt: T0 };
+  writeSession(file, [
+    frame(headerNoCwd),
+    frame(modelSelection),
+    frame(...turnRecords({ turn: 1, startAt: T0 + 10, endAt: T0 + 50, steps: [] })),
+  ]);
+  const result = parseDsh(file);
+  assert.equal(result.session.project, "x");
+  assert.ok(result.issues.some((i) => i.includes("有损解码")));
+});
+
 zst("parseDsh: unknown turn/end reason degrades to abort with an issue", () => {
   const { dir } = setup();
   const file = path.join(dir, "session.v4.jsonl.zstd");
