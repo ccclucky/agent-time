@@ -13,7 +13,7 @@
 | Oh-My-Pi | `~/.omp/agent` | `sessions` 子目录；命名 profile 和迁移后的 XDG 目录另行解析 | Oh-My-Pi `DirResolver`、`getSessionsDir` |
 | Pi | `~/.pi/agent` | `sessions/<编码后的工作目录>/*.jsonl` | Pi `getAgentDir`、`getDefaultSessionDirPath` |
 | DeepSeek Harness | `~/.dsh` | `sessions/<编码后的工作目录>/<sessionId>/session[.v4].jsonl.zstd`，多帧 zstd 压缩的 JSONL 事件流 | 无公开上游规则文档；按本机真实会话样本（`~/.dsh/sessions`）核实 |
-| OpenCode | `~/.local/share/opencode` | 该数据目录内的 SQLite 会话数据库；稳定渠道通常为 `opencode.db` | OpenCode `global-roots.ts` 和 `database-path.ts` |
+| OpenCode | `~/.local/share/opencode` | 该数据目录根下的 SQLite 会话数据库；稳定渠道通常为 `opencode.db`（渠道或 `OPENCODE_DB` 可改变文件名）。已实现只读导入：message/part 旧版结构（本机实测版本 1.1.36–1.2.24）；上游 session_v2 新格式拒绝导入，待真实样本验证后适配 | OpenCode `global-roots.ts` 和 `database-path.ts`；数据库表结构与时间戳语义按本机真实库（5 项目 / 16 会话 / 443 消息 / 1703 part，2026-10-24）核实 |
 | Antigravity | 留空 | 未取得已验证的 IDE 会话位置规则 | 不借用 CLI 或其他产品的配置位置 |
 
 **这些是核实过的目录规则，不是对用户电脑安装状态的断言。** AgentTime 无法从云环境知道用户电脑上另一个进程的启动参数。目录存在与实际拥有可读会话也分别判断，不把“目录存在”写成“已成功接入”。
@@ -58,4 +58,4 @@
 
 cc-switch 的 `agy_config.rs` 面向 Antigravity CLI，不能证明 Antigravity IDE 的会话目录或格式；本次未据此填入 IDE 默认位置。
 
-目前 Codex 和 Claude Code 具备日志导入能力；Claude 使用消息记录跨度口径，与 Codex 执行区间不同。其他工具的路径规则核实不等于已实现适配器，也不代表已经读取过用户本机的真实数据。已有自定义路径不会因为默认规则修正而被静默覆盖。
+目前 Codex、Claude Code、Pi、DeepSeek Harness 和 OpenCode 具备导入能力；Codex 与 OpenCode 提供三态耗时切分（口径不同，界面分别披露），Claude 使用消息记录跨度口径，Pi 与 DeepSeek Harness 按机时跨度累加。其他工具的路径规则核实不等于已实现适配器，也不代表已经读取过用户本机的真实数据。已有自定义路径不会因为默认规则修正而被静默覆盖。

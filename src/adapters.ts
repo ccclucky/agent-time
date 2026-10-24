@@ -19,9 +19,9 @@ export const SOURCES = [
   },
   {
     agent: "OpenCode",
-    status: "已调研 · 尚未接入",
-    supported: false,
-    note: "不同版本存储结构有差异，需独立适配导出格式。",
+    status: "只读导入 · 消息跨度三态切分",
+    supported: true,
+    note: "只读打开数据目录中的 SQLite 会话数据库（opencode.db，message/part 旧版结构；session_v2 新格式拒绝导入）。纯工作按助手消息跨度扣除其中并行的工具执行跨度切分；permission 表为 ephemeral 且本地 0 行，等待人审阅记未知；Token 为助手消息逐请求用量的轮次合计（实测非累计快照）。",
   },
   {
     agent: "Pi",

@@ -1099,6 +1099,10 @@ h1#title {
   color: #4D6BFE; /* DeepSeek 品牌蓝 */
 }
 
+.agent-mark-opencode {
+  color: #FFB224; /* OpenCode 品牌橙黄 */
+}
+
 /* TOP 3 榜副行：徽标 + 项目/ID 单行省略 */
 .rank-subline {
   display: flex;

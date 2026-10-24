@@ -187,6 +187,13 @@ function agentMark(agent) {
       cls: "dsh",
       label: "DeepSeek Harness",
     },
+    // OpenCode 无稳定单色官方标；用终端尖括号（代码会话语义）代替，勿自绘复杂 logo。
+    OpenCode: {
+      glyph:
+        '<path d="M6 5L3 8l3 3M10 5l3 3-3 3" stroke="#FAF9F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+      cls: "opencode",
+      label: "OpenCode",
+    },
   };
   const m = marks[agent];
   if (!m) return "";
@@ -293,7 +300,7 @@ function render() {
 }
 
 function noData() {
-  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code、Pi 或 DeepSeek Harness 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
+  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code、Pi、DeepSeek Harness 或 OpenCode 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
 
 function stats() {
@@ -2140,7 +2147,7 @@ function compare() {
   return `
     <div class="demo">
       <strong>口径提示</strong>
-      <span>当前接入 Codex、Claude Code、Pi 与 DeepSeek Harness，按模型上下文分组，耗时更短不等于质量更优。</span>
+      <span>当前接入 Codex、Claude Code、Pi、DeepSeek Harness 与 OpenCode，按模型上下文分组，耗时更短不等于质量更优。</span>
     </div>
     <section class="panel">
       <div class="panelhead"><h2>按模型上下文汇总</h2></div>

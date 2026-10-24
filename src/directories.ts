@@ -26,16 +26,17 @@ export const NAMES: Record<Agent, string> = {
 };
 // Single source of truth for which filenames count as session files per
 // agent: Codex accepts .jsonl and .jsonl.zst, DSH .jsonl and .jsonl.zstd,
-// every other adapter only .jsonl. The two compressed suffixes are distinct
-// (".zst" does not match ".zstd") and each is checked explicitly — never rely
-// on the endsWith coincidence the shared ".jsonl" prefix would allow.
-// Shared by the CLI import walk, directory discovery, and Store.importFile so
-// the three can never drift apart.
+// OpenCode the session database (.db), every other adapter only .jsonl. The
+// two compressed suffixes are distinct (".zst" does not match ".zstd") and
+// each is checked explicitly — never rely on the endsWith coincidence the
+// shared ".jsonl" prefix would allow. Shared by the CLI import walk,
+// directory discovery, and Store.importFile so the three can never drift.
 export function isSessionFile(agent: string, file: string): boolean {
   return (
     file.endsWith(".jsonl") ||
     (agent === "codex" && file.endsWith(".jsonl.zst")) ||
-    (agent === "dsh" && file.endsWith(".jsonl.zstd"))
+    (agent === "dsh" && file.endsWith(".jsonl.zstd")) ||
+    (agent === "opencode" && file.endsWith(".db"))
   );
 }
 export function resolvePath(raw: unknown, home: string): string {
@@ -200,6 +201,35 @@ export class Directories {
         }
       };
       try {
+        if (item.agent === "opencode") {
+          // OpenCode persists every session in ONE SQLite database at the
+          // data root (opencode.db) — there is no sessions subdirectory to
+          // walk, and RULES.opencode.logs is empty on purpose. Scan the root
+          // level only: channel/OPENCODE_DB variants may rename the file but
+          // keep it at the root (see docs/directories.zh-CN.md).
+          for (const entry of readdirSync(root, { withFileTypes: true })) {
+            if (!entry.isFile()) continue;
+            const p = path.join(root, entry.name);
+            if (!isSessionFile(item.agent, p)) continue;
+            const real = realpathSync(p),
+              rel = path.relative(root, real);
+            if (
+              rel === ".." ||
+              rel.startsWith(".." + path.sep) ||
+              path.isAbsolute(rel)
+            ) {
+              notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
+              continue;
+            }
+            files.set(real, root);
+            agents.set(real, item.agent as AdapterName);
+            count++;
+            if (files.size > 5000)
+              throw new ValidationError(
+                "配置目录内超过 5000 个会话文件，请缩小数据目录范围",
+              );
+          }
+        }
         for (const sub of RULES[item.agent].logs) {
           const dir = path.join(root, sub);
           if (!existsSync(dir)) continue;
@@ -212,7 +242,11 @@ export class Directories {
           if (statSync(dir).isDirectory()) walk(dir);
         }
         if (!count)
-          notices.push(`${item.name} 目录存在，但没有找到可导入的会话 JSONL`);
+          notices.push(
+            item.agent === "opencode"
+              ? `${item.name} 目录存在，但没有找到可导入的会话数据库（opencode.db）`
+              : `${item.name} 目录存在，但没有找到可导入的会话 JSONL`,
+          );
       } catch (e) {
         if (e instanceof ValidationError) throw e;
         notices.push(`${item.name} 部分会话目录无法读取；已有记录保留旧快照`);
