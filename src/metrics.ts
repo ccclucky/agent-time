@@ -140,7 +140,7 @@ export function report(
       statuses: counts,
     },
     basis:
-      "Codex：基于 task_started/task_complete 轮次边界、call_id 工具调用配对与 item_completed 完成锚点的三态耗时切分；本地语料无审批事件，等待人审阅未单独计量（记 0）。Token 用量为 event_msg/token_count 累计快照的轮次差分实测，无快照时不计入。Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。Pi：模型推理耗时与工具执行机时累加为纯工作；Pi 来源不落盘审批事件，等待人审阅保持未知，工具就绪到实际开始的间隔单列为未分类延迟（可能含审批等待、调度或限流），缺失时长证据不编造。Antigravity：基于 USER_INPUT/PLANNER_RESPONSE/GENERIC 记录流的三态切分，ask_question 阻断区间按等待人审阅计量，后台任务按完成标记计入工具执行；仅收录携带 transcript.jsonl 的会话，标题与项目来自全局索引库富化。",
+      "Codex：基于 task_started/task_complete 轮次边界、call_id 工具调用配对与 item_completed 完成锚点的三态耗时切分；本地语料无审批事件，等待人审阅未单独计量（记 0）。Token 用量为 event_msg/token_count 累计快照的轮次差分实测，无快照时不计入。Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。Pi：模型推理耗时与工具执行机时累加为纯工作；Pi 来源不落盘审批事件，等待人审阅保持未知，工具就绪到实际开始的间隔单列为未分类延迟（可能含审批等待、调度或限流），缺失时长证据不编造。DeepSeek Harness：按 step/start → assistant/message 的推理跨度与 tool/call → tool/result 的执行跨度累加为纯工作；Token 用量为 assistant/message 逐请求用量的轮次合计（实测 per-request 而非累计快照）；本地语料审批策略为 never，无审批阻断事件，等待人审阅保持未知。Antigravity：基于 USER_INPUT/PLANNER_RESPONSE/GENERIC 记录流的三态切分，ask_question 阻断区间按等待人审阅计量，后台任务按完成标记计入工具执行；仅收录携带 transcript.jsonl 的会话，标题与项目来自全局索引库富化。",
     sessions: included,
   };
 }

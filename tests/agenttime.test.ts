@@ -302,16 +302,17 @@ test("default directories are metadata-only, disabled and evidence-backed", asyn
   const { store, dirs, home } = setup();
   file(path.join(home, ".codex", "sessions"), rows());
   const list = dirs.list();
-  assert.equal(list.length, 6);
+  assert.equal(list.length, 7);
   assert(list.every((i) => !i.enabled));
   assert.equal(store.sessions().length, 0);
   assert.equal(list.find((i) => i.agent === "omp")!.path, "~/.omp/agent");
-  // Antigravity 位置已在本机实测验证（brain/<id>/.system_generated/logs），
-  // 但上游无公开目录规范，evidence_url 保持留空（诚实口径，不伪造出处）。
+  // Antigravity 与 DSH 位置均已在本机实测验证，但上游无公开目录规范，
+  // evidence_url 保持留空（诚实口径，不伪造出处）。
   assert.equal(list.find((i) => i.agent === "antigravity")!.path, "~/.gemini/antigravity");
+  assert.equal(list.find((i) => i.agent === "dsh")!.path, "~/.dsh");
   assert(
     list
-      .filter((i) => i.agent !== "antigravity")
+      .filter((i) => i.agent !== "antigravity" && i.agent !== "dsh")
       .every((i) => !!i.evidence_url),
   );
 });

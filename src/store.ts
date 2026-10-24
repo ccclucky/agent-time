@@ -20,6 +20,7 @@ import {
 } from "./codex.js";
 import { parseClaude, extractClaudeTranscript } from "./claude.js";
 import { parsePi, extractPiTranscript } from "./pi.js";
+import { parseDsh, extractDshTranscript } from "./dsh.js";
 import {
   parseAntigravity,
   extractAntigravityTranscript,
@@ -63,6 +64,7 @@ const TRANSCRIPT_EXTRACTORS: Record<
   Pi: extractPiTranscript,
   Codex: extractCodexTranscript,
   Antigravity: extractAntigravityTranscript,
+  "DeepSeek Harness": extractDshTranscript,
 };
 
 // conversation_summaries.db is read once per config root per refresh/import
@@ -390,7 +392,9 @@ export class Store {
       throw new ValidationError(
         adapter === "codex"
           ? "请选择支持的 Agent .jsonl 或 .jsonl.zst 会话文件"
-          : "请选择支持的 Agent .jsonl 会话文件",
+          : adapter === "dsh"
+            ? "请选择 DSH .jsonl 或 .jsonl.zstd 会话文件"
+            : "请选择支持的 Agent .jsonl 会话文件",
       );
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
@@ -403,7 +407,9 @@ export class Store {
           ? parseClaude(p)
           : adapter === "antigravity"
             ? parseAntigravity(p)
-            : parsePi(p)),
+            : adapter === "pi"
+              ? parsePi(p)
+              : parseDsh(p)),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -429,12 +435,9 @@ export class Store {
           : ((m as { title?: string | null }).title ?? null);
     const project =
       adapter === "antigravity" ? (conversation?.project ?? m.project) : m.project;
-    const tokens =
-      codex
-        ? codex.tokens
-        : adapter === "antigravity"
-          ? ((data as { tokens?: ({ turn_id: string } & TokenUsage)[] }).tokens ?? [])
-          : [];
+    // Codex diffs cumulative snapshots; DSH and Antigravity already emit
+    // per-request usage summed per turn, so all arrive as ready token rows.
+    const tokens = codex ? codex.tokens : "tokens" in data ? data.tokens : [];
     this.transaction(() => {
       this.db
         .prepare(
@@ -572,7 +575,9 @@ export class Store {
                 ? "pi"
                 : savedAgent === "Antigravity"
                   ? "antigravity"
-                  : "codex"),
+                  : savedAgent === "DeepSeek Harness"
+                    ? "dsh"
+                    : "codex"),
           indexCache,
           convIndexCache,
         );
@@ -824,7 +829,7 @@ export class Store {
         elapsed !== null &&
         start !== null &&
         end !== null &&
-        sessionObj.agent === "Pi"
+        (sessionObj.agent === "Pi" || sessionObj.agent === "DeepSeek Harness")
       ) {
         applyTiming(calculatePiTiming(entries, start, end, elapsed));
       }

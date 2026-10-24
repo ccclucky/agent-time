@@ -338,5 +338,5 @@ test("Version stamp: both assets advance to 20261025-7", () => {
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261025-7", "stamp must advance per AGENTS.md (5 → 6)");
+  assert.equal(cssV, "20261025-7", "stamp must advance per AGENTS.md (6 → 7)");
 });

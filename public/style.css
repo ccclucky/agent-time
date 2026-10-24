@@ -1096,7 +1096,10 @@ h1#title {
 }
 
 .agent-mark-antigravity {
-  color: var(--color-mcp); /* 复用本地工具蓝令牌（设计规范允许的例外色），与既有四徽标区分 */
+  color: var(--state-token); /* 石板蓝灰令牌：与 DSH 品牌蓝、Codex 深石板均可区分 */
+}
+.agent-mark-dsh {
+  color: #4D6BFE; /* DeepSeek 品牌蓝 */
 }
 
 /* TOP 3 榜副行：徽标 + 项目/ID 单行省略 */

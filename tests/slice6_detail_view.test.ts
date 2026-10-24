@@ -130,7 +130,7 @@ test("Slice 6 Detail View: index.html keeps one shared cache-busting stamp for b
   assert.equal(
     cssV,
     "20261025-7",
-    "version stamp must advance with each visual round (feedback fixes: 20261025-5 → 20261025-7)",
+    "version stamp must advance with each visual round (feedback fixes: 20261025-6 → 20261025-7)",
   );
 });
 

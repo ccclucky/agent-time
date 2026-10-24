@@ -160,10 +160,10 @@ test("CLI import accepts --agent pi, advertises it in help and rejects others", 
     p,
   ]);
   assert.notEqual(bad.status, 0);
-  assert.match(bad.stderr, /codex\|claude\|pi/);
+  assert.match(bad.stderr, /codex\|claude\|pi\|antigravity\|dsh/);
   const help = cli(["--help"]);
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /codex\|claude\|pi/);
+  assert.match(help.stdout, /codex\|claude\|pi\|antigravity\|dsh/);
 });
 test("Pi is advertised as a supported source with three-state event split", () => {
   const pi = SOURCES.find((s) => s.agent === "Pi")!;
@@ -177,9 +177,13 @@ test("frontend copy includes Pi and drawer renders optional breakdown sections",
     new URL("../public/app.js", import.meta.url).pathname,
     "utf8",
   );
-  assert.ok(js.includes("当前接入 Codex、Claude Code、Pi 与 Antigravity"));
+  assert.ok(
+    js.includes("当前接入 Codex、Claude Code、Pi、Antigravity 与 DeepSeek Harness"),
+  );
   assert.ok(!js.includes("当前接入 Codex 和 Claude Code"));
-  assert.ok(js.includes("启用 Codex、Claude Code、Pi 或 Antigravity 数据目录"));
+  assert.ok(
+    js.includes("启用 Codex、Claude Code、Pi、Antigravity 或 DeepSeek Harness 数据目录"),
+  );
   assert.ok(js.includes("model_api_breakdown"));
   assert.ok(js.includes("thinking_breakdown"));
   // 防御性访问：字段缺失时不渲染该小节（沿用 breakdown?. 可选链风格）

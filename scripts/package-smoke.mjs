@@ -94,7 +94,7 @@ try {
   assert.equal(report.summary.processing_ms, 600000);
   assert.equal(report.summary.sessions, 1);
   const directories = await (await fetch(address + "/api/directories")).json();
-  assert.equal(directories.directories.length, 6);
+  assert.equal(directories.directories.length, 7);
   assert(directories.directories.every((d) => !d.enabled));
   const aliasCheck = spawnSync(
     npm,
