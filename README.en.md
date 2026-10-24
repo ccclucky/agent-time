@@ -21,7 +21,7 @@ AgentTime is a **local-first** time ledger for AI coding agents. It imports sess
 
 How much did your agents actually work today — and how much went into waiting for your approval? Open the page and see.
 
-![AgentTime overview: time drop funnel and brush & zoom timeline](docs/assets/hero-overview.png)
+![AgentTime overview: the time-flow funnel and full timeline](docs/assets/hero-overview.png)
 
 ## Why
 
@@ -39,7 +39,9 @@ Typical time tracking counts the whole "start to finish" span as work — **your
 | **Review wait** `review_wait_ms` | Human approval / confirmation blocks | Only counted when the source records approval events; otherwise honestly reported as unknown — never invented |
 | **Standby** `standby_ms` | Reply-finished → next submission interval | Turn boundary arithmetic; includes your reading and thinking time |
 
-Accompanying drill-downs: four turn KPIs (wall time / active work / autonomy / slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
+The web UI renders these states as plain-language labels — **AI 工作 / 等待确认 / 待命** — and the in-app "How is this time measured?" dialog maps every label back to the glossary term and field name.
+
+Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion / 15s+ slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
 
 ## Quick start
 
@@ -87,7 +89,7 @@ All imports are read-only; formats keep adapting as upstreams evolve (design dec
 
 ![Turn Inspector drawer](docs/assets/turn-inspector.png)
 
-**Aggregation panels**: top sessions, operations breakdown, per-harness / project / tool rollups.
+**Aggregation panels**: top sessions, operations breakdown, per-source / project / tool rollups.
 
 ![Aggregation panels](docs/assets/analytics-panels.png)
 
@@ -126,7 +128,7 @@ Contributions welcome — new harness adapters, timing-disclosure refinements, a
 
 **Does it slow my agents down?** No. Imports are read-only parsing — no hooks, no injection; your agent processes never notice.
 
-**Why does "review wait" show "—" for some sessions?** That source records no approval events. AgentTime refuses to treat missing evidence as "zero wait" — an intentional honesty policy.
+**Why does "waiting for confirmation" (review wait) show "—" for some sessions?** That source records no approval events. AgentTime refuses to treat missing evidence as "zero wait" — an intentional honesty policy.
 
 **Does any data leave my machine?** No. No telemetry, no uploads, no accounts; all computation and storage stay local.
 
