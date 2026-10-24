@@ -38,5 +38,16 @@
     "@types/node": "^22.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
-  }
+  },
+  "license": "MIT",
+  "keywords": [
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "opencode",
+    "time-tracking",
+    "local-first",
+    "developer-tools",
+    "analytics"
+  ]
 }

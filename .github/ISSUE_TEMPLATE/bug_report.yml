@@ -1,0 +1,55 @@
+name: Bug 报告 / Bug report
+description: AgentTime 行为与预期不符 / Something doesn't work as expected
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！AgentTime 只读本机数据，请勿粘贴 Prompt 内容或敏感会话信息。
+        Thanks for reporting! AgentTime only reads local data — please never paste prompt content or sensitive session data.
+  - type: dropdown
+    id: harness
+    attributes:
+      label: 涉及的 Harness / Affected harness
+      options:
+        - Codex
+        - Claude Code
+        - Pi
+        - Oh-My-Pi
+        - DeepSeek Harness
+        - Antigravity
+        - OpenCode
+        - 不涉及特定 harness / not harness-specific
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node 版本 / Node version (`node -v`)
+      placeholder: v22.15.0
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: AgentTime 版本 / Version (`agent-time --version` 或 commit)
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象 / What happened
+      description: 预期 vs 实际；如有报错或 UI 异常请附截图（注意遮挡隐私）
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充 / Additional context
