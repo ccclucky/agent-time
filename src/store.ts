@@ -27,6 +27,10 @@ import {
   readConversationIndex,
   type ConversationIndexEntry,
 } from "./antigravity.js";
+import {
+  parseOpencode,
+  extractOpencodeTranscript,
+} from "./opencode.js";
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
@@ -79,6 +83,36 @@ function sessionIndex(
   let index = cache.get(key);
   if (!index) cache.set(key, (index = readSessionIndex(key)));
   return index;
+}
+
+// Saved-snapshot agent name → adapter for refresh re-imports that directory
+// discovery did not classify (files imported via CLI whose directory entry is
+// disabled or gone). The previous nested ternary silently fell back to
+// "codex" for ANY unknown name, mis-routing foreign snapshots through the
+// wrong parser; unknown names now fail loudly so the file surfaces as a sync
+// failure instead of wrong-adapter statistics. A missing name keeps the
+// historical Codex default: the agent column was added via ALTER TABLE with
+// NOT NULL DEFAULT 'Codex', so every pre-existing row is stamped 'Codex'.
+function savedAgentAdapter(agent: string | undefined | null): AdapterName {
+  if (agent == null) return "codex";
+  switch (agent) {
+    case "Codex":
+      return "codex";
+    case "Claude Code":
+      return "claude";
+    case "Pi":
+      return "pi";
+    case "Antigravity":
+      return "antigravity";
+    case "DeepSeek Harness":
+      return "dsh";
+    case "OpenCode":
+      return "opencode";
+    default:
+      throw new ValidationError(
+        `已登记会话的 Agent 标识无法识别（${agent}）；已跳过该文件，防止误按 Codex 口径分流`,
+      );
+  }
 }
 
 function conversationIndex(
@@ -321,6 +355,104 @@ export function calculatePiTiming(
   };
 }
 
+/** OpenCode three-state timing split (ADR-0002 semantics on message/part
+ *  evidence). Unlike Pi/DSH, OpenCode's model span (assistant message
+ *  [created, completed]) CONTAINS its tool execution: verified on the
+ *  1703-part corpus, every tool state.time span sits inside its message
+ *  span and adjacent steps never overlap. So the turn's model API time is
+ *  the model spans minus the UNION of tool intervals (parallel calls must
+ *  not be subtracted twice), tool execution is that union, and work is
+ *  their sum (the full streaming spans). Review wait stays unknown: the
+ *  permission table is ephemeral upstream and empty locally.
+ *
+ *  Two honest side-ledgers, neither folded into work:
+ *  - unclassified_delay_ms: gaps between consecutive steps inside a turn
+ *    (step N completed → step N+1 created). Real corpus: 315/315 gaps
+ *    positive, 5,999 ms total, max 203 ms — neither streaming nor tool
+ *    execution; attribution unknown (scheduling, extensions), so it is
+ *    reported separately like Pi's tool-ready gap.
+ *  - thinking_breakdown: reasoning-part spans emitted as "thinking" events.
+ *    They sit INSIDE the model span (sampled containment 282/285, none past
+ *    completed), so they are a sub-drill of model_api_ms, never additive.
+ *
+ *  Signature takes only the event entries: every duration is first-hand
+ *  evidence on the events; the turn's wall-clock start/end/elapsed play no
+ *  role in the split and the parameters were dead weight.
+ */
+export function calculateOpencodeTiming(entries: Event[]): {
+  work_ms: number;
+  review_wait_ms: number | null;
+  breakdown: TurnBreakdown;
+} {
+  const toolIntervals: [number, number][] = [];
+  for (const e of entries)
+    if (e.kind === "tool_result" && e.end_ms != null && e.end_ms >= e.at_ms)
+      toolIntervals.push([e.at_ms, e.end_ms]);
+  const toolMs = unionMs(toolIntervals);
+
+  const modelTotals = new Map<string, number>();
+  const modelSpans: [number, number][] = [];
+  let modelSpanMs = 0;
+  for (const e of entries) {
+    if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
+    const dur = e.end_ms - e.at_ms;
+    modelSpanMs += dur;
+    modelSpans.push([e.at_ms, e.end_ms]);
+    const modelKey = e.model ?? "未知模型";
+    modelTotals.set(modelKey, (modelTotals.get(modelKey) ?? 0) + dur);
+  }
+  // Intra-turn step gaps: wall-clock between consecutive streaming spans
+  // that no measurement covers. Unioned so overlapping steps (none in the
+  // verified corpus) cannot double count.
+  modelSpans.sort((a, b) => a[0] - b[0]);
+  const delayIntervals: [number, number][] = [];
+  for (let i = 1; i < modelSpans.length; i++)
+    if (modelSpans[i][0] > modelSpans[i - 1][1])
+      delayIntervals.push([modelSpans[i - 1][1], modelSpans[i][0]]);
+  const unclassifiedDelayMs = unionMs(delayIntervals);
+
+  // Reasoning bursts: a per-model drill-down under the model spans.
+  const thinkingTotals = new Map<string, number>();
+  for (const e of entries) {
+    if (e.kind !== "thinking" || e.end_ms == null || e.end_ms < e.at_ms)
+      continue;
+    const modelKey = e.model ?? "未知模型";
+    thinkingTotals.set(
+      modelKey,
+      (thinkingTotals.get(modelKey) ?? 0) + (e.end_ms - e.at_ms),
+    );
+  }
+  // Per-call durations stay raw (matching the client-side slow-operation
+  // pairing); the union above keeps the turn total free of parallel overlap.
+  const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+  for (const e of entries) {
+    if (e.kind !== "tool_result") continue;
+    const dur = e.end_ms != null && e.end_ms >= e.at_ms ? e.end_ms - e.at_ms : 0;
+    const tname = e.tool_name || "tool";
+    const agg = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
+    agg.count += 1;
+    agg.duration_ms += dur;
+    toolsMap.set(tname, agg);
+  }
+  const modelApiMs = Math.max(0, modelSpanMs - toolMs);
+  return {
+    work_ms: modelApiMs + toolMs,
+    review_wait_ms: null,
+    breakdown: {
+      model_api_ms: modelApiMs,
+      tool_execution_ms: toolMs,
+      unclassified_delay_ms: unclassifiedDelayMs,
+      tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      model_api_breakdown: [...modelTotals.entries()]
+        .map(([model, duration_ms]) => ({ model, duration_ms }))
+        .sort((a, b) => a.model.localeCompare(b.model)),
+      thinking_breakdown: [...thinkingTotals.entries()]
+        .map(([level, duration_ms]) => ({ level, duration_ms }))
+        .sort((a, b) => a.level.localeCompare(b.level)),
+    },
+  };
+}
+
 export class Store {
   readonly path: string;
   readonly db: DatabaseSync;
@@ -344,6 +476,35 @@ export class Store {
     for (const col of ["last_error", "config_root"])
       if (!columns.includes(col))
         this.db.exec(`ALTER TABLE source ADD COLUMN ${col} TEXT`);
+    // Legacy databases carry UNIQUE(path): one file = one snapshot. OpenCode
+    // registers one source snapshot per (file, session) because a single
+    // .db file holds many sessions, so the constraint is relaxed by a one-
+    // time table rebuild, guarded on the old inline definition still being
+    // present. The rebuild must run with foreign_keys OFF: DROP TABLE on the
+    // parent would cascade-delete every event/token row.
+    const sourceSql = (
+      this.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='source'",
+        )
+        .get() as { sql: string } | undefined
+    )?.sql;
+    if (sourceSql?.includes("path TEXT NOT NULL UNIQUE")) {
+      this.db.exec("PRAGMA foreign_keys=OFF");
+      this.transaction(() => {
+        this.db.exec(
+          `CREATE TABLE source_migrated (
+ id TEXT PRIMARY KEY, path TEXT NOT NULL, session_id TEXT NOT NULL,
+ project TEXT NOT NULL, client TEXT NOT NULL, issues TEXT NOT NULL, last_error TEXT, config_root TEXT, title TEXT, agent TEXT,
+ imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO source_migrated SELECT id,path,session_id,project,client,issues,last_error,config_root,title,agent,imported_at FROM source;
+DROP TABLE source;
+ALTER TABLE source_migrated RENAME TO source;`,
+        );
+      });
+      this.db.exec("PRAGMA foreign_keys=ON");
+    }
     const eventCols = this.db
       .prepare("PRAGMA table_info(event)")
       .all()
@@ -394,105 +555,130 @@ export class Store {
           ? "请选择支持的 Agent .jsonl 或 .jsonl.zst 会话文件"
           : adapter === "dsh"
             ? "请选择 DSH .jsonl 或 .jsonl.zstd 会话文件"
-            : "请选择支持的 Agent .jsonl 会话文件",
+            : adapter === "opencode"
+              ? "请选择 OpenCode 会话数据库文件（如 opencode.db）"
+              : "请选择支持的 Agent .jsonl 会话文件",
       );
     if (before.size > 512n * 1024n * 1024n)
       throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
     // The file-change guard spans the awaited parse: stat before and after, so
     // a file rewritten mid-import is rejected instead of half-ingested.
-    const codex = adapter === "codex" ? await parse(p) : null,
-      data =
-        codex ??
-        (adapter === "claude"
-          ? parseClaude(p)
-          : adapter === "antigravity"
-            ? parseAntigravity(p)
-            : adapter === "pi"
-              ? parsePi(p)
-              : parseDsh(p)),
-      after = statSync(p, { bigint: true });
+    // OpenCode differs from every other adapter: one .db file carries many
+    // sessions, so its parser returns one result per session and each is
+    // registered as its own source snapshot keyed by file + session id.
+    const codex = adapter === "codex" ? await parse(p) : null;
+    const parsed: {
+      session: {
+        id: string;
+        agent: string;
+        project: string;
+        client: string;
+        title?: string | null;
+      };
+      events: Event[];
+      tokens?: ({ turn_id: string } & TokenUsage)[];
+      issues: string[];
+    }[] = codex
+      ? [codex]
+      : adapter === "claude"
+        ? [parseClaude(p)]
+        : adapter === "antigravity"
+          ? [parseAntigravity(p)]
+          : adapter === "pi"
+            ? [parsePi(p)]
+            : adapter === "opencode"
+              ? parseOpencode(p)
+              : [parseDsh(p)];
+    const after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
-    const sid = hash(p),
-      m = data.session;
-    // Title/projects are single-channel enriched from each harness's global
-    // registry (Codex: session_index.jsonl; Antigravity: conversation_summaries.db;
-    // Claude/Pi: title inside the session file itself). Recomputed on every
-    // import, so a dropped registry entry clears the stored value rather than
-    // leaving a stale one.
-    const conversation =
-      adapter === "antigravity" && configRoot
-        ? conversationIndex(configRoot, convIndexCache).get(m.id.replace(/^antigravity\//, ""))
-        : undefined;
-    const title =
-      adapter === "codex" && configRoot
-        ? (sessionIndex(configRoot, indexCache).get(m.id)?.name ?? "").slice(
-            0,
-            100,
-          ) || null
-        : adapter === "antigravity"
-          ? (conversation?.title ?? null)
-          : ((m as { title?: string | null }).title ?? null);
-    const project =
-      adapter === "antigravity" ? (conversation?.project ?? m.project) : m.project;
-    // Codex diffs cumulative snapshots; DSH and Antigravity already emit
-    // per-request usage summed per turn, so all arrive as ready token rows.
-    const tokens = codex ? codex.tokens : "tokens" in data ? data.tokens : [];
+    const multi = adapter === "opencode" && parsed.length > 1;
     this.transaction(() => {
-      this.db
-        .prepare(
-          `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent,title) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,title=excluded.title,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
-        )
-        .run(
-          sid,
-          p,
-          m.id,
-          project,
-          m.client,
-          JSON.stringify(data.issues),
-          configRoot,
-          m.agent,
-          title,
-        );
-      this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
-      this.db.prepare("DELETE FROM token_usage WHERE source_id=?").run(sid);
-      const put = this.db.prepare(
-        "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name,end_ms,thinking_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-      );
-      for (const e of data.events)
-        put.run(
-          sid,
-          e.key,
-          e.turn_id,
-          e.kind,
-          e.at_ms,
-          e.model,
-          e.agent_id ?? null,
-          e.tool_id ?? null,
-          e.tool_name ?? null,
-          e.end_ms ?? null,
-          e.thinking_level ?? null,
-        );
-      if (tokens.length) {
-        const putTokens = this.db.prepare(
-          "INSERT INTO token_usage(source_id,turn_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens) VALUES(?,?,?,?,?,?,?,?)",
-        );
-        for (const t of tokens)
-          putTokens.run(
+      for (const data of parsed) {
+        const sid = multi ? hash(p + "\u0000" + data.session.id) : hash(p),
+          m = data.session;
+        // Title/projects are single-channel enriched from each harness's global
+        // registry (Codex: session_index.jsonl; Antigravity: conversation_summaries.db;
+        // Claude/Pi: title inside the session file itself). Recomputed on every
+        // import, so a dropped registry entry clears the stored value rather
+        // than leaving a stale one.
+        const conversation =
+          adapter === "antigravity" && configRoot
+            ? conversationIndex(configRoot, convIndexCache).get(m.id.replace(/^antigravity\//, ""))
+            : undefined;
+        const title =
+          adapter === "codex" && configRoot
+            ? (sessionIndex(configRoot, indexCache).get(m.id)?.name ?? "").slice(
+                0,
+                100,
+              ) || null
+            : adapter === "antigravity"
+              ? (conversation?.title ?? null)
+              : ((m as { title?: string | null }).title ?? null);
+        const project =
+          adapter === "antigravity" ? (conversation?.project ?? m.project) : m.project;
+        // Codex diffs cumulative snapshots; DSH, Antigravity and OpenCode already
+        // emit per-request usage summed per turn, so all arrive as ready token rows.
+        const tokens = codex
+          ? codex.tokens
+          : "tokens" in data
+            ? (data.tokens ?? [])
+            : [];
+        this.db
+          .prepare(
+            `INSERT INTO source(id,path,session_id,project,client,issues,config_root,agent,title) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,project=excluded.project,client=excluded.client,issues=excluded.issues,config_root=excluded.config_root,agent=excluded.agent,title=excluded.title,last_error=NULL,imported_at=CURRENT_TIMESTAMP`,
+          )
+          .run(
             sid,
-            t.turn_id,
-            t.input_tokens,
-            t.cached_input_tokens,
-            t.cache_write_input_tokens,
-            t.output_tokens,
-            t.reasoning_output_tokens,
-            t.total_tokens,
+            p,
+            m.id,
+            project,
+            m.client,
+            JSON.stringify(data.issues),
+            configRoot,
+            m.agent,
+            title,
           );
+        this.db.prepare("DELETE FROM event WHERE source_id=?").run(sid);
+        this.db.prepare("DELETE FROM token_usage WHERE source_id=?").run(sid);
+        const put = this.db.prepare(
+          "INSERT INTO event(source_id,key,turn_id,kind,at_ms,model,agent_id,tool_id,tool_name,end_ms,thinking_level) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        );
+        for (const e of data.events)
+          put.run(
+            sid,
+            e.key,
+            e.turn_id,
+            e.kind,
+            e.at_ms,
+            e.model,
+            e.agent_id ?? null,
+            e.tool_id ?? null,
+            e.tool_name ?? null,
+            e.end_ms ?? null,
+            e.thinking_level ?? null,
+          );
+        if (tokens.length) {
+          const putTokens = this.db.prepare(
+            "INSERT INTO token_usage(source_id,turn_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens) VALUES(?,?,?,?,?,?,?,?)",
+          );
+          for (const t of tokens)
+            putTokens.run(
+              sid,
+              t.turn_id,
+              t.input_tokens,
+              t.cached_input_tokens,
+              t.cache_write_input_tokens,
+              t.output_tokens,
+              t.reasoning_output_tokens,
+              t.total_tokens,
+            );
+        }
       }
     });
     return {
-      events: data.events.length,
-      issues: data.issues,
+      events: parsed.reduce((acc, d) => acc + d.events.length, 0),
+      issues: [...new Set(parsed.flatMap((d) => d.issues))],
       external_import_only: codex?.external_import_only ?? false,
     };
   }
@@ -568,16 +754,7 @@ export class Store {
         await this.importFile(
           p,
           r,
-          agents.get(p) ??
-            (savedAgent === "Claude Code"
-              ? "claude"
-              : savedAgent === "Pi"
-                ? "pi"
-                : savedAgent === "Antigravity"
-                  ? "antigravity"
-                  : savedAgent === "DeepSeek Harness"
-                    ? "dsh"
-                    : "codex"),
+          agents.get(p) ?? savedAgentAdapter(savedAgent),
           indexCache,
           convIndexCache,
         );
@@ -832,6 +1009,13 @@ export class Store {
         (sessionObj.agent === "Pi" || sessionObj.agent === "DeepSeek Harness")
       ) {
         applyTiming(calculatePiTiming(entries, start, end, elapsed));
+      } else if (
+        elapsed !== null &&
+        start !== null &&
+        end !== null &&
+        sessionObj.agent === "OpenCode"
+      ) {
+        applyTiming(calculateOpencodeTiming(entries));
       }
 
       const turnSubagents = groupSubagents(entries);
@@ -924,7 +1108,12 @@ export class Store {
     if (!rows.length) return null;
     const { path: p, agent } = rows[0];
     try {
-      const turns = (TRANSCRIPT_EXTRACTORS[agent] ?? extractCodexTranscript)(p);
+      // OpenCode's source file is one database holding many sessions; the
+      // extractor filters to the requested one. Other agents are 1:1.
+      const turns =
+        agent === "OpenCode"
+          ? extractOpencodeTranscript(p, sessionId)
+          : (TRANSCRIPT_EXTRACTORS[agent] ?? extractCodexTranscript)(p);
       const missing: string[] = [];
       const overLimit = (s: string | null) =>
         s !== null && Array.from(s).length >= TRANSCRIPT_TEXT_LIMIT;

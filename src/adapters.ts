@@ -19,9 +19,9 @@ export const SOURCES = [
   },
   {
     agent: "OpenCode",
-    status: "已调研 · 尚未接入",
-    supported: false,
-    note: "不同版本存储结构有差异，需独立适配导出格式。",
+    status: "只读导入 · 消息跨度三态切分",
+    supported: true,
+    note: "只读打开数据目录中的 SQLite 会话数据库（opencode.db，message/part 旧版结构；session_v2 新格式拒绝导入）。模型生成取助手消息整段流式跨度：消息内流式空档计入模型生成（偏离 spec 字面的 part 口径——90 个 text part 中 88 个 start==end 无时长，reasoning 只覆盖思考突发；实测整段口径约为 part 时长和的 4 倍）。纯工作为该跨度扣除其中并行的工具执行跨度；轮内 step 间隙单列为未分类延迟，不计入纯工作；reasoning 段作为模型推理内部的思考下钻单列。permission 表为 ephemeral 且本地 0 行，等待人审阅记未知；Token 为助手消息逐请求用量的轮次合计（实测非累计快照）；SQL 时间列因重导入整体失真已弃用，仅读 JSON 载荷时间字段。",
   },
   {
     agent: "Pi",

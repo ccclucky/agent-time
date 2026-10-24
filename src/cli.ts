@@ -28,7 +28,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude|pi|antigravity|dsh FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，dsh 支持 .jsonl 与 .jsonl.zstd，claude 与 pi 支持 .jsonl，antigravity 支持 transcript.jsonl）\n默认启动本地网页；在配置页启用接入后再同步。",
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent codex|claude|pi|antigravity|dsh|opencode FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，dsh 支持 .jsonl 与 .jsonl.zstd，claude 与 pi 支持 .jsonl，antigravity 支持 transcript.jsonl，opencode 支持会话数据库 .db）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
@@ -47,7 +47,7 @@ async function main() {
     (!isAdapterName(values.agent ?? "") || positionals.length !== 2)
   )
     throw new ValidationError(
-      "使用 import --agent codex|claude|pi|antigravity|dsh FILE_OR_DIRECTORY",
+      "使用 import --agent codex|claude|pi|antigravity|dsh|opencode FILE_OR_DIRECTORY",
     );
   if (command !== "import" && positionals.length > 1)
     throw new ValidationError("参数过多；使用 --help 查看用法");
@@ -103,7 +103,7 @@ async function main() {
     else walk(selected);
     if (!paths.length)
       throw new ValidationError(
-        "指定目录没有 .jsonl、.jsonl.zst 或 .jsonl.zstd 文件",
+        "指定目录没有 .jsonl、.jsonl.zst、.jsonl.zstd 或 .db 会话文件",
       );
     let good = 0,
       failed = 0,
