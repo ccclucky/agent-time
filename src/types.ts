@@ -1,7 +1,6 @@
 /** Adapter ids with an implemented read-only importer — the single list both
  * the CLI/directory surfaces and Store.importFile dispatch on. */
-export const ADAPTERS = ["codex", "claude", "pi", "antigravity", "dsh", "omp"] as const;
-export type AdapterName = (typeof ADAPTERS)[number];
+export const ADAPTERS = ["codex", "claude", "pi", "antigravity", "dsh", "opencode", "omp"] as const;export type AdapterName = (typeof ADAPTERS)[number];
 export const isAdapterName = (v: string): v is AdapterName =>
   (ADAPTERS as readonly string[]).includes(v);
 
@@ -14,7 +13,12 @@ export type Kind =
   | "review_wait_start"
   | "review_wait_end"
   | "tool_use"
-  | "tool_result";
+  | "tool_result"
+  // OpenCode reasoning part spans (at_ms/end_ms = part time.{start,end}).
+  // Timing filters only consume the kinds they know, so the new kind is
+  // invisible to Claude/Codex/Pi calculators; the OpenCode calculator turns
+  // it into breakdown.thinking_breakdown (a sub-drill of the model span).
+  | "thinking";
 
 export type Status =
   | "completed"

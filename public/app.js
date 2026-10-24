@@ -213,6 +213,13 @@ function agentMark(agent) {
       cls: "omp",
       label: "Oh-My-Pi",
     },
+    // OpenCode 无稳定单色官方标；用终端尖括号（代码会话语义）代替，勿自绘复杂 logo。
+    OpenCode: {
+      glyph:
+        '<path d="M6 5L3 8l3 3M10 5l3 3-3 3" stroke="#FAF9F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+      cls: "opencode",
+      label: "OpenCode",
+    },
   };
   const m = marks[agent];
   if (!m) return "";
@@ -319,7 +326,7 @@ function render() {
 }
 
 function noData() {
-  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 或 Oh-My-Pi 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
+  return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness、OpenCode 或 Oh-My-Pi 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
 
 function stats() {
@@ -1798,7 +1805,7 @@ function openDrawer(turn, session) {
     ? `
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">模型与思考等级分项</span>
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">模型与思考分项</span>
         <span style="font-size:var(--text-xs); color:var(--fg-muted);">仅统计已落盘的事件耗时</span>
       </div>
       <div style="border:1px solid var(--line); border-radius:8px; overflow:hidden;">
@@ -1807,8 +1814,8 @@ function openDrawer(turn, session) {
           ${modelBreakdown.map((m) => breakdownRow(m.model, m.duration_ms)).join("")}
         ` : ""}
         ${thinkingBreakdown.length ? `
-          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid var(--line);">思考等级耗时分布</div>
-          ${thinkingBreakdown.map((t) => breakdownRow(`思考等级 ${t.level}`, t.duration_ms)).join("")}
+          <div style="padding:7px 12px; background:var(--card-muted); font-size:var(--text-xs); font-weight:600; color:var(--fg-title); border-top:${modelBreakdown.length ? "1" : "0"}px solid var(--line);">思考耗时分布</div>
+          ${thinkingBreakdown.map((t) => breakdownRow(`思考 · ${t.level}`, t.duration_ms)).join("")}
         ` : ""}
       </div>
     </div>
@@ -2166,7 +2173,7 @@ function compare() {
   return `
     <div class="demo">
       <strong>口径提示</strong>
-      <span>当前接入 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 与 Oh-My-Pi，按模型上下文分组，耗时更短不等于质量更优。</span>
+      <span>当前接入 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness、OpenCode 与 Oh-My-Pi，按模型上下文分组，耗时更短不等于质量更优。</span>
     </div>
     <section class="panel">
       <div class="panelhead"><h2>按模型上下文汇总</h2></div>

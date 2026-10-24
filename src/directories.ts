@@ -28,9 +28,9 @@ export const NAMES: Record<Agent, string> = {
 // agent: Codex accepts .jsonl and .jsonl.zst, DSH .jsonl and .jsonl.zstd
 // (the two compressed suffixes are distinct and each is checked explicitly),
 // Antigravity only the canonical transcript.jsonl (transcript_full.jsonl is a
-// mirror and would double-count), every other adapter only .jsonl. Shared by
-// the CLI import walk, directory discovery, and Store.importFile so the three
-// can never drift apart.
+// mirror and would double-count), OpenCode the session database (.db), every
+// other adapter only .jsonl. Shared by the CLI import walk, directory
+// discovery, and Store.importFile so the three can never drift apart.
 export function isSessionFile(agent: string, file: string): boolean {
   if (agent === "antigravity")
     // Canonical name only: transcript_full.jsonl is a mirror and would
@@ -47,7 +47,8 @@ export function isSessionFile(agent: string, file: string): boolean {
   return (
     file.endsWith(".jsonl") ||
     (agent === "codex" && file.endsWith(".jsonl.zst")) ||
-    (agent === "dsh" && file.endsWith(".jsonl.zstd"))
+    (agent === "dsh" && file.endsWith(".jsonl.zstd")) ||
+    (agent === "opencode" && file.endsWith(".db"))
   );
 }
 export function resolvePath(raw: unknown, home: string): string {
@@ -177,6 +178,34 @@ export class Directories {
       }
       const root = item.resolved_path!;
       let count = 0;
+      // Shared registration shape for both walk styles below: resolve the
+      // real path, refuse records that escape the data root via links,
+      // dedupe through the maps, and enforce the global file cap. Keeps the
+      // OpenCode root-level scan and the recursive walk from drifting.
+      const register = (p: string) => {
+        const real = realpathSync(p),
+          rel = path.relative(root, real);
+        if (
+          rel === ".." ||
+          rel.startsWith(".." + path.sep) ||
+          path.isAbsolute(rel)
+        ) {
+          notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
+          return;
+        }
+        if (
+          item.agent === "claude" &&
+          path.basename(real).startsWith("agent-")
+        )
+          return;
+        files.set(real, root);
+        agents.set(real, item.agent as AdapterName);
+        count++;
+        if (files.size > 5000)
+          throw new ValidationError(
+            "配置目录内超过 5000 个会话文件，请缩小数据目录范围",
+          );
+      };
       const walk = (dir: string) => {
         for (const entry of readdirSync(dir, { withFileTypes: true }).sort(
           (a, b) => a.name.localeCompare(b.name),
@@ -186,32 +215,22 @@ export class Directories {
           if (entry.isDirectory()) {
             if (item.agent !== "claude" || entry.name !== "subagents") walk(p);
           } else if (entry.isFile() && isSessionFile(item.agent, p)) {
-            const real = realpathSync(p),
-              rel = path.relative(root, real);
-            if (
-              rel === ".." ||
-              rel.startsWith(".." + path.sep) ||
-              path.isAbsolute(rel)
-            ) {
-              notices.push(`${item.name} 有记录链接超出数据目录，未读取`);
-              continue;
-            }
-            if (
-              item.agent === "claude" &&
-              path.basename(real).startsWith("agent-")
-            )
-              continue;
-            files.set(real, root);
-            agents.set(real, item.agent as AdapterName);
-            count++;
-            if (files.size > 5000)
-              throw new ValidationError(
-                "配置目录内超过 5000 个会话文件，请缩小数据目录范围",
-              );
+            register(p);
           }
         }
       };
       try {
+        if (item.agent === "opencode") {
+          // OpenCode persists every session in ONE SQLite database at the
+          // data root (opencode.db) — there is no sessions subdirectory to
+          // walk, and RULES.opencode.logs is empty on purpose. Scan the root
+          // level only: channel/OPENCODE_DB variants may rename the file but
+          // keep it at the root (see docs/directories.zh-CN.md).
+          for (const entry of readdirSync(root, { withFileTypes: true })) {
+            const p = path.join(root, entry.name);
+            if (entry.isFile() && isSessionFile(item.agent, p)) register(p);
+          }
+        }
         for (const sub of RULES[item.agent].logs) {
           const dir = path.join(root, sub);
           if (!existsSync(dir)) continue;
@@ -224,7 +243,11 @@ export class Directories {
           if (statSync(dir).isDirectory()) walk(dir);
         }
         if (!count)
-          notices.push(`${item.name} 目录存在，但没有找到可导入的会话 JSONL`);
+          notices.push(
+            item.agent === "opencode"
+              ? `${item.name} 目录存在，但没有找到可导入的会话数据库（opencode.db）`
+              : `${item.name} 目录存在，但没有找到可导入的会话 JSONL`,
+          );
       } catch (e) {
         if (e instanceof ValidationError) throw e;
         notices.push(`${item.name} 部分会话目录无法读取；已有记录保留旧快照`);

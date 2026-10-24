@@ -447,7 +447,8 @@ test("missing directories are saved without creation and unsupported adapters ca
   dirs.save("codex", p, true);
   assert(!existsSync(p));
   assert.equal(dirs.get("codex").status, "missing");
-  assert.throws(() => dirs.save("opencode", null, true));
+  // OpenCode, Oh-My-Pi and Antigravity are implemented adapters now.
+  assert.throws(() => dirs.save("nonexistent" as never, null, true));
   for (const raw of ["", home, "/", "relative", "~someone/x", 123])
     assert.throws(() => dirs.save("codex", raw, false));
 });

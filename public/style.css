@@ -1106,6 +1106,10 @@ h1#title {
   color: #F97316; /* Oh-My-Pi 官方徽标连接器橙 */
 }
 
+.agent-mark-opencode {
+  color: #FFB224; /* OpenCode 品牌橙黄 */
+}
+
 /* TOP 3 榜副行：徽标 + 项目/ID 单行省略 */
 .rank-subline {
   display: flex;
