@@ -12,6 +12,7 @@
 | Claude Code | `~/.claude` | `projects/<编码后的项目路径>/*.jsonl` | Anthropic 官方 Agent SDK 的 `_get_projects_dir`，不是仅参考配置文件位置 |
 | Oh-My-Pi | `~/.omp/agent` | `sessions` 子目录；命名 profile 和迁移后的 XDG 目录另行解析 | Oh-My-Pi `DirResolver`、`getSessionsDir` |
 | Pi | `~/.pi/agent` | `sessions/<编码后的工作目录>/*.jsonl` | Pi `getAgentDir`、`getDefaultSessionDirPath` |
+| DeepSeek Harness | `~/.dsh` | `sessions/<编码后的工作目录>/<sessionId>/session[.v4].jsonl.zstd`，多帧 zstd 压缩的 JSONL 事件流 | 无公开上游规则文档；按本机真实会话样本（`~/.dsh/sessions`）核实 |
 | OpenCode | `~/.local/share/opencode` | 该数据目录内的 SQLite 会话数据库；稳定渠道通常为 `opencode.db` | OpenCode `global-roots.ts` 和 `database-path.ts` |
 | Antigravity | 留空 | 未取得已验证的 IDE 会话位置规则 | 不借用 CLI 或其他产品的配置位置 |
 

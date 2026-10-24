@@ -16,6 +16,7 @@ import {
 } from "./types.js";
 import type { Store } from "./store.js";
 export const NAMES: Record<Agent, string> = {
+  dsh: "DeepSeek Harness",
   codex: "Codex",
   claude: "Claude Code",
   omp: "Oh-My-Pi",
@@ -24,13 +25,17 @@ export const NAMES: Record<Agent, string> = {
   antigravity: "Antigravity",
 };
 // Single source of truth for which filenames count as session files per
-// agent: Codex accepts .jsonl and .jsonl.zst, every other adapter only .jsonl.
+// agent: Codex accepts .jsonl and .jsonl.zst, DSH .jsonl and .jsonl.zstd,
+// every other adapter only .jsonl. The two compressed suffixes are distinct
+// (".zst" does not match ".zstd") and each is checked explicitly — never rely
+// on the endsWith coincidence the shared ".jsonl" prefix would allow.
 // Shared by the CLI import walk, directory discovery, and Store.importFile so
 // the three can never drift apart.
 export function isSessionFile(agent: string, file: string): boolean {
   return (
     file.endsWith(".jsonl") ||
-    (agent === "codex" && file.endsWith(".jsonl.zst"))
+    (agent === "codex" && file.endsWith(".jsonl.zst")) ||
+    (agent === "dsh" && file.endsWith(".jsonl.zstd"))
   );
 }
 export function resolvePath(raw: unknown, home: string): string {
