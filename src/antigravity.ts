@@ -56,6 +56,7 @@ interface AgToolCall {
 
 interface AgRecord {
   type: string;
+  source: string;
   step: number;
   at: number;
   toolCalls: AgToolCall[];
@@ -73,6 +74,92 @@ const TASK_SPAWNED = /task id:\s*("?[\w.:/-]+"?)/;
 // (The GENERIC "Task: <id> Status: DONE" rows are poll-tool results and pair
 // through the normal FIFO path; the SYSTEM row is the authoritative receipt.)
 const TASK_FINISHED_SYSTEM = /Task id "?([\w.:/-]+)"? finished/i;
+// Known record sources (verified corpus); anything else gets an issue note.
+const KNOWN_SOURCES = new Set(["USER_EXPLICIT", "MODEL", "SYSTEM"]);
+
+// A tool call awaiting its result, as tracked by the shared pairer below.
+interface PairedTool {
+  id: string;
+  name: string;
+  at: number;
+  turnId: string;
+  backgroundTaskId: string | null;
+}
+
+// Shared FIFO tool-result pairing for BOTH the event stream and the
+// transcript extractor, so durations can never drift between the two.
+// Mechanics only: FIFO match within the issuing turn, background-task
+// deferral on spawn receipts, completion via SYSTEM receipts. A duplicate
+// spawn receipt stays timing-neutral instead of truncating the deferred
+// tool at spawn time. The corpus carries no call ids, so parallel results
+// pair FIFO — per-tool durations may swap on reordering, per-turn totals
+// remain exact (documented in ADR 0003).
+class ToolPairer {
+  private open: PairedTool[] = [];
+  private spawned = new Map<string, PairedTool>();
+
+  issue(
+    turnId: string,
+    at: number,
+    names: string[],
+    idOf: (index: number) => string,
+  ): PairedTool[] {
+    const tools = names.map((name, i) => {
+      const tool: PairedTool = {
+        id: idOf(i),
+        name,
+        at,
+        turnId,
+        backgroundTaskId: null,
+      };
+      this.open.push(tool);
+      return tool;
+    });
+    return tools;
+  }
+
+  /** Result record (GENERIC). Returns the tool this record closes, or null
+   *  when the record is timing-neutral (no pending tool, poll row, or a
+   *  duplicate spawn receipt). */
+  result(turnId: string, at: number, content: string | null): PairedTool | null {
+    const spawned = TASK_SPAWNED.exec(content ?? "");
+    const idx = this.open.findIndex(
+      (t) => t.turnId === turnId && !t.backgroundTaskId,
+    );
+    const tool = idx !== -1 ? this.open[idx] : null;
+    if (tool && spawned) {
+      const taskId = spawned[1]?.replaceAll('"', "") ?? null;
+      if (taskId && !this.spawned.has(taskId)) {
+        tool.backgroundTaskId = taskId;
+        this.spawned.set(taskId, tool);
+        return null; // deferred: the completion receipt will close it
+      }
+      // Duplicate spawn receipt (task id already tracked): timing-neutral,
+      // never an early close of the deferred tool.
+      return null;
+    }
+    if (tool) {
+      this.open.splice(idx, 1);
+      return tool;
+    }
+    return null;
+  }
+
+  /** SYSTEM_MESSAGE completion receipt. Returns the deferred tool it closes. */
+  receipt(at: number, content: string | null): PairedTool | null {
+    const finished = TASK_FINISHED_SYSTEM.exec(content ?? "");
+    const match = finished ? this.spawned.get(finished[1]!) : null;
+    if (!finished || !match) return null;
+    this.spawned.delete(finished[1]!);
+    const idx = this.open.indexOf(match);
+    if (idx !== -1) this.open.splice(idx, 1);
+    return match;
+  }
+
+  unfinished(): number {
+    return this.spawned.size;
+  }
+}
 
 function readAgRecords(path: string): { records: AgRecord[]; badLines: number } {
   const records: AgRecord[] = [];
@@ -93,6 +180,7 @@ function readAgRecords(path: string): { records: AgRecord[]; badLines: number } 
         : [];
       records.push({
         type: typeof r.type === "string" ? r.type : "",
+        source: typeof r.source === "string" ? r.source : "",
         step: typeof r.step_index === "number" ? r.step_index : records.length,
         at: timestamp(r.created_at),
         toolCalls,
@@ -129,6 +217,10 @@ export function parseAntigravity(path: string) {
   const { records, badLines } = readAgRecords(path);
   const issues = new Set<string>();
   if (badLines) issues.add("存在无法解析的记录；只保留可验证的元数据，请检查源文件");
+  if (records.some((r) => r.source && !KNOWN_SOURCES.has(r.source)))
+    issues.add(
+      "存在未知 source 的记录；已按记录类型解析，如上游更新词汇表请复核口径",
+    );
 
   const events: Event[] = [];
   const add = (
@@ -163,26 +255,11 @@ export function parseAntigravity(path: string) {
   const isModelActivity = (r: AgRecord) =>
     r.type === "PLANNER_RESPONSE" || r.type === "GENERIC";
 
-  interface OpenTool {
-    id: string;
-    name: string;
-    at: number;
-    turnId: string;
-    // ask_question blocks on the user decision: the wait is measured
-    // separately and the calculator nets it out of the tool duration.
-    ask: boolean;
-    // invoke_subagent / manage_subagents spawns: events carry agent_id so
-    // groupSubagents exposes the drill-down topology.
-    agentId: string | null;
-    // Deferred close: once spawned as a background task, the result is the
-    // later record reporting the task finished — never the spawn receipt.
-    backgroundTaskId: string | null;
-  }
   // Tool state lives across turns: a background task spawned in turn 1 can
   // finish while turn 2 is already open; its tool_result then lands on the
-  // spawning turn where the execution actually belongs.
-  const openTools: OpenTool[] = [];
-  const taskSpawns = new Map<string, OpenTool>();
+  // spawning turn where the execution actually belongs (the pairer filters
+  // immediate results by the issuing turn).
+  const pairer = new ToolPairer();
 
   let current: string | null = null,
     turnRecords: AgRecord[] = [],
@@ -271,65 +348,45 @@ export function parseAntigravity(path: string) {
         agg.output += r.tokens.output;
         turnTokens.set(current, agg);
       }
-      r.toolCalls.forEach((tc, idx) => {
-        const id = `step-${r.step}-${idx}`;
-        const ask = tc.name === "ask_question";
-        openTools.push({
-          id,
-          name: tc.name,
-          at: r.at,
-          turnId: current!,
-          ask,
-          // Filled when the spawn receipt names the background task.
-          agentId: null,
-          backgroundTaskId: null,
+      const issued = pairer.issue(
+        current,
+        r.at,
+        r.toolCalls.map((tc) => tc.name),
+        (i) => `step-${r.step}-${i}`,
+      );
+      for (const tool of issued) {
+        add(current, "tool_use", r.at, {
+          tool_id: tool.id,
+          tool_name: tool.name,
         });
-        add(current!, "tool_use", r.at, {
-          tool_id: id,
-          tool_name: tc.name,
-        });
-        if (ask) add(current!, "review_wait_start", r.at);
-      });
+        if (tool.name === "ask_question") add(current, "review_wait_start", r.at);
+      }
       continue;
     }
 
     if (r.type === "GENERIC") {
-      const spawned = TASK_SPAWNED.exec(r.content ?? "");
-      // FIFO over tools of the current turn still awaiting an immediate
-      // result; background-deferred tools are taken off this path.
-      const toolIdx = openTools.findIndex(
-        (t) => t.turnId === current && !t.backgroundTaskId,
-      );
-      const tool = toolIdx !== -1 ? openTools[toolIdx] : null;
-      if (tool && spawned) {
-        const taskId = spawned[1]?.replaceAll('"', "") ?? null;
-        if (taskId && !taskSpawns.has(taskId)) {
-          tool.backgroundTaskId = taskId;
-          taskSpawns.set(taskId, tool);
-          continue;
-        }
-      }
+      const tool = pairer.result(current, r.at, r.content);
       if (tool) {
-        openTools.splice(toolIdx, 1);
         // invoke_subagent spawns a child conversation: its result names the
         // child id. Tag the tool pair with agent_id = child id so
         // groupSubagents exposes the derivation topology; the child session
         // carries its own measured work (parent span covers the spawn only).
+        let agentId: string | null = null;
         if (tool.name === "invoke_subagent" || tool.name === "manage_subagents") {
           const child = /conversationId"?\s*[:=]\s*"?([\w.:/-]+)/.exec(r.content ?? "");
           if (child) {
-            tool.agentId = child[1];
+            agentId = child[1];
             for (const e of events)
-              if (e.tool_id === tool.id && e.kind === "tool_use") e.agent_id = child[1];
+              if (e.tool_id === tool.id && e.kind === "tool_use") e.agent_id = agentId;
           }
         }
         add(tool.turnId, "tool_result", r.at, {
           end_ms: r.at,
           tool_id: tool.id,
           tool_name: tool.name,
-          agent_id: tool.agentId,
+          agent_id: agentId,
         });
-        if (tool.ask) add(tool.turnId, "review_wait_end", r.at);
+        if (tool.name === "ask_question") add(tool.turnId, "review_wait_end", r.at);
       }
       // GENERIC without a pending tool (status polls, stray results) carries
       // no pairable timing evidence and stays timing-neutral.
@@ -339,26 +396,20 @@ export function parseAntigravity(path: string) {
     if (r.type === "SYSTEM_MESSAGE") {
       // "Task id "<conv>/task-22" finished with result:" — completion receipt
       // for a deferred background tool (subagent or backgrounded command).
-      const finished = TASK_FINISHED_SYSTEM.exec(r.content ?? "");
-      const match = finished ? taskSpawns.get(finished[1]!) : null;
-      if (finished && match) {
-        const idx = openTools.indexOf(match);
-        if (idx !== -1) openTools.splice(idx, 1);
-        taskSpawns.delete(finished[1]);
+      const match = pairer.receipt(r.at, r.content);
+      if (match)
         add(match.turnId, "tool_result", r.at, {
           end_ms: r.at,
           tool_id: match.id,
           tool_name: match.name,
-          agent_id: match.agentId,
         });
-      }
       continue;
     }
   }
   endTurn(true);
   // A still-open background task leaves its tool_use unpaired: the calculator
   // scores it zero rather than inventing a duration.
-  if (taskSpawns.size)
+  if (pairer.unfinished())
     issues.add("部分后台任务在记录结束前尚未完成；其耗时未计入（不编造时长）");
 
   const tokens = [...turnTokens.entries()].map(
@@ -475,29 +526,29 @@ const detailFromArgs = (args: Record<string, unknown>): string | null => {
 
 interface OpenTranscriptTool {
   call: TranscriptToolCall;
-  at: number;
-  backgroundTaskId: string | null;
+  tool: PairedTool;
 }
 
 /** On-demand transcript extraction for Antigravity sessions. Turn ids mirror
  *  parseAntigravity (antigravity-turn-<USER_INPUT step_index>) so the drawer
- *  can join against turn.id. Tool durations pair call → result, deferring
- *  background tasks to their completion receipt, matching the event stream. */
+ *  can join against turn.id. Tool durations run through the same shared
+ *  ToolPairer as the event stream, deferring background tasks to their
+ *  completion receipt, so the drawer can never disagree with the stats. */
 export function extractAntigravityTranscript(path: string): TranscriptTurn[] {
   const convMatch = CONV_PATH.exec(path);
   if (!convMatch || !validId(convMatch[1])) return [];
   const { records } = readAgRecords(path);
   const turns = new Map<string, TranscriptTurn>();
-  let current: TranscriptTurn | null = null;
-  // FIFO queue of awaiting tools; background-deferred ones stay queued until
-  // their completion receipt arrives (or end of file, keeping duration null).
-  const openTools: OpenTranscriptTool[] = [];
-  const taskSpawns = new Map<string, OpenTranscriptTool>();
+  let current: TranscriptTurn | null = null,
+    currentTurnId: string | null = null;
+  const pairer = new ToolPairer();
+  const callByToolId = new Map<string, OpenTranscriptTool>();
 
-  const closeTool = (tool: OpenTranscriptTool, at: number) => {
-    const idx = openTools.indexOf(tool);
-    if (idx !== -1) openTools.splice(idx, 1);
-    tool.call.duration_ms = Math.max(0, at - tool.at);
+  const closeTool = (tool: PairedTool, at: number) => {
+    const entry = callByToolId.get(tool.id);
+    if (!entry) return;
+    callByToolId.delete(tool.id);
+    entry.call.duration_ms = Math.max(0, at - tool.at);
   };
 
   for (const r of records) {
@@ -510,48 +561,42 @@ export function extractAntigravityTranscript(path: string): TranscriptTurn[] {
         tool_calls: [],
       };
       turns.set(current.turn_id, current);
+      currentTurnId = current.turn_id;
       continue;
     }
-    if (!current) continue;
+    if (!current || !currentTurnId) continue;
     if (r.type === "PLANNER_RESPONSE") {
       if (r.thinking)
         current.thinking = current.thinking
           ? truncateCodePoints(current.thinking + "\n" + r.thinking)
           : truncateCodePoints(r.thinking);
-      r.toolCalls.forEach((tc) => {
+      const issued = pairer.issue(
+        currentTurnId,
+        r.at,
+        r.toolCalls.map((tc) => tc.name),
+        (i) => `step-${r.step}-${i}`,
+      );
+      r.toolCalls.forEach((tc, i) => {
         const call: TranscriptToolCall = {
           name: tc.name,
           duration_ms: null,
           detail: detailFromArgs(tc.args ?? {}),
         };
         current!.tool_calls.push(call);
-        openTools.push({ call, at: r.at, backgroundTaskId: null });
+        callByToolId.set(issued[i].id, { call, tool: issued[i] });
       });
       continue;
     }
     if (r.type === "GENERIC") {
-      const spawned = TASK_SPAWNED.exec(r.content ?? "");
-      const toolIdx = openTools.findIndex((t) => !t.backgroundTaskId);
-      const tool = toolIdx !== -1 ? openTools[toolIdx] : null;
-      if (tool && spawned) {
-        const taskId = spawned[1]?.replaceAll('"', "") ?? null;
-        if (taskId && !taskSpawns.has(taskId)) {
-          tool.backgroundTaskId = taskId;
-          taskSpawns.set(taskId, tool);
-          continue;
-        }
-      }
+      const tool = pairer.result(currentTurnId, r.at, r.content);
       if (tool) closeTool(tool, r.at);
       continue;
     }
     if (r.type === "SYSTEM_MESSAGE") {
-      const finished = TASK_FINISHED_SYSTEM.exec(r.content ?? "");
-      const spawn = finished ? taskSpawns.get(finished[1]!) : null;
-      if (finished && spawn) {
-        taskSpawns.delete(finished[1]!);
-        closeTool(spawn, r.at);
-      }
+      const tool = pairer.receipt(r.at, r.content);
+      if (tool) closeTool(tool, r.at);
     }
   }
+  // Unresolved tools keep duration_ms null (honest, no invention).
   return [...turns.values()];
 }

@@ -30,7 +30,9 @@ export const NAMES: Record<Agent, string> = {
 // discovery, and Store.importFile so the three can never drift apart.
 export function isSessionFile(agent: string, file: string): boolean {
   if (agent === "antigravity")
-    return file.endsWith(".jsonl") && path.basename(file) === "transcript.jsonl";
+    // Canonical name only: transcript_full.jsonl is a mirror and would
+    // double-count; the basename check implies .jsonl.
+    return path.basename(file) === "transcript.jsonl";
   return (
     file.endsWith(".jsonl") ||
     (agent === "codex" && file.endsWith(".jsonl.zst"))

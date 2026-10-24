@@ -277,3 +277,49 @@ test("Store: antigravity import enriches title/project and computes three-state 
   const { SOURCES } = await import("../src/adapters.js");
   assert.ok(SOURCES.find((x) => x.agent === "Antigravity")?.supported);
 });
+
+test("parseAntigravity: duplicate background spawn receipt does not close the tool early", () => {
+  const dir = setup();
+  const p = agFile(dir, "conv-9", [
+    { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: at(0) },
+    { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(0, 10), tool_calls: [{ name: "run_command", args: {} }] },
+    { step_index: 2, source: "MODEL", type: "GENERIC", status: "DONE", created_at: at(0, 20), content: "Tool is running as a background task with task id: conv-9/task-1 x" },
+    // 重复回执：保持计时中立，不得把延迟工具截断到 spawn 时刻
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "DONE", created_at: at(0, 30), content: "Tool is running as a background task with task id: conv-9/task-1 x" },
+    { step_index: 4, source: "SYSTEM", type: "SYSTEM_MESSAGE", status: "DONE", created_at: at(2), content: 'Task id "conv-9/task-1" finished with result:\nok' },
+    { step_index: 5, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(2, 10) },
+  ]);
+  const { events } = parseAntigravity(p);
+  const results = events.filter((e) => e.kind === "tool_result");
+  assert.equal(results.length, 1);
+  assert.equal(results[0].at_ms, Date.parse(at(2)));
+});
+
+test("event stream and transcript extractor agree on tool durations", () => {
+  const dir = setup();
+  const p = agFile(dir, "conv-10", [
+    { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: at(0), content: "q" },
+    { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(0, 10), tool_calls: [{ name: "run_command", args: { CommandLine: '"bg"' } }] },
+    { step_index: 2, source: "MODEL", type: "GENERIC", status: "DONE", created_at: at(0, 20), content: "Tool is running as a background task with task id: conv-10/task-1 x" },
+    { step_index: 3, source: "SYSTEM", type: "SYSTEM_MESSAGE", status: "DONE", created_at: at(1, 40), content: 'Task id "conv-10/task-1" finished with result:\nok' },
+    { step_index: 4, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(1, 50), tool_calls: [{ name: "read_file", args: { Path: '"a.ts"' } }] },
+    { step_index: 5, source: "MODEL", type: "GENERIC", status: "DONE", created_at: at(2), content: "content" },
+    { step_index: 6, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(2, 10) },
+  ]);
+  const { events } = parseAntigravity(p);
+  const useByName = new Map(
+    events.filter((e) => e.kind === "tool_use").map((e) => [e.tool_name!, e]),
+  );
+  const resultByName = new Map(
+    events.filter((e) => e.kind === "tool_result").map((e) => [e.tool_name!, e]),
+  );
+  const turns = extractAntigravityTranscript(p);
+  const calls = turns[0].tool_calls;
+  for (const c of calls) {
+    const use = useByName.get(c.name)!;
+    const result = resultByName.get(c.name)!;
+    assert.equal(c.duration_ms, result.at_ms - use.at_ms, `${c.name} duration must match the event stream`);
+  }
+  assert.equal(calls[0].duration_ms, 90_000); // background: deferred to receipt
+  assert.equal(calls[1].duration_ms, 10_000); // foreground: FIFO immediate
+});
