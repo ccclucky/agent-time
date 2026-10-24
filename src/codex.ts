@@ -16,8 +16,15 @@ import {
   type Event,
   type Kind,
   type TokenUsage,
+  type TranscriptTurn,
 } from "./types.js";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
+// Per-turn transcript text caps (code points) so transcript responses stay bounded.
+export const TRANSCRIPT_TEXT_LIMIT = 8000;
+// Unicode-safe truncation by code points, never splitting a surrogate pair.
+export function truncateCodePoints(s: string, n = TRANSCRIPT_TEXT_LIMIT): string {
+  return Array.from(s).slice(0, n).join("").trim();
+}
 // Match the previous Python JSON serialization so existing snapshots deduplicate.
 export function legacyJSON(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(legacyJSON).join(", ") + "]";
@@ -131,6 +138,29 @@ class LineSplitter {
     this.pendingBytes = 0;
     return tail;
   }
+}
+// Transcript extraction reads one file synchronously per drawer fetch. Unlike
+// the import path it must branch on .zst here too — iterating lines() over a
+// compressed file yields binary garbage that fails JSON parsing line-by-line
+// and silently produces zero turns. Whole-payload decompression is bounded by
+// the same 512 MiB compressed cap the importer enforces.
+const TRANSCRIPT_SOURCE_CAP = 512 * 1024 * 1024;
+export function* transcriptLines(path: string): Generator<Buffer> {
+  if (!path.endsWith(".zst")) {
+    yield* lines(path);
+    return;
+  }
+  if (typeof zlib.zstdDecompressSync !== "function")
+    throw new ValidationError(
+      "此 Node 版本不支持 zstd；请升级到 Node 22.15+ 后按需读取 .jsonl.zst 会话",
+    );
+  const compressed = readFileSync(path);
+  if (compressed.length > TRANSCRIPT_SOURCE_CAP)
+    throw new ValidationError("会话文件超过 512 MiB；未按需读取");
+  const splitter = new LineSplitter();
+  yield* splitter.push(zlib.zstdDecompressSync(compressed));
+  const tail = splitter.flush();
+  if (tail) yield tail;
 }
 export function* lines(path: string): Generator<Buffer> {
   const fd = openSync(path, "r"),
@@ -507,4 +537,189 @@ export async function parse(path: string): Promise<ParseResult> {
     issues: [...issues].sort(),
     external_import_only: externalSeen && unique.size === 0,
   };
+}
+
+/** On-demand transcript extraction for Codex sessions (never persisted).
+ *  The user prompt is carried in two places across real rollouts: the classic
+ *  event_msg/user_message rows and response_item/message (role=user) rows —
+ *  many files have ONLY the latter. Environment/instruction wrapper messages
+ *  (<user_instructions>, <ENVIRONMENT_CONTEXT>, …) are excluded so the real
+ *  prompt surfaces; a turn with no real prompt stays honestly null.
+ *  Codex sources record no decryptable thinking text (OpenAI ZDR encryption)
+ *  and no per-turn tool-call text; the caller reports those honestly via
+ *  missing_fields instead of fabricating them.
+ */
+// Markers identifying host/tool-injected wrapper messages rather than real
+// user prompts. Matched anywhere in the text (wrappers embed AGENTS.md bodies,
+// environment snapshots, and permission preambles around the marker tags).
+const PROMPT_WRAPPER_MARKERS = [
+  "<user_instructions>",
+  "<app_context>",
+  "<app-context>",
+  "<ENVIRONMENT_CONTEXT>",
+  "<INSTRUCTIONS>",
+  "# AGENTS.md instructions",
+  "<turn_context>",
+  "<permissions",
+];
+const isPromptWrapper = (text: string) =>
+  PROMPT_WRAPPER_MARKERS.some((m) => text.includes(m));
+
+// Detail-line cap for tool calls (~120 code points, single line).
+const TOOL_DETAIL_LIMIT = 120;
+// Most-informative-first argument keys: the first string field that looks like
+// THE operation (the command / path / query) wins over metadata like timeout.
+const TOOL_DETAIL_KEYS = ["cmd", "command", "args", "path", "query"];
+const oneLine = (s: string) =>
+  truncateCodePoints(s.replace(/\s+/g, " ").trim(), TOOL_DETAIL_LIMIT);
+/** Extract a one-line operation detail from a tool-call payload: a JSON
+ *  arguments string (Codex function_call), an input string (Codex
+ *  custom_tool_call), or an already-parsed input object (Claude tool_use).
+ *  Returns null when nothing informative exists. */
+export function toolCallDetail(raw: unknown): string | null {
+  let value = raw;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return oneLine(trimmed); // plain string input (e.g. apply_patch bodies)
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (typeof value === "number" || typeof value === "boolean") return null;
+    return null;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const pick = (pair: [string, unknown] | undefined): string | null => {
+    if (!pair) return null;
+    const v = pair[1];
+    if (typeof v === "string" && v.trim()) return oneLine(v);
+    if (Array.isArray(v)) {
+      const joined = v
+        .filter((x) => typeof x === "string" && x.trim())
+        .join(" ");
+      return joined ? oneLine(joined) : null;
+    }
+    return null;
+  };
+  for (const key of TOOL_DETAIL_KEYS) {
+    const hit = pick(entries.find(([k]) => k === key));
+    if (hit) return hit;
+  }
+  for (const pair of entries) {
+    const hit = pick(pair);
+    if (hit) return hit;
+  }
+  return null;
+}
+// Join a response_item message content[] into one prompt string.
+const messageText = (content: unknown): string | null => {
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .map((b) =>
+      b && typeof b === "object" && !Array.isArray(b)
+        ? (b as Record<string, unknown>).text
+        : null,
+    )
+    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+  return parts.length ? parts.join("\n") : null;
+};
+
+export function extractCodexTranscript(path: string): TranscriptTurn[] {
+  const turns = new Map<string, TranscriptTurn>();
+  let lastTurnId: string | null = null;
+  const get = (tid: string | null): TranscriptTurn | null => {
+    if (!tid || !ID.test(tid)) return null;
+    let t = turns.get(tid);
+    if (!t) {
+      t = { turn_id: tid, prompt: null, thinking: null, models: [], tool_calls: [] };
+      turns.set(tid, t);
+    }
+    return t;
+  };
+  const setPrompt = (t: TranscriptTurn | null, text: string | null) => {
+    if (!t || t.prompt !== null || !text || !text.trim()) return;
+    if (isPromptWrapper(text)) return;
+    t.prompt = truncateCodePoints(text);
+  };
+  for (const line of transcriptLines(path)) {
+    if (!line.toString().trim()) continue;
+    try {
+      const row = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(line),
+      );
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const p = row.payload;
+      if (!p || typeof p !== "object" || Array.isArray(p)) continue;
+      const tid =
+        typeof p.turn_id === "string" && ID.test(p.turn_id)
+          ? ((lastTurnId = p.turn_id), p.turn_id)
+          : lastTurnId;
+      if (row.type === "turn_context") {
+        const t = get(tid);
+        if (
+          t &&
+          typeof p.model === "string" &&
+          p.model.trim() &&
+          !t.models.includes(p.model)
+        )
+          t.models.push(truncateCodePoints(p.model, 120));
+        continue;
+      }
+      if (row.type === "event_msg" && p.type === "user_message") {
+        const t = get(tid);
+        if (t && t.prompt === null && typeof p.message === "string" && p.message.trim())
+          t.prompt = truncateCodePoints(p.message);
+        continue;
+      }
+      // response_item/function_call & custom_tool_call: capture the invocation
+      // (name + call_id + one-line operation detail) so the drawer can show
+      // WHAT ran, not just the raw builtin name.
+      if (
+        row.type === "response_item" &&
+        (p.type === "function_call" || p.type === "custom_tool_call")
+      ) {
+        const t = get(tid);
+        if (t) {
+          const detail =
+            p.type === "custom_tool_call"
+              ? toolCallDetail(p.input)
+              : toolCallDetail(p.arguments);
+          t.tool_calls.push({
+            name:
+              typeof p.name === "string" && p.name ? p.name : "tool",
+            duration_ms: null,
+            call_id: typeof p.call_id === "string" ? p.call_id : null,
+            detail,
+          });
+        }
+        continue;
+      }
+      // response_item/message (role=user): the prompt rows most real rollouts
+      // carry. They carry no turn_id — associate to the nearest preceding
+      // turn_context; a message arriving before any turn starts a turn keyed
+      // by its own message id.
+      if (row.type === "response_item" && p.type === "message") {
+        if (p.role !== "user") continue; // system/developer roles are wrappers by definition
+        const text = messageText(p.content);
+        if (!text || isPromptWrapper(text)) continue;
+        if (tid) setPrompt(get(tid), text);
+        else {
+          const ownId =
+            typeof p.id === "string" && ID.test(p.id) ? p.id : null;
+          if (ownId) {
+            const t = get(ownId);
+            setPrompt(t, text);
+            lastTurnId = ownId;
+          }
+        }
+        continue;
+      }
+    } catch {
+      // Unreadable line: skip it; the store reports degradation honestly.
+    }
+  }
+  return [...turns.values()];
 }

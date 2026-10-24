@@ -11,8 +11,8 @@
  * and are rejected outright.
  */
 import { posix } from "node:path";
-import { lines, timestamp, hash, legacyJSON, ID } from "./codex.js";
-import { ValidationError, type Event } from "./types.js";
+import { lines, timestamp, hash, legacyJSON, ID, truncateCodePoints } from "./codex.js";
+import { ValidationError, type Event, type TranscriptTurn } from "./types.js";
 
 const validId = (v: unknown): v is string =>
   typeof v === "string" && ID.test(v);
@@ -420,4 +420,197 @@ export function parsePi(path: string) {
     events: [...unique.values()],
     issues: [...issues].sort(),
   };
+}
+
+/** On-demand transcript extraction for Pi sessions (never persisted).
+ *  Turn ids mirror parsePi (the user message entry id), so the drawer can join
+ *  this against turn.id from the event stream. Branch topology follows the
+ *  same root-to-last-entry selection as parsePi; when ids are missing or the
+ *  tree is broken it falls back to append order; extraction stays best-effort
+ *  and only returns what the file truly holds.
+ */
+export function extractPiTranscript(path: string): TranscriptTurn[] {
+  const parentOf = new Map<string, string | null>();
+  let lastEntryId: string | null = null,
+    idlessEntries = false;
+  interface Rec {
+    id: string;
+    role: "user" | "assistant" | "toolResult";
+    text: string | null;
+    thinking: string | null;
+    model: string | null;
+    stopReason: string;
+    toolCalls: { id: string; name: string }[];
+    toolCallId: string | null;
+    toolName: string | null;
+    dur: number | null;
+  }
+  const recs: Rec[] = [];
+  for (const line of lines(path)) {
+    if (!line.toString().trim()) continue;
+    try {
+      const r = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(line),
+      );
+      if (!r || typeof r !== "object" || Array.isArray(r)) continue;
+      if (validId(r.id)) {
+        parentOf.set(r.id, typeof r.parentId === "string" ? r.parentId : null);
+        lastEntryId = r.id;
+      } else if (r.type === "message") idlessEntries = true;
+      if (r.type !== "message") continue;
+      const m = r.message;
+      if (!m || typeof m !== "object" || Array.isArray(m)) continue;
+      if (m.role === "user") {
+        recs.push({
+          id: typeof r.id === "string" ? r.id : "",
+          role: "user",
+          text:
+            Array.isArray(m.content)
+              ? m.content
+                  .filter(
+                    (b: unknown) =>
+                      b &&
+                      typeof b === "object" &&
+                      !Array.isArray(b) &&
+                      (b as { type?: string }).type === "text" &&
+                      typeof (b as { text?: unknown }).text === "string",
+                  )
+                  .map((b: unknown) => (b as { text: string }).text)
+                  .join("\n")
+                  .trim() || null
+              : typeof m.content === "string"
+                ? truncateCodePoints(m.content)
+                : null,
+          thinking: null,
+          model: null,
+          stopReason: "",
+          toolCalls: [],
+          toolCallId: null,
+          toolName: null,
+          dur: null,
+        });
+      } else if (m.role === "assistant") {
+        recs.push({
+          id: typeof r.id === "string" ? r.id : "",
+          role: "assistant",
+          text: null,
+          thinking:
+            Array.isArray(m.content)
+              ? m.content
+                  .filter(
+                    (b: unknown) =>
+                      b &&
+                      typeof b === "object" &&
+                      !Array.isArray(b) &&
+                      (b as { type?: string }).type === "thinking" &&
+                      typeof (b as { thinking?: unknown }).thinking === "string",
+                  )
+                  .map((b: unknown) => (b as { thinking: string }).thinking.trim())
+                  .filter(Boolean)
+                  .join("\n") || null
+              : null,
+          model:
+            typeof m.model === "string" && m.model.trim()
+              ? truncateCodePoints(m.model, 120)
+              : null,
+          stopReason: typeof m.stopReason === "string" ? m.stopReason : "",
+          toolCalls: Array.isArray(m.content)
+            ? m.content
+                .filter(
+                  (b: unknown) =>
+                    b &&
+                    typeof b === "object" &&
+                    !Array.isArray(b) &&
+                    (b as { type?: string }).type === "toolCall",
+                )
+                .map((b: unknown) => {
+                  const c = b as { id?: unknown; name?: unknown };
+                  return {
+                    id: typeof c.id === "string" ? c.id : "",
+                    name: typeof c.name === "string" && c.name ? c.name : "tool",
+                  };
+                })
+            : [],
+          toolCallId: null,
+          toolName: null,
+          dur: durationMs(m.durationMs),
+        });
+      } else if (m.role === "toolResult") {
+        recs.push({
+          id: typeof r.id === "string" ? r.id : "",
+          role: "toolResult",
+          text: null,
+          thinking: null,
+          model: null,
+          stopReason: "",
+          toolCalls: [],
+          toolCallId: typeof m.toolCallId === "string" ? m.toolCallId : null,
+          toolName:
+            typeof m.toolName === "string" && m.toolName ? m.toolName : null,
+          dur: durationMs(m.durationMs),
+        });
+      }
+    } catch {
+      // Unreadable line: skip it; the store reports degradation honestly.
+    }
+  }
+
+  // Root-to-last-entry active path (mirrors parsePi Phase B); falls back to
+  // append order when the tree cannot be trusted.
+  let active: Set<string> | null = null;
+  if (lastEntryId !== null && !idlessEntries) {
+    active = new Set<string>();
+    let cursor: string | null = lastEntryId;
+    let broken = false;
+    while (cursor !== null) {
+      if (active.has(cursor)) break;
+      active.add(cursor);
+      const parent = parentOf.get(cursor);
+      if (parent !== undefined && parent !== null && !parentOf.has(parent)) {
+        broken = true;
+        break;
+      }
+      cursor = parent ?? null;
+    }
+    if (broken) active = null;
+  }
+  const selected = active ? recs.filter((r) => active!.has(r.id)) : recs;
+
+  const turns = new Map<string, TranscriptTurn>();
+  let current: TranscriptTurn | null = null;
+  const issued = new Map<string, string>(); // toolCallId -> tool name
+  for (const r of selected) {
+    if (r.role === "user") {
+      if (!r.id || !validId(r.id) || turns.has(r.id)) {
+        current = null;
+        continue;
+      }
+      current = {
+        turn_id: r.id,
+        prompt: r.text ? truncateCodePoints(r.text) : null,
+        thinking: null,
+        models: [],
+        tool_calls: [],
+      };
+      turns.set(r.id, current);
+      continue;
+    }
+    if (!current) continue;
+    if (r.role === "assistant") {
+      if (r.model && !current.models.includes(r.model))
+        current.models.push(r.model);
+      if (r.thinking) {
+        current.thinking = current.thinking
+          ? truncateCodePoints(current.thinking + "\n" + r.thinking)
+          : truncateCodePoints(r.thinking);
+      }
+      for (const c of r.toolCalls) if (c.id) issued.set(c.id, c.name);
+      if (["stop", "length", "aborted"].includes(r.stopReason)) current = null;
+      continue;
+    }
+    // toolResult
+    const name = r.toolName ?? issued.get(r.toolCallId ?? "") ?? "tool";
+    current.tool_calls.push({ name, duration_ms: r.dur });
+  }
+  return [...turns.values()];
 }

@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <title>AgentTime · 本地时间账本</title>
-    <link rel="stylesheet" href="/style.css?v=20261025-2" />
-    <script src="/app.js?v=20261025-2" defer></script>
+    <link rel="stylesheet" href="/style.css?v=20261025-6" />
+    <script src="/app.js?v=20261025-6" defer></script>
   </head>
   <body>
     <div class="app">
@@ -69,7 +69,12 @@
             <svg class="icon" style="color:var(--state-work); width:14px; height:14px;" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="12" cy="12" r="8"/>
             </svg>
+            <span id="drawerAgentMark"></span>
             <span id="drawerTurnTitle">轮次耗时深度剖析</span>
+          </div>
+          <div class="drawer-nav">
+            <button class="drawer-step-btn" id="drawerPrevTurn" data-action="prev-turn" aria-label="上一轮 (←)">← 上一轮</button>
+            <button class="drawer-step-btn" id="drawerNextTurn" data-action="next-turn" aria-label="下一轮 (→)">下一轮 →</button>
           </div>
           <button class="drawer-close" data-action="close-drawer" aria-label="关闭抽屉 (ESC)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">

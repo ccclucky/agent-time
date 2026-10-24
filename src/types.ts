@@ -149,4 +149,31 @@ export interface Session {
   tokens?: TokenUsage | null;
 }
 
+/** On-demand per-turn transcript text, extracted from the local source file
+ *  when the session detail drawer opens. Never persisted to the store. */
+export interface TranscriptToolCall {
+  name: string;
+  duration_ms: number | null;
+  /** Tool invocation id when the source carries one (Codex call_id); lets the
+   *  drawer match transcript details onto event-stream tool calls. */
+  call_id?: string | null;
+  /** One-line human-readable operation detail (command, patch input, path…),
+   *  truncated to ~120 code points; null when the source carries nothing. */
+  detail?: string | null;
+}
+
+export interface TranscriptTurn {
+  turn_id: string;
+  prompt: string | null;
+  thinking: string | null;
+  models: string[];
+  tool_calls: TranscriptToolCall[];
+}
+
+export interface SessionTranscript {
+  session_id: string;
+  turns: TranscriptTurn[];
+  missing_fields: string[];
+}
+
 export class ValidationError extends Error {}

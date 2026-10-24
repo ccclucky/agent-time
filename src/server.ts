@@ -73,7 +73,17 @@ export function makeServer(store: Store, directories = new Directories(store)) {
             json(res, { directories: directories.list() });
           else if (url.pathname === "/api/sources")
             json(res, { adapters: SOURCES, ...store.sourceInfo() });
-          else if (
+          else if (url.pathname === "/api/session/transcript") {
+            const id = url.searchParams.get("id");
+            if (!id || !/^\S{1,300}$/.test(id))
+              throw new ValidationError("缺少有效的会话 id 参数");
+            const transcript = store.transcript(id);
+            if (!transcript) {
+              json(res, { error: "未找到该会话的本地来源记录" }, 404);
+              return;
+            }
+            json(res, transcript);
+          } else if (
             [
               "/",
               "/index.html",
