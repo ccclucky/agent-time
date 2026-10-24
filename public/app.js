@@ -150,7 +150,7 @@ const tokenSub = (t) =>
     : "源记录未携带 Token 快照";
 
 const statuses = {
-  completed: "已完成",
+  completed: "已完结",
   aborted: "已中止",
   failed: "执行失败",
   open: "暂无结束记录",
@@ -162,7 +162,7 @@ const statuses = {
 // 与总账回填 / 维度聚合助手共用同一块零浏览器依赖代码（node:vm 整块提取做行为级单测）
 
 // 首页/抽屉统一使用的接入工具徽标（内联 SVG，见 agentMark 定义处）
-// 徽标内容为各 harness 的真实标志（反馈轮 3）：
+// 徽标内容为各接入工具的真实标志（反馈轮 3）：
 // - Codex：OpenAI 官方 mark（simple-icons 单 path，viewBox 0 0 24 24），
 //   沿用单色 currentColor 底 + paper 反白，不再使用拼错的 "Cx" 字母
 // - Claude Code：日光纹 sunburst（用户已接受，保持不动）
@@ -369,13 +369,13 @@ function noData() {
 function stats() {
   const s = state.report.summary;
   return `<div class="stats">
-    <div class="stat">
-      <label>已记录的累计机时</label>
+    <div class="stat" title="口径：累计工作时长 processing_ms = 各轮可测量区间相加">
+      <label>累计工作时长</label>
       <div class="number">${fmt(s.processing_ms)}</div>
       <small>各轮可测量记录区间时间相加 ↗</small>
     </div>
-    <div class="stat">
-      <label>物理跨度并集时长</label>
+    <div class="stat" title="口径：并行去重时长 processing_union_ms = 重叠时间只计一次">
+      <label>并行去重时长</label>
       <div class="number">${fmt(s.processing_union_ms)}</div>
       <small>同时运行的时间仅计一次 ↗</small>
     </div>
@@ -393,7 +393,7 @@ function stats() {
 }
 
 // ========================================================
-// 模块 2：核心大盘 —— 耗时蒸发漏斗 (Time Drop Funnel)
+// 模块 2：核心大盘 —— 时间流向
 // 严格对齐 GLOSSARY.md：严禁粗暴相减，真实数据核算
 // ========================================================
 
@@ -401,7 +401,7 @@ function renderFunnelStageTrack(pct, color, fullText, isGlow = false) {
   if (pct <= 0) {
     return `
       <div class="funnel-fill" style="width: 0%; padding:0; min-width:0;"></div>
-      <span class="funnel-outside-hint">0.0% (无卡点损耗)</span>
+      <span class="funnel-outside-hint">0.0%（本阶段无扣除）</span>
     `;
   }
   if (pct < 25) {
@@ -434,14 +434,14 @@ function funnel() {
     <section class="funnel-card">
       <div class="section-header">
         <div>
-          <span class="section-title">耗时蒸发漏斗 (Time Drop Funnel)</span>
+          <span class="section-title">时间流向</span>
           <span class="section-subtitle">基于一手事件流真实度量 · 无伪造推算</span>
         </div>
         <span class="funnel-concurrency-pill">${concurrency}x 并发效能倍率</span>
       </div>
       <div class="demo" style="margin: 8px 0 0;">
         <strong>口径提示</strong>
-        <span>当前所选时间范围内的会话尚未包含细粒度三态事件，暂不推断纯工作与审阅等待拆分。</span>
+        <span>当前所选时间范围内的会话尚未包含细粒度三态事件，暂不推断 AI 工作与等待确认的拆分。</span>
       </div>
     </section>`;
   }
@@ -461,32 +461,32 @@ function funnel() {
   <section class="funnel-card">
     <div class="section-header">
       <div>
-        <span class="section-title">耗时蒸发漏斗 (Time Drop Funnel)</span>
-        <span class="section-subtitle">一屏讲透壁钟时长流向 · 终结“机器在忙”的错觉</span>
+        <span class="section-title">时间流向</span>
+        <span class="section-subtitle">一屏看清时间与等待的流向</span>
       </div>
       <span class="funnel-concurrency-pill">${concurrency}x 并发效能倍率</span>
     </div>
 
     <div class="funnel-stages">
-      <!-- 阶段 1: 原始挂载机时基准 -->
-      <div class="funnel-bar-row">
+      <!-- 阶段 1：记录总时长基准 -->
+      <div class="funnel-bar-row" title="口径：记录总时长 = AI 工作 work_ms + 等待确认 review_wait_ms + 待命 standby_ms">
         <div class="stage-label">
           <span style="color:#7A7268;">●</span>
-          <span>1. 原始挂载机时总计</span>
+          <span>1. 记录总时长</span>
         </div>
         <div class="funnel-track">
           <div class="funnel-fill" style="width: 100%; background: #9E968B; padding: 0 12px;">
-            <span class="funnel-text-inside">100% 原始机时基准 (自然壁钟基底)</span>
+            <span class="funnel-text-inside">100% 记录总时长</span>
           </div>
         </div>
         <div class="stage-val">${fmt(grossTotal)}</div>
       </div>
 
-      <!-- 阶段 2: 扣除等待人审阅卡点 -->
-      <div class="funnel-bar-row">
+      <!-- 阶段 2：扣除等待确认（review_wait_ms） -->
+      <div class="funnel-bar-row" title="${h(dimensionHint("wait"))}">
         <div class="stage-label">
           <span style="color:var(--state-wait);">●</span>
-          <span>2. 扣除等待人审阅卡点</span>
+          <span>2. 扣除${h(dimensionTitle("wait"))}</span>
         </div>
         <div class="funnel-track">
           ${renderFunnelStageTrack(waitPct, "var(--state-wait)", `-${waitPct}% 工具权限审批与方案决策`)}
@@ -494,11 +494,11 @@ function funnel() {
         <div class="stage-val">-${fmt(wait)}</div>
       </div>
 
-      <!-- 阶段 3: 扣除待命时长 -->
-      <div class="funnel-bar-row">
+      <!-- 阶段 3：扣除待命（standby_ms） -->
+      <div class="funnel-bar-row" title="${h(dimensionHint("standby"))}">
         <div class="stage-label">
           <span style="color:var(--state-idle);">●</span>
-          <span>3. 扣除静默就绪待命</span>
+          <span>3. 扣除${h(dimensionTitle("standby"))}</span>
         </div>
         <div class="funnel-track">
           ${renderFunnelStageTrack(standbyPct, "#7A7268", `-${standbyPct}% 答复完毕至人类再次唤醒`)}
@@ -506,14 +506,14 @@ function funnel() {
         <div class="stage-val">-${fmt(standby)}</div>
       </div>
 
-      <!-- 阶段 4: 沉淀纯工作有效净值 -->
-      <div class="funnel-bar-row">
+      <!-- 阶段 4：剩下 AI 工作（work_ms） -->
+      <div class="funnel-bar-row" title="口径：AI 工作 work_ms = 模型推理 + 本地工具">
         <div class="stage-label">
           <span style="color:var(--state-work);">●</span>
-          <span>4. 沉淀纯工作有效净值</span>
+          <span>4. 剩下 AI 工作</span>
         </div>
         <div class="funnel-track">
-          ${renderFunnelStageTrack(workPct, "var(--state-work)", `${workPct}% AI 模型推理与本地工具执行`, true)}
+          ${renderFunnelStageTrack(workPct, "var(--state-work)", `${workPct}% 模型推理 + 本地工具`, true)}
         </div>
         <div class="stage-val" style="color:var(--state-work);">${fmt(work)}</div>
       </div>
@@ -522,10 +522,10 @@ function funnel() {
 }
 
 // ========================================================
-// 模块 3：Brush & Zoom 全景画卷带与无级拖拽视口滑块
-// 采用完整三态高饱和高对比拼接，消除 Primitive Obsession
-// 视口会话聚合数学由 computeTimelineModel() 抽出，
-// 供首页双列组合榜 (TOP 3 榜 + 视口操作分布) 复用
+// 模块 3：全景时间轴与无级拖拽视口滑块
+// 设计意图：按三态整段着色（工作 / 等待确认 / 待命），避免同一维度
+// 被拆成难以辨认的碎片；视口会话聚合数学由 computeTimelineModel() 抽出，
+// 供首页双列组合榜（TOP 3 榜 + 视口操作分布）复用
 // ========================================================
 function computeTimelineModel() {
   const sessions = state.report.sessions || [];
@@ -566,7 +566,7 @@ function computeTimelineModel() {
   const rangeStartMs = minTime + (state.zoomStartPct / 100) * totalTimelineSpan;
   const rangeEndMs = minTime + (state.zoomEndPct / 100) * totalTimelineSpan;
 
-  // 方案 A：以会话为一级主体聚合 (Session-First)
+  // 方案 A：以会话为一级主体聚合
   const sessionSummaries = sessions.map((s) => {
     let sWork = 0;
     let sWait = 0;
@@ -671,7 +671,7 @@ function timeline(model) {
       const isInViewport = bEndPct >= state.zoomStartPct && bStartPct <= state.zoomEndPct;
 
       return `
-        <div class="brush-bucket-col" title="${stamp(b.start)}: 纯工作 ${fmt(b.workMs)}, 等待人审阅 ${fmt(b.waitMs)}, 包含 ${b.turnsCount} 轮交互">
+        <div class="brush-bucket-col" title="${stamp(b.start)}: AI 工作 ${fmt(b.workMs)}, 等待确认 ${fmt(b.waitMs)}, 包含 ${b.turnsCount} 轮交互">
           <div class="brush-bucket-bar ${isInViewport ? "in-viewport" : "out-viewport"}" style="height:${heightPct}%; background:${isMuted ? "#DFD8CE" : "#FAF9F5"};">
             ${!isMuted ? `
               <div style="width:100%; height:${workRatio}%; background:var(--state-work);"></div>
@@ -683,21 +683,21 @@ function timeline(model) {
     })
     .join("");
 
-  // 方案 A：以会话为一级主体聚合 (Session-First) —— 模型已在 computeTimelineModel() 计算
+  // 方案 A：以会话为一级主体聚合 —— 模型已在 computeTimelineModel() 计算
   const { visibleSessions } = model;
 
   return `
   <section class="timeline-card">
     <div class="section-header">
       <div>
-        <span class="section-title">全景时间轴与微缩视口 (Brush & Zoom Timeline)</span>
-        <span class="section-subtitle">140px 黄金高度 · 指数非线性波峰 · 拖动滑块聚焦下方榜单与操作分布</span>
+        <span class="section-title">全景时间轴</span>
+        <span class="section-subtitle">140px 高度 · 非线性波峰 · 拖动滑块聚焦下方榜单与操作分布</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         ${(state.zoomStartPct > 0 || state.zoomEndPct < 100) ? `
           <button class="filter-chip js-reset-zoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
         ` : ""}
-        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话 (共 ${sessions.length} 个会话, ${totalTurns} 轮交互)</span>
+        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话（共 ${sessions.length} 个会话，${totalTurns} 轮交互）</span>
       </div>
     </div>
 
@@ -722,12 +722,12 @@ function timeline(model) {
 
 // ========================================================
 // 方案 A 替换模块 1：双列组合榜
-// 左：会话耗时 TOP 3 榜 · 右：当前视口 Operations Breakdown
-// 聚合口径：仅统计当前热力图视口 (zoomStartPct..zoomEndPct) 内可见的会话
+// 左：会话耗时 TOP 3 榜 · 右：当前视口操作与耗时分布
+// 聚合口径：仅统计当前热力图视口（zoomStartPct..zoomEndPct）内可见的会话
 // ========================================================
 // 本期分摊口径：period_ms 是逐轮"裁剪到统计日期范围"的时长相加
 // （/api/report 对越界轮次做裁剪）。命名必须暴露"裁剪分摊"语义，
-// 与详情页的首末轮次物理壁钟跨度 (sessionWallSpan) 严格区分，不得混用。
+// 与详情页的首末轮次首尾跨度（sessionWallSpan）严格区分，不得混用。
 function sessionClippedPeriodMs(s) {
   return s.measured_turns ? s.period_ms || 0 : 0;
 }
@@ -737,9 +737,9 @@ function zoomedViewport() {
 }
 
 function topSessionsCard(model) {
-  // 口径对齐：榜值与详情页「总壁钟时长 (WALL TIME)」KPI 同源 ——
-  // 均为会话首末轮次的物理壁钟跨度 (sessionWallSpan)，
-  // 保证任一会话的首页 TOP 3 榜值恒等于其详情页 WALL TIME
+  // 口径对齐：榜值与详情页「总时长」KPI 同源 ——
+  // 均为会话首末轮次的首尾跨度（sessionWallSpan），
+  // 保证任一会话的首页 TOP 3 榜值恒等于其详情页总时长
   const top = model.visibleSessions
     .map((item) => item.session)
     .map((s) => ({ s, duration: sessionWallSpan(s).wallMs || 0 }))
@@ -764,7 +764,7 @@ function topSessionsCard(model) {
 
   return `
     <div class="s1-box">
-      <div class="s1-title">会话耗时 TOP 3 榜 (Top Sessions · 当前视口)</div>
+      <div class="s1-title">会话耗时 TOP 3 榜（当前视口）</div>
       ${rows || `
         <div class="s1-empty">
           当前视口内没有已测量耗时的会话${zoomedViewport() ? "，可点击" : ""}
@@ -775,19 +775,43 @@ function topSessionsCard(model) {
   `;
 }
 
-// Operations Breakdown 四维配置（维度键 + 短标签 + 分段色）的唯一真理源：
-// 首页视口分段条 (VIEWPORT_SEGMENTS)、详情页明细行 (DETAIL_BREAKDOWN_ROWS)、
-// 轮次胶囊条与会话流迷你条均由此派生，杜绝同一维度在多个视图漂移出两种颜色
+// 四维配置（维度键 + 短标签 + 分段色 + 口径提示）的唯一真理源：
+// 首页视口分段条、详情页明细行、轮次胶囊条与会话流迷你条均直接别名或派生自此表，
+// 杜绝同一维度在多个视图漂移出两种颜色或两种写法
 const BREAKDOWN_DIMENSIONS = [
-  { key: "tool", label: "本地工具", color: "var(--color-mcp)" },
-  { key: "model", label: "模型推理", color: "var(--color-system)" },
-  { key: "wait", label: "等待人审阅", color: "var(--color-skills)" },
-  { key: "standby", label: "待命", color: "var(--state-standby)" },
+  {
+    key: "tool",
+    label: "本地工具",
+    color: "var(--color-mcp)",
+    hint: "本地工具 tool execution = 工具调用执行耗时（Bash / Edit 等）",
+  },
+  {
+    key: "model",
+    label: "模型推理",
+    color: "var(--color-system)",
+    hint: "模型推理 model_ms = 模型调用耗时",
+  },
+  {
+    key: "wait",
+    label: "等待确认",
+    color: "var(--color-skills)",
+    hint: "等待确认 review_wait_ms = 工具授权与方案确认的挂起时长",
+  },
+  {
+    key: "standby",
+    label: "待命",
+    color: "var(--state-standby)",
+    hint: "待命 standby_ms = 上轮答复完毕至下一轮开始",
+  },
 ];
 
-const breakdownColor = (key) =>
-  BREAKDOWN_DIMENSIONS.find((d) => d.key === key)?.color ??
-  "var(--state-standby)";
+const breakdownDimension = (key) =>
+  BREAKDOWN_DIMENSIONS.find((d) => d.key === key);
+const dimensionTitle = (key) => breakdownDimension(key)?.label ?? "";
+const dimensionHint = (key) => {
+  const d = breakdownDimension(key);
+  return d ? `口径：${d.hint}` : "";
+};
 
 // 四维耗时累加器（键序与 BREAKDOWN_DIMENSIONS 一致）：
 // Codex 会话 breakdown 为 null，天然按 0 贡献并优雅降级
@@ -802,13 +826,9 @@ function sumBreakdown(agg) {
   return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
 }
 
-// 多维操作分段条 (Operations Breakdown Sparkline) 的四个维度
-const VIEWPORT_SEGMENTS = [
-  { key: "tool", label: "本地代码工具执行 (Bash / Edit / 其他本地操作)", color: breakdownColor("tool") },
-  { key: "model", label: "AI 模型推理耗时", color: breakdownColor("model") },
-  { key: "wait", label: "等待人类审阅卡点 (Review Wait)", color: breakdownColor("wait") },
-  { key: "standby", label: "静默就绪与待命 (Standby)", color: breakdownColor("standby") },
-];
+// 多维操作分段条（首页视口图例）的四个维度：直接别名唯一真理源，
+// 渲染处只负责布局与百分比，不再复制一份用户可见长文案
+const VIEWPORT_SEGMENTS = BREAKDOWN_DIMENSIONS;
 
 function aggregateViewportBreakdown(visibleSessions) {
   const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
@@ -829,7 +849,7 @@ function viewportBreakdownCard(model) {
       ? VIEWPORT_SEGMENTS.map((seg) => {
           const pct = (agg[seg.key] / total) * 100;
           return pct > 0
-            ? `<div style="width:${pct.toFixed(1)}%; background:${seg.color};" title="${h(seg.label)}: ${pct.toFixed(1)}%"></div>`
+            ? `<div style="width:${pct.toFixed(1)}%; background:${seg.color};" title="口径：${h(seg.hint)} · ${pct.toFixed(1)}%"></div>`
             : "";
         }).join("")
       : "";
@@ -839,7 +859,7 @@ function viewportBreakdownCard(model) {
     const pct = total > 0 ? ((ms / total) * 100).toFixed(1) : "0.0";
     return `
       <div class="seg-legend-row">
-        <span class="seg-legend-label">
+        <span class="seg-legend-label" title="口径：${h(seg.hint)}">
           <span class="seg-legend-swatch" style="background:${seg.color};"></span>
           ${h(seg.label)}
         </span>
@@ -850,13 +870,13 @@ function viewportBreakdownCard(model) {
 
   return `
     <div class="s1-box">
-      <div class="s1-title">当前视口操作与耗时分布 (Operations Breakdown · ${model.visibleSessions.length} 个会话)</div>
+      <div class="s1-title">当前视口操作与耗时分布（${model.visibleSessions.length} 个会话）</div>
       ${total > 0 ? `
         <div class="multi-seg-bar">${segHtml}</div>
         <div class="seg-legend">${legendHtml}</div>
       ` : `
         <div class="s1-empty">
-          当前视口内的会话暂无细粒度操作拆分 (Codex 会话不提供 breakdown 事件)${zoomedViewport() ? "，可点击" : ""}
+          当前视口内的会话暂无细分数据（Codex 会话不提供细分数据）${zoomedViewport() ? "，可点击" : ""}
           ${zoomedViewport() ? '<button class="filter-chip js-reset-zoom" style="margin-left: 6px; padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>' : "。"}
         </div>
       `}
@@ -867,7 +887,7 @@ function viewportBreakdownCard(model) {
 // ========================================================
 // 首页维度聚合统计（反馈轮 3 Fix 3）：用户要的是聚合、统计，不是过滤。
 // 与双列榜共用 scopedModel.visibleSessions（当前视口 + 接入工具筛选同口径），
-// 在筛选芯片之外叠加三个只读聚合维度：按 Harness / 按项目 TOP 5 / 按工具 TOP 5。
+// 在筛选芯片之外叠加三个只读聚合维度：按接入工具 / 按项目 TOP 5 / 按工具 TOP 5。
 // 纯聚合数学在上方 PURE HELPERS 块（aggregateSessionsByAgent 等）单测覆盖。
 // ========================================================
 // 线性占比条：数值就在条旁，直接线性即可；fill 保底 2% 防极小份额不可见
@@ -892,7 +912,7 @@ function viewportAggregationCard(model) {
           <span class="agg-agent">${agentMark(r.agent)}<span class="agg-agent-name">${h(r.agent)}</span></span>
           <span class="agg-nums">${r.sessions} 会话 · ${r.turns} 轮 · <strong>${fmt(r.wallMs)}</strong></span>
         </div>
-        ${aggShareBar(pct, "var(--state-work)", `${r.agent} 的总壁钟时长占比`)}
+        ${aggShareBar(pct, "var(--state-work)", `${r.agent} 的总时长占比`)}
       </div>
     `;
     })
@@ -909,7 +929,7 @@ function viewportAggregationCard(model) {
           <span class="agg-agent"><span class="agg-agent-name" title="${h(r.project)}">${h(r.project)}</span></span>
           <span class="agg-nums">${r.sessions} 会话 · <strong>${fmt(r.wallMs)}</strong></span>
         </div>
-        ${aggShareBar(pct, "var(--state-work)", `${r.project} 的总壁钟时长占比`)}
+        ${aggShareBar(pct, "var(--state-work)", `${r.project} 的总时长占比`)}
       </div>
     `;
       })
@@ -940,17 +960,17 @@ function viewportAggregationCard(model) {
   return `
     <div class="agg-grid" aria-label="维度聚合统计（当前视口）">
       <div class="s1-box">
-        <div class="s1-title">按 Harness (会话 · 轮次 · 总壁钟时长 · 当前视口)</div>
+        <div class="s1-title">按接入工具（会话 · 轮次 · 总时长 · 当前视口）</div>
         ${agentRows || emptyRow}
       </div>
       <div class="s1-box">
-        <div class="s1-title">按项目 TOP 5 (总壁钟时长 · 当前视口)</div>
+        <div class="s1-title">按项目 TOP 5（总时长 · 当前视口）</div>
         ${projectRows || emptyRow}
       </div>
       <div class="s1-box">
-        <div class="s1-title">按工具 TOP 5 (累计执行耗时)</div>
-        <div class="agg-basis">基于已测量 breakdown 的 ${byTool.basisSessions} 个会话 · 未测量来源不计入</div>
-        ${toolRows || `<div class="s1-empty">当前视口内没有已测量 breakdown 的会话（Codex 会话不提供 breakdown 事件）。</div>`}
+        <div class="s1-title">按工具 TOP 5（累计执行耗时）</div>
+        <div class="agg-basis">基于已有细分数据的 ${byTool.basisSessions} 个会话 · 未测量来源不计入</div>
+        ${toolRows || `<div class="s1-empty">当前视口内没有已测量细分数据的会话（Codex 会话不提供细分数据）。</div>`}
       </div>
     </div>
   `;
@@ -958,12 +978,12 @@ function viewportAggregationCard(model) {
 
 // ========================================================
 // 方案 A 替换模块 2：纯会话流列表
-// 首页最小原子是会话 (Session)，绝不在首页平铺每一轮次；
+// 首页最小原子是会话，绝不在首页平铺每一轮次；
 // 点击卡片写入 #session/:id 哈希，独立详情页由后续切片落地
 // ========================================================
-// 迷你条：以列表内最长会话为基准的相对时长占比条（原型 SSOT 的 迷你条），
+// 迷你条：以列表内最长会话为基准的相对时长占比条，
 // 分段色沿用 BREAKDOWN_DIMENSIONS 四维令牌，与首页/详情页同一套颜色；
-// 无 breakdown 的来源（Codex）诚实退化为单色待命条
+// 无细分数据的来源（Codex）诚实退化为单色待命条
 function streamMiniBarHtml(s, maxDuration) {
   const duration = sessionClippedPeriodMs(s);
   if (!duration || !(maxDuration > 0)) return "";
@@ -976,7 +996,7 @@ function streamMiniBarHtml(s, maxDuration) {
               `<div style="width:${((b[d.key] / b.total) * 100).toFixed(1)}%; background:${d.color};" title="${d.label}: ${fmt(b[d.key])}"></div>`,
           )
           .join("")
-      : `<div style="width:100%; background:var(--state-standby);" title="该会话无细分耗时数据（来源不提供 breakdown）"></div>`;
+      : `<div style="width:100%; background:var(--state-standby);" title="该会话无细分耗时数据（来源不提供细分数据）"></div>`;
   // 最短可见宽度 2%：避免极短会话被压成不可感知的 0px 细线
   const widthPct = Math.max(2, (duration / maxDuration) * 100);
   return `
@@ -986,7 +1006,7 @@ function streamMiniBarHtml(s, maxDuration) {
 }
 
 // ========================================================
-// 接入工具筛选 (Fix: "首页展示的内容都不知道是哪个 harness 的")
+// 接入工具筛选（Fix：首页展示的内容不知道来自哪个接入工具）
 // 只列出当前报告中实际存在的 agent；筛选收窄会话流、TOP 3 榜与
 // 视口操作分布聚合（在 sessionSummaries 进入视口聚合前过滤），
 // 热力图与视口拖拽逻辑保持全量口径不受影响
@@ -1131,11 +1151,11 @@ function sessionStatus(s) {
   const total = s.turns.length;
   if (!total) return { label: "暂无轮次记录", cls: "" };
   const done = s.turns.filter((t) => t.status === "completed").length;
-  if (done === total) return { label: "已完结 (Completed)", cls: "ok" };
-  return { label: `存在未完结轮次 (${done}/${total} 轮完结)`, cls: "warn" };
+  if (done === total) return { label: "已完结", cls: "ok" };
+  return { label: `存在未完结轮次（${done}/${total} 轮完结）`, cls: "warn" };
 }
 
-// 会话专属 Operations Breakdown 聚合：本地工具 / 模型推理 / 等待人审阅 / 待命
+// 会话专属四维聚合：本地工具 / 模型推理 / 等待确认 / 待命
 // （sessionWallSpan 已并入上方 PURE HELPERS 纯函数块）
 function sessionBreakdown(s) {
   const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
@@ -1191,7 +1211,7 @@ function reviewWaitIntervals(turn) {
 // 单次调用粒度的工具耗时（慢操作榜单的原始证据）。
 // 配对与时长口径镜像后端 calculateClaudeTiming / calculatePiTiming：
 // - Pi：tool_result.end_ms 落盘了实际完成时间 → duration = end_ms − result.at_ms
-// - Claude：tool_result 只有记录时刻 → duration = result.at_ms − use.at_ms − 区间内等待人审阅重叠
+// - Claude：tool_result 只有记录时刻 → duration = result.at_ms − use.at_ms − 区间内等待确认重叠
 function perCallToolTimings(turn) {
   const evs = [...(turn.events || [])].sort((a, b) => a.at_ms - b.at_ms);
   const waits = reviewWaitIntervals(turn);
@@ -1237,7 +1257,7 @@ function perCallToolTimings(turn) {
 // Codex 等不落盘分解的来源）凡是可从一手事件推导的指标都要回填，
 // 推导不出来的维度给出诚实的一行原因，而不是孤零零一个 "—"
 // ------------------------------------------------------------------
-// 总壁钟时长 (WALL TIME)：当前范围内该会话轮次的首尾物理跨度
+// 总时长（sessionWallSpan）：当前范围内该会话轮次的首尾跨度
 // （TOP 3 榜、详情页 KPI 与下方维度聚合的统一口径）
 function sessionWallSpan(s) {
   let first = Infinity;
@@ -1276,7 +1296,7 @@ function resolveRollup(turn, nowMs = Date.now()) {
   const waitMs = turn.review_wait_ms ?? null;
   const workMs = turn.work_ms ?? null;
 
-  // 壁钟时长：elapsed_ms 优先；open 轮次回退为 起点→当前时刻 的已进行跨度
+  // 本轮时长（elapsed_ms）：elapsed_ms 优先；open 轮次回退为 起点→当前时刻 的已进行跨度
   let wallMs = turn.elapsed_ms ?? turn.period_ms ?? null;
   let wallBackfilled = false;
   if (wallMs == null && typeof turn.start_ms === "number" && nowMs > turn.start_ms) {
@@ -1314,7 +1334,7 @@ function rollupEvidenceNote(turn) {
 // 输入是"当前视口可见会话"，与视口操作分布卡完全同口径。
 // ------------------------------------------------------------------
 
-// 会话 WALL TIME 口径（与 TOP 3 榜、详情页 KPI 同源）：首末轮次的物理壁钟跨度
+// 会话总时长口径（与 TOP 3 榜、详情页 KPI 同源）：首末轮次的首尾跨度
 function aggregateSessionsByAgent(sessions) {
   const map = new Map();
   let totalWallMs = 0;
@@ -1333,7 +1353,7 @@ function aggregateSessionsByAgent(sessions) {
   };
 }
 
-// 按项目：全部行按总壁钟时长排序，上层取 TOP 5 并对剩余数量诚实披露
+// 按项目：全部行按总时长排序，上层取 TOP 5 并对剩余数量诚实披露
 function aggregateSessionsByProject(sessions) {
   const map = new Map();
   let totalWallMs = 0;
@@ -1379,10 +1399,10 @@ function aggregateTurnsByTool(sessions) {
   };
 }
 
-// 慢操作阈值：单次工具调用超过 15 秒即视为慢瓶颈（用户可见文案统一写作 "15s"）
+// 慢操作阈值：单次工具调用超过 15 秒即视为慢操作（用户可见文案统一写作「超 15s 慢操作」）
 const SLOW_OP_THRESHOLD_MS = 15000;
 
-// 慢操作（单次 >15s）跨轮收集，按耗时倒序
+// 慢操作（单次超过 15 秒）跨轮收集，按耗时倒序
 function slowToolCalls(s, threshold = SLOW_OP_THRESHOLD_MS) {
   const calls = [];
   s.turns.forEach((t, i) => {
@@ -1394,7 +1414,7 @@ function slowToolCalls(s, threshold = SLOW_OP_THRESHOLD_MS) {
 }
 // ==== PURE HELPERS END ====
 
-// 自动化自治率 (AUTONOMY)：纯工作耗时 ÷ (纯工作 + 等待人审阅) × 100%
+// 自动完成度（autonomy_rate）：AI 工作 work_ms ÷ (AI 工作 + 等待确认) × 100%
 // 人工确认次数 = 成对闭合的 review_wait_start/end（Claude 独有；Pi/Codex 优雅降级）
 function sessionAutonomy(s) {
   let work = 0;
@@ -1432,15 +1452,22 @@ function attributionLines(s) {
   const b = sessionBreakdown(s);
   if (b.total <= 0) {
     return [
-      "该会话暂无细分耗时数据（Codex 会话不提供 breakdown 事件），无法进行瓶颈归因。",
+      "该会话暂无细分数据（Codex 会话不提供细分数据），无法进行瓶颈归因。",
     ];
   }
-  const dims = [
-    { key: "tool", label: "本地工具执行", verdict: "瓶颈为本地工具/脚本执行" },
-    { key: "model", label: "AI 模型推理", verdict: "瓶颈为模型推理等待" },
-    { key: "wait", label: "等待人审阅", verdict: "瓶颈为等待人审阅卡点" },
-    { key: "standby", label: "静默待命", verdict: "会话大部分时间处于静默待命" },
-  ].map((d) => ({ ...d, pct: (b[d.key] / b.total) * 100 }));
+  // 维度短标签沿用 BREAKDOWN_DIMENSIONS，仅归因句式在此处维护
+  const verdicts = {
+    tool: "瓶颈为本地工具或脚本执行",
+    model: "瓶颈为模型推理等待",
+    wait: "瓶颈为等待确认",
+    standby: "会话大部分时间处于待命",
+  };
+  const dims = BREAKDOWN_DIMENSIONS.map((d) => ({
+    key: d.key,
+    label: d.label,
+    verdict: verdicts[d.key],
+    pct: (b[d.key] / b.total) * 100,
+  }));
   const top = dims.slice().sort((a, b) => b.pct - a.pct)[0];
   const lines = [
     `主要耗时源：${top.label} 占 ${top.pct.toFixed(1)}%，${top.verdict}。`,
@@ -1448,33 +1475,29 @@ function attributionLines(s) {
   const waitPct = (b.wait / b.total) * 100;
   lines.push(
     waitPct >= 25
-      ? `等待人审阅占比 ${waitPct.toFixed(1)}%，建议提升自动化（预设工具权限白名单，减少授权卡点）。`
-      : `等待人审阅占比仅 ${waitPct.toFixed(1)}%，人机交付流转紧凑。`,
+      ? `等待确认占比 ${waitPct.toFixed(1)}%，建议提升自动化（预设工具权限白名单，减少授权确认）。`
+      : `等待确认占比仅 ${waitPct.toFixed(1)}%，人机交付流转紧凑。`,
   );
   const slow = slowToolCalls(s);
   lines.push(
     slow.length
-      ? `检测到 ${slow.length} 项 >15s 慢操作，最慢为 ${toolLabel(slow[0].name)}（${fmt(slow[0].duration_ms)}，轮次 #${slow[0].turnIndex}）。`
-      : "未检测到 >15s 的慢操作，执行节奏平稳。",
+      ? `检测到 ${slow.length} 项超 15s 慢操作，最慢为 ${toolLabel(slow[0].name)}（${fmt(slow[0].duration_ms)}，轮次 #${slow[0].turnIndex}）。`
+      : "未检测到超 15s 的慢操作，执行节奏平稳。",
   );
   return lines;
 }
 
-function detailKpiCard(label, val, sub, tone = "") {
+function detailKpiCard(label, val, sub, tone = "", hint = "") {
   return `
-    <div class="kpi-card${tone ? ` ${tone}` : ""}">
+    <div class="kpi-card${tone ? ` ${tone}` : ""}"${hint ? ` title="${h(hint)}"` : ""}>
       <div class="kpi-label">${h(label)}</div>
       <div class="kpi-val">${h(val)}</div>
       <div class="kpi-sub">${h(sub)}</div>
     </div>`;
 }
 
-const DETAIL_BREAKDOWN_ROWS = [
-  { key: "tool", label: "本地工具 (Tool Execution)", color: breakdownColor("tool") },
-  { key: "model", label: "模型推理 (Model API)", color: breakdownColor("model") },
-  { key: "wait", label: "等待人审阅 (Review Wait)", color: breakdownColor("wait") },
-  { key: "standby", label: "待命 (Standby)", color: breakdownColor("standby") },
-];
+// 详情页四维明细行：直接别名 BREAKDOWN_DIMENSIONS，标签、颜色与口径提示同源
+const DETAIL_BREAKDOWN_ROWS = BREAKDOWN_DIMENSIONS;
 
 function sessionDetail() {
   const s = detailSession();
@@ -1504,7 +1527,7 @@ function sessionDetail() {
           const ms = b[r.key];
           const pct = ((ms / b.total) * 100).toFixed(1);
           return `
-            <div class="breakdown-row">
+            <div class="breakdown-row" title="口径：${h(r.hint)}">
               <div class="breakdown-label">
                 <span class="seg-legend-swatch" style="background:${r.color};"></span>
                 <span>${h(r.label)}</span>
@@ -1515,7 +1538,7 @@ function sessionDetail() {
               </div>
             </div>`;
         }).join("")}`
-      : `<div class="s1-empty">该会话暂无细分耗时数据 — 当前接入的 Codex 会话不提供 breakdown 事件，不做任何伪造拆分。</div>`;
+      : `<div class="s1-empty">该会话暂无细分耗时数据 — 当前接入的 Codex 会话不提供细分数据，不做任何伪造拆分。</div>`;
 
   const workPct =
     b.total > 0 ? (((b.tool + b.model) / b.total) * 100).toFixed(1) : null;
@@ -1540,54 +1563,60 @@ function sessionDetail() {
 
     <section class="session-breakdown-full">
       <div class="breakdown-head">
-        <strong>本会话操作与耗时分布 (Session Operations Breakdown)</strong>
-        <span class="breakdown-head-val">${b.tool + b.model > 0 ? `纯工作净值 ${fmt(b.tool + b.model)} (${workPct}%)` : "无纯工作耗时证据"}</span>
+        <strong>本会话操作与耗时分布</strong>
+        <span class="breakdown-head-val">${b.tool + b.model > 0 ? `AI 工作 ${fmt(b.tool + b.model)}（${workPct}%）` : "无 AI 工作耗时证据"}</span>
       </div>
       ${breakdownBody}
     </section>
 
     <div class="detail-kpis">
       ${detailKpiCard(
-        "总壁钟时长 (WALL TIME)",
+        "总时长",
         wall.wallMs !== null ? fmt(wall.wallMs) : "—",
         "开始至完结绝对跨度（当前统计范围内）",
+        "",
+        "口径：总时长 sessionWallSpan = 首末轮次首尾跨度",
       )}
       ${detailKpiCard(
-        "纯工作有效净值 (ACTIVE WORK)",
+        "AI 工作",
         autonomy.workSum !== null ? fmt(autonomy.workSum) : "—",
-        autonomy.workSum !== null ? "模型推理 + 本地工具执行" : "该会话未提供三态切分",
+        autonomy.workSum !== null ? "模型推理 + 本地工具" : "该会话未提供三态切分",
         "work",
+        "口径：AI 工作 work_ms = 模型推理 + 本地工具",
       )}
       ${detailKpiCard(
-        "自动化自治率 (AUTONOMY)",
+        "自动完成度",
         autonomy.rate !== null ? `${autonomy.rate.toFixed(1)}%` : "—",
         autonomy.rate !== null
-          ? `${autonomy.confirmations} 次人工确认卡点`
+          ? `${autonomy.confirmations} 次人工确认`
           : "该会话未提供三态切分",
+        "",
+        "口径：自动完成度 autonomy_rate = work_ms ÷ (work_ms + review_wait_ms) × 100%",
       )}
       ${detailKpiCard(
-        "慢操作瓶颈数",
+        "超 15s 慢操作",
         `${slow.length} 项`,
-        ">15s 慢本地操作",
+        "单次调用超过 15 秒",
         slow.length ? "alert" : "",
+        "口径：超 15s 慢操作 slow_ops = 单次工具调用 > 15000ms",
       )}
     </div>
 
     <div class="detail-diag-grid">
       <div class="diag-card">
         <div class="diag-head">
-          <span>慢操作 TOP 榜 (Slowest Operations)</span>
-          <span class="diag-head-sub">单次调用耗时 > 15s · 倒序</span>
+          <span>最慢操作</span>
+          <span class="diag-head-sub">单次调用超过 15 秒 · 倒序</span>
         </div>
         ${
           slowRows.length
             ? slowRows.join("")
-            : `<div class="s1-empty">未检测到 >15s 的慢操作。</div>`
+            : `<div class="s1-empty">未检测到超 15s 的慢操作。</div>`
         }
       </div>
       <div class="diag-card">
         <div class="diag-head">
-          <span>瓶颈诊断与效率归因 (Attribution)</span>
+          <span>效率归因</span>
           <span class="diag-head-sub ok">系统自检结论</span>
         </div>
         <div class="diag-attribution">
@@ -1595,41 +1624,44 @@ function sessionDetail() {
         </div>
       </div>
     </div>
-    <!-- 切片 3：轮次时序流胶囊 (Turn Capsules) -->
+    <!-- 切片 3：轮次时序流胶囊 -->
     ${turnCapsuleSection(s)}
   `;
 }
 
 // ========================================================
-// 切片 3：轮次时序流胶囊 (Turn Capsules) + 右侧 Turn Inspector 抽屉联动
+// 切片 3：轮次时序流胶囊 + 右侧轮次抽屉联动
 // ========================================================
 
-// 单轮 260px 迷你占比条：模型推理 / 本地工具 / 等待人审阅 / 待命，
-// 全部来自 slice-1 色彩令牌。Codex 会话 breakdown 为 null →
-// 不伪造分段，诚实退化为单色总时长条。
+// 单轮 260px 迷你占比条：模型推理 / 本地工具 / 等待确认 / 待命，
+// 标签、颜色与口径提示全部来自 BREAKDOWN_DIMENSIONS（保持既有视觉顺序）。
+// Codex 会话 turn.breakdown 为 null → 不伪造分段，诚实退化为单色总时长条。
 function capsuleBarHtml(t) {
-  const tool = t.breakdown?.tool_execution_ms ?? 0;
-  const model = t.breakdown?.model_api_ms ?? 0;
-  const wait = t.review_wait_ms ?? 0;
-  const standby = t.standby_ms ?? 0;
-  const known = tool + model + wait + standby;
-  const segs = [
-    { ms: model, color: "var(--color-system)", label: "模型推理" },
-    { ms: tool, color: "var(--color-mcp)", label: "本地工具" },
-    { ms: wait, color: "var(--color-skills)", label: "等待人审阅" },
-    { ms: standby, color: "var(--state-standby)", label: "待命" },
-  ].filter((x) => x.ms > 0);
+  // 先按固定维度键取毫秒值，再与维度配置合并：
+  // 避免 breakdownDimension(undefined) 产出 {} 让渲染侧读到空颜色/空提示
+  const msByKey = {
+    model: t.breakdown?.model_api_ms ?? 0,
+    tool: t.breakdown?.tool_execution_ms ?? 0,
+    wait: t.review_wait_ms ?? 0,
+    standby: t.standby_ms ?? 0,
+  };
+  const known = Object.values(msByKey).reduce((sum, ms) => sum + ms, 0);
+  // 顺序沿用原视觉：模型推理 → 本地工具 → 等待确认 → 待命
+  const segs = ["model", "tool", "wait", "standby"]
+    .filter((key) => msByKey[key] > 0)
+    .map((key) => ({ key, ms: msByKey[key], dim: breakdownDimension(key) }))
+    .filter((x) => x.dim);
   if (known > 0 && segs.length) {
     return segs
       .map(
         (x) =>
-          `<div style="width:${((x.ms / known) * 100).toFixed(1)}%; background:${x.color};" title="${x.label}: ${fmt(x.ms)}"></div>`,
+          `<div style="width:${((x.ms / known) * 100).toFixed(1)}%; background:${x.dim.color};" title="${h(dimensionHint(x.key))} · ${fmt(x.ms)}"></div>`,
       )
       .join("");
   }
   const total = t.elapsed_ms ?? t.period_ms ?? null;
   const why = total
-    ? "该轮无细分耗时数据（该来源不提供 breakdown），仅按总时长展示"
+    ? "该轮无细分耗时数据（该来源不提供细分数据），仅按本轮时长展示"
     : "该轮无细分耗时数据，且缺少可测量时长";
   return `<div style="width:100%; background:var(--state-standby);" title="${why}"></div>`;
 }
@@ -1651,7 +1683,7 @@ function turnCapsuleSection(s) {
       <div class="turn-capsule${state.selectedTurnId === t.id ? " active" : ""}" data-turn-capsule="${h(t.id)}" role="button" tabindex="0" aria-label="检视轮次 #${i + 1}">
         ${agentMark(s.agent)}
         <span class="capsule-no">轮次 #${i + 1}</span>
-        <span class="capsule-title">${h(capsuleTitle(t))}${hasSlow ? '<em class="capsule-slow-flag">含 &gt;15s 慢操作</em>' : ""}</span>
+        <span class="capsule-title">${h(capsuleTitle(t))}${hasSlow ? '<em class="capsule-slow-flag">含超 15s 慢操作</em>' : ""}</span>
         <div class="capsule-bar">${capsuleBarHtml(t)}</div>
         <span class="capsule-duration">${fmt(t.elapsed_ms ?? t.period_ms ?? null)}</span>
       </div>`;
@@ -1734,7 +1766,7 @@ function bindBrushEvents() {
 }
 
 // ========================================================
-// 模块 4：两段式弹性下钻抽屉 (480px, 上总账 + 下慢工具清单)
+// 模块 4：两段式弹性下钻抽屉（480px，上总账 + 下慢工具清单）
 // 真实消费 API 暴露数据，严禁假数据伪造
 // ========================================================
 function openDrawer(turn, session) {
@@ -1745,7 +1777,7 @@ function openDrawer(turn, session) {
   if (!d) return;
 
   const turnIndex = session.turns.findIndex((t) => t.id === turn.id);
-  // 抽屉标题旁的接入工具徽标：一眼可见这一轮来自哪个 harness
+  // 抽屉标题旁的接入工具徽标：一眼可见这一轮来自哪个接入工具
   const markEl = $("#drawerAgentMark");
   if (markEl) markEl.innerHTML = agentMark(session.agent);
   const titleEl = $("#drawerTurnTitle");
@@ -1813,7 +1845,7 @@ function openDrawer(turn, session) {
     }
   }
 
-  // 逐次调用粒度的工具调用栈（与慢操作榜单同一口径），>15s 标红
+  // 逐次调用粒度的工具调用栈（与慢操作榜单同一口径），超过 15 秒标红
   const perCallStack = perCallToolTimings(turn).sort(
     (a, b) => b.duration_ms - a.duration_ms,
   );
@@ -1825,7 +1857,7 @@ function openDrawer(turn, session) {
   const unclassifiedMs = turn.breakdown?.unclassified_delay_ms ?? null;
   const waitCaption = unclassifiedMs !== null
     ? "来源未落盘审批事件 · 无法归因"
-    : "授权审批与决策对齐卡点";
+    : "授权审批与决策对齐";
   const modelBreakdown = (turn.breakdown?.model_api_breakdown ?? [])
     .slice()
     .sort((a, b) => b.duration_ms - a.duration_ms);
@@ -1864,10 +1896,10 @@ function openDrawer(turn, session) {
       ? `
     <div>
       <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid var(--line); border-radius:8px; padding:7px 12px;">
-        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">未分类延迟 (Unclassified)</span>
+        <span style="font-size:var(--text-sm); font-weight:700; color:var(--fg-title);">未分类延迟</span>
         <span class="tool-time">${fmt(unclassifiedMs)}</span>
       </div>
-      <div style="font-size:var(--text-xs); color:var(--fg-muted); margin-top:4px;">工具就绪至实际开始的间隔；来源未落盘审批事件，可能含审批等待、调度或限流，不计入等待人审阅。</div>
+      <div style="font-size:var(--text-xs); color:var(--fg-muted); margin-top:4px;">工具就绪至实际开始的间隔；来源未落盘审批事件，可能含审批等待、调度或限流，不计入等待确认。</div>
     </div>
   `
       : "";
@@ -1879,7 +1911,7 @@ function openDrawer(turn, session) {
           <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}">
             <div class="tool-exec-head">
               <strong title="${h(c.name)}">${h(toolLabel(c.name))}</strong>
-              <span class="tool-exec-time${isSlow ? " slow" : ""}">${fmt(c.duration_ms)}${isSlow ? " (慢瓶颈)" : ""}</span>
+              <span class="tool-exec-time${isSlow ? " slow" : ""}">${fmt(c.duration_ms)}${isSlow ? "（慢操作）" : ""}</span>
             </div>
             <div class="tool-exec-detail">${h(c.name)}</div>
           </div>
@@ -1890,38 +1922,38 @@ function openDrawer(turn, session) {
   $("#drawerBody").innerHTML = `
     <!-- 按需读取的该轮提问与思考文本（切片 3）：加载/错误状态诚实可见 -->
     <div>
-      <div class="drawer-section-label">用户输入 (User Prompt)</div>
+      <div class="drawer-section-label">你的提问</div>
       <div class="drawer-transcript-box" id="drawerPrompt">正在读取本机源文件…</div>
-      <div class="drawer-section-label" style="margin-top:14px;">模型思考与推理 (CoT & Reasoning)</div>
+      <div class="drawer-section-label" style="margin-top:14px;">模型思考过程</div>
       <div class="drawer-transcript-box" id="drawerThinking">正在读取本机源文件…</div>
     </div>
 
     <!-- 顶部总账微卡 -->
     <div>
       <div style="font-size:12px; font-weight:700; margin-bottom:8px; color:var(--fg-title); display:flex; justify-content:space-between;">
-        <span>耗时构成总账 (Rollup Summary)</span>
+        <span>本轮时间构成</span>
         <span style="font-size:11px; color:var(--state-work); font-weight:600;">一手数据核算</span>
       </div>
       <div class="drawer-kpi-grid">
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
-          <div class="drawer-kpi-title">模型推理耗时 (API)</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="${h(dimensionHint("model"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("model"))}</div>
           <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : "—"}</div>
           <div class="drawer-kpi-sub">${h(apiMs !== null ? turn.models.join(" / ") || "模型上下文未知" : rollupEvidenceNote(turn) || "模型上下文未知")}</div>
         </div>
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);">
-          <div class="drawer-kpi-title">工具执行耗时 (Tools)</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="${h(dimensionHint("tool"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("tool"))}</div>
           <div class="drawer-kpi-val">${toolMs !== null ? fmt(toolMs) : "—"}</div>
           <div class="drawer-kpi-sub">${h(toolMs !== null ? `${toolsList.length} 项工具执行${rollup.toolBackfilled ? " · 逐次调用累计" : ""}` : rollupEvidenceNote(turn) || "0 项工具执行")}</div>
         </div>
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);">
-          <div class="drawer-kpi-title">等待人审阅 (Review Wait)</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-wait);" title="${h(dimensionHint("wait"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("wait"))}</div>
           <div class="drawer-kpi-val">${wait !== null ? fmt(wait) : "—"}</div>
           <div class="drawer-kpi-sub">${h(wait !== null ? waitCaption : rollupEvidenceNote(turn) || waitCaption)}</div>
         </div>
-        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);">
-          <div class="drawer-kpi-title">单轮壁钟时长 (Wall Time)</div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);" title="口径：本轮时长 elapsed_ms = 本轮起点至结束">
+          <div class="drawer-kpi-title">本轮时长</div>
           <div class="drawer-kpi-val">${fmt(wall)}</div>
-          <div class="drawer-kpi-sub">有效工作率: ${workRate !== null ? `${workRate}%` : "—"}${rollup.wallBackfilled ? " · 该轮进行中，按起点至今累计" : ""}</div>
+          <div class="drawer-kpi-sub"><span title="口径：AI 工作占比 = AI 工作 work_ms ÷ 本轮时长 elapsed_ms">AI 工作占比</span>：${workRate !== null ? `${workRate}%` : "—"}${rollup.wallBackfilled ? " · 该轮进行中，按起点至今累计" : ""}</div>
         </div>
       </div>
       <!-- Token / 模型下钻：与三态并排呈现；无快照如实留空，绝不 0 断言 -->
@@ -1948,8 +1980,8 @@ function openDrawer(turn, session) {
     <!-- 详细脚本与慢工具清单 -->
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-        <span style="font-size:12px; font-weight:700; color:var(--fg-title);">本轮工具调用栈 (Operations Stack)</span>
-        <span style="font-size:11px; color:var(--fg-muted);">单次调用粒度 · 按耗时倒序 · &gt;15s 标红</span>
+        <span style="font-size:12px; font-weight:700; color:var(--fg-title);">本轮工具调用</span>
+        <span style="font-size:11px; color:var(--fg-muted);">单次调用粒度 · 按耗时倒序 · 超过 15 秒标红</span>
       </div>
       <div class="tool-list-container">
         ${toolsHtml}
@@ -2027,20 +2059,20 @@ function renderDrawerTranscript(entry, session, turn) {
     // 来源文件整体缺失/不可读时，后端会以 turns:[] + missing_fields 说明原因；
     // missing_fields 里可能混有思考链加密等与提问无关的说明，
     // 提问槽位必须给出提问自己的诚实文案，绝不串槽。
-    promptEl.innerHTML = drawerHint("本机记录未包含该轮的用户输入文本。");
+    promptEl.innerHTML = drawerHint("本机记录未包含该轮的提问文本。");
     cotEl.innerHTML = drawerHint(
       session.agent === "Codex"
-        ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
+        ? "Codex 官方记录对模型思考链加密，本机无法解密展示。"
         : "该来源未记录该轮的模型思考文本。",
     );
   } else {
     if (t.prompt) promptEl.textContent = t.prompt;
-    else promptEl.innerHTML = drawerHint("本机记录未包含该轮的用户输入文本。");
+    else promptEl.innerHTML = drawerHint("本机记录未包含该轮的提问文本。");
     if (t.thinking) cotEl.textContent = t.thinking;
     else
       cotEl.innerHTML = drawerHint(
         session.agent === "Codex"
-          ? "Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示。"
+          ? "Codex 官方记录对模型思考链加密，本机无法解密展示。"
           : "该来源未记录该轮的模型思考文本。",
       );
     // 截断等诚实备注（missing_fields）只在抽屉内提示一次；
@@ -2121,7 +2153,7 @@ function table(rows) {
         <tr>
           <th>项目 / 会话</th>
           <th>工具接入</th>
-          <th>本期壁钟时长</th>
+          <th>本期累计工作时长</th>
           <th>已测量轮次</th>
           <th>最近活动</th>
           <th>操作</th>
@@ -2220,7 +2252,7 @@ function compare() {
             <thead>
               <tr>
                 <th>模型名称 / 上下文</th>
-                <th>本期已记录累计机时</th>
+                <th>本期累计工作时长</th>
                 <th>已测量 / 未测量轮次</th>
               </tr>
             </thead>
@@ -2424,9 +2456,9 @@ function details(id) {
         </div>
         <p class="sub" style="margin-bottom:8px;">${h(t.models.join(" / ") || "模型上下文未知")}</p>
         <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:10px;">
-          <span>完整单轮跨度: <strong>${fmt(t.elapsed_ms)}</strong></span>
+          <span>本轮时长: <strong>${fmt(t.elapsed_ms)}</strong></span>
           <span>本期分摊计入: <strong>${fmt(t.period_ms)}</strong></span>
-          <span>纯工作: <strong>${t.work_ms !== null ? fmt(t.work_ms) : "未切分"}</strong></span>
+          <span>AI 工作：<strong>${t.work_ms !== null ? fmt(t.work_ms) : "未切分"}</strong></span>
         </div>
         <div style="display:flex; justify-content:flex-end;">
           <button class="btn" data-drill-turn="${h(t.id)}" data-drill-session="${h(s.id)}">在侧边抽屉下钻明细 →</button>
@@ -2447,14 +2479,30 @@ function details(id) {
 function definitions() {
   open(
     `${head("这些时间怎么算？")}
-     <dl style="line-height:1.7; font-size:13px;">
-       <dt><strong>会话与一轮交互</strong></dt>
-       <dd class="sub">会话是同一任务的交互集合；一轮交互从你提交问题或指令到 Agent 完成答复。工具调用与等待人审阅卡点均精确切分。</dd>
-       <dt style="margin-top:12px;"><strong>物理跨度并集时长 (Union Span)</strong></dt>
-       <dd class="sub">多个任务并发重叠运行的时间仅计一次，精确反映任务真实占据的物理自然时间。</dd>
-       <dt style="margin-top:12px;"><strong>纯工作有效净值 (Active Work Duration)</strong></dt>
-       <dd class="sub">由模型推理耗时与本地工具执行耗时毫秒级累加沉淀，真实反映 AI 的有效劳动净值。</dd>
-     </dl>`,
+     <p class="sub" style="line-height:1.7; font-size:13px;">会话是同一任务的交互集合；一轮交互从你提交问题或指令到 Agent 完成答复。工具调用与等待确认均精确切分。</p>
+     <div class="tablewrap" style="margin-top:12px;">
+       <table style="font-size:12px;">
+         <thead>
+           <tr><th>展示词</th><th>口径术语</th><th>字段 / 计算式</th></tr>
+         </thead>
+         <tbody>
+           <tr><td>累计工作时长</td><td class="sub">—</td><td><code>processing_ms</code></td></tr>
+           <tr><td>并行去重时长</td><td class="sub">—</td><td><code>processing_union_ms</code></td></tr>
+           <tr><td>总时长</td><td class="sub">wall time</td><td><code>sessionWallSpan</code></td></tr>
+           <tr><td>本轮时长</td><td class="sub">wall time</td><td><code>elapsed_ms</code></td></tr>
+           <tr><td>AI 工作</td><td class="sub">Active Work Duration</td><td><code>work_ms</code> = <code>model_ms</code> + tool execution</td></tr>
+           <tr><td>等待确认</td><td class="sub">Review Wait</td><td><code>review_wait_ms</code></td></tr>
+           <tr><td>待命</td><td class="sub">Standby Duration</td><td><code>standby_ms</code></td></tr>
+           <tr><td>自动完成度</td><td class="sub">Autonomy Rate</td><td><code>autonomy_rate</code></td></tr>
+           <tr><td>超 15s 慢操作</td><td class="sub">Slow Operation Count</td><td><code>slow_ops</code></td></tr>
+           <tr><td>本地工具</td><td class="sub">Tool Execution Duration</td><td>tool execution</td></tr>
+           <tr><td>模型推理</td><td class="sub">Model API Duration</td><td><code>model_ms</code></td></tr>
+         </tbody>
+       </table>
+     </div>
+     <p class="sub" style="margin-top:10px; font-size:12px;">「—」表示 GLOSSARY 无独立条目，口径以字段名为准。</p>
+     <p class="sub" style="margin-top:6px; font-size:12px;">说明：「自动完成度」是同一指标的展示层说法，口径术语仍为 Autonomy Rate；GLOSSARY 本轮不变。</p>`,
+    true,
   );
 }
 
@@ -2552,7 +2600,7 @@ async function refresh() {
         `${head("部分记录按设计排除", `已更新 ${r.updated} 个文件，无失败。`)}
          <h3>排除原因</h3>
          ${(r.exclusions || []).map((item) => `<p>${h(item.reason)} <strong>（${h(item.count)} 个文件）</strong></p>`).join("") || "<p>服务未提供详细说明。</p>"}
-         <p class="sub">这些文件是 Codex 为已导入会话生成的分叉快照：内容为父会话历史的复印件，不含子 Agent 的实际工作（子 Agent 机时已在父会话中计入）。导入它们会把同一段工作重复计时，因此保持排除。</p>`,
+         <p class="sub">这些文件是 Codex 为已导入会话生成的分叉快照：内容为父会话历史的复印件，不含子 Agent 的实际工作（子 Agent 的耗时已计入父会话）。导入它们会把同一段工作重复计时，因此保持排除。</p>`,
       );
     }
   } catch (e) {
@@ -2732,7 +2780,7 @@ document.addEventListener("change", (e) => {
   }
 });
 
-// ESC 键随手关闭抽屉与弹层，支持 Tab 焦点陷阱 (Focus Trap)
+// ESC 键随手关闭抽屉与弹层；弹层打开时 Tab 焦点在弹层内循环
 document.addEventListener("keydown", (e) => {
   // 键盘可达性：会话卡片 / 轮次胶囊 / TOP 榜行支持 Enter / Space 激活
   if ((e.key === "Enter" || e.key === " ") && e.target instanceof Element) {

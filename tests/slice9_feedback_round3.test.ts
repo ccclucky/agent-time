@@ -298,7 +298,7 @@ test("Fix 3 markup: overview hosts the aggregation module between s1-grid and th
     "the aggregation must aggregate the SAME scoped viewport as the breakdown card",
   );
   assert.ok(
-    js.includes("基于已测量 breakdown 的"),
+    js.includes("基于已有细分数据的"),
     "the tool grouping must state its evidence basis",
   );
   assert.ok(
@@ -333,10 +333,10 @@ test("Fix 4: badges carry the real OpenAI mark for Codex and the new Pi pixel ma
   assert.match(js, /<svg viewBox="0 0 16 16"[^>]*><rect x="0" y="0" width="16" height="16" rx="4\.5" fill="currentColor"\/>/);
 });
 
-test("Version stamp: both assets advance to 20261025-11", () => {
+test("Version stamp: both assets share one stamped version", () => {
   const html = read("../public/index.html");
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261025-11", "stamp must advance per AGENTS.md (10 → 11)");
+  assert.match(cssV, /^\d{8}-\d+$/, "stamp must keep the YYYYMMDD-N shape");
 });

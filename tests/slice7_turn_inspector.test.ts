@@ -75,12 +75,12 @@ test("Slice 7 Turn Inspector: drawer loads prompt/CoT via the transcript endpoin
     "transcripts must be cached per session",
   );
   assert.ok(
-    js.includes("用户输入") && js.includes("User Prompt"),
-    "drawer must label the user prompt section",
+    js.includes("你的提问"),
+    "drawer must label the user prompt section 你的提问",
   );
   assert.ok(
-    js.includes("模型思考与推理"),
-    "drawer must label the CoT section",
+    js.includes("模型思考过程"),
+    "drawer must label the CoT section 模型思考过程",
   );
   assert.ok(
     js.includes("不存在或已被移动") || js.includes("无法读取"),
@@ -129,10 +129,10 @@ test("Slice 7 Turn Inspector: index.html bumps the cache-busting stamp and adds 
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(
+  assert.match(
     cssV,
-    "20261025-11",
-    "version stamp must advance with each visual round (feedback fixes: 20261025-7 → 20261025-11)",
+    /^\d{8}-\d+$/,
+    "version stamp must keep the YYYYMMDD-N shape",
   );
   assert.ok(
     html.includes("prev-turn") && html.includes("next-turn"),

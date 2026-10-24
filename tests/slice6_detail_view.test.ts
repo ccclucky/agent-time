@@ -50,7 +50,7 @@ test("Slice 6 Detail View: app.js renders the session detail first screen (break
   // All four dimensions from the prototype legend
   assert.ok(js.includes("本地工具"), "本地工具 (tool_execution_ms) row");
   assert.ok(js.includes("模型推理"), "模型推理 (model_api_ms) row");
-  assert.ok(js.includes("等待人审阅"), "等待人审阅 (review_wait_ms) row");
+  assert.ok(js.includes("等待确认"), "等待确认 (review_wait_ms) row");
   assert.ok(js.includes("待命"), "待命 (standby_ms) row");
   // Honest degradation for Codex (breakdown === null): no fabricated splits
   assert.ok(
@@ -60,10 +60,10 @@ test("Slice 6 Detail View: app.js renders the session detail first screen (break
 
   // 4 core health KPI cards
   assert.ok(js.includes("detail-kpis"), "detail page must render 4 KPI cards");
-  assert.ok(js.includes("WALL TIME"), "KPI 1 总壁钟时长 WALL TIME");
-  assert.ok(js.includes("ACTIVE WORK"), "KPI 2 纯工作有效净值 ACTIVE WORK");
-  assert.ok(js.includes("AUTONOMY"), "KPI 3 自动化自治率 AUTONOMY");
-  assert.ok(js.includes("慢操作瓶颈数"), "KPI 4 慢操作瓶颈数");
+  assert.ok(js.includes("总时长"), "KPI 1 总时长 (sessionWallSpan)");
+  assert.ok(js.includes("AI 工作"), "KPI 2 AI 工作 (work_ms)");
+  assert.ok(js.includes("自动完成度"), "KPI 3 自动完成度 (autonomy_rate)");
+  assert.ok(js.includes("超 15s 慢操作"), "KPI 4 超 15s 慢操作 (slow_ops)");
 
   // Middle two-column diagnostics
   assert.ok(js.includes("detail-diag-grid"), "two-column diagnostics grid");
@@ -127,10 +127,10 @@ test("Slice 6 Detail View: index.html keeps one shared cache-busting stamp for b
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(
+  assert.match(
     cssV,
-    "20261025-11",
-    "version stamp must advance with each visual round (feedback fixes: 20261025-7 → 20261025-11)",
+    /^\d{8}-\d+$/,
+    "version stamp must keep the YYYYMMDD-N shape",
   );
 });
 

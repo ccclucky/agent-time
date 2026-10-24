@@ -86,12 +86,16 @@ test("Feedback: agentMark badges render inline SVG across stream, TOP3, detail n
 test("Feedback: drawer copy separates the honest prompt slot from the Codex ZDR thinking note", () => {
   const js = read("../public/app.js");
   assert.ok(
-    js.includes("本机记录未包含该轮的用户输入文本"),
+    js.includes("本机记录未包含该轮的提问文本"),
     "a null prompt must show its own honest copy, never the thinking note",
   );
   assert.ok(
-    js.includes("Codex 官方记录对模型思考链加密（ZDR），本机无法解密展示"),
-    "Codex thinking must be explained as ZDR-encrypted, not 未记录",
+    js.includes("Codex 官方记录对模型思考链加密，本机无法解密展示"),
+    "Codex thinking must be explained as encrypted, not 未记录",
+  );
+  assert.ok(
+    !js.includes("（ZDR）"),
+    "the display layer must not expose the English acronym (glossary layer only)",
   );
   const ts = read("../src/store.ts");
   assert.ok(
