@@ -124,7 +124,13 @@ class LineSplitter {
       from = lineEnd;
     }
     if (from < chunk.length) {
-      this.pending.push(chunk.subarray(from));
+      // Copy the carry-over, never hold a view: callers reuse their chunk
+      // buffer across push() calls (lines() re-reads into one 64 KiB buffer),
+      // so a pending view would be overwritten before the next push concats
+      // it and splice stale bytes into the head of the spanning line (first
+      // mass-exposed by Oh-My-Pi's long-line corpus: 31 corrupt lines in one
+      // 2.7 MiB file).
+      this.pending.push(Buffer.from(chunk.subarray(from)));
       this.pendingBytes += chunk.length - from;
       if (this.pendingBytes > LINE_CAP)
         throw new ValidationError("单条记录超过 16 MiB；文件未导入");
@@ -139,6 +145,10 @@ class LineSplitter {
     return tail;
   }
 }
+// lines() yields zero-copy views valid only until the consumer's NEXT line
+// request (the chunk buffer is reused): every consumer must parse each yielded
+// line before requesting the next one; collecting lines for later processing
+// will observe overwritten bytes.
 // Transcript extraction reads one file synchronously per drawer fetch. Unlike
 // the import path it must branch on .zst here too — iterating lines() over a
 // compressed file yields binary garbage that fails JSON parsing line-by-line

@@ -129,8 +129,8 @@ test("Slice 6 Detail View: index.html keeps one shared cache-busting stamp for b
   assert.equal(cssV, jsV, "both assets must share one version stamp");
   assert.equal(
     cssV,
-    "20261025-9",
-    "version stamp must advance with each visual round (feedback fixes: 20261025-7 → 20261025-9)",
+    "20261025-10",
+    "version stamp must advance with each visual round (feedback fixes: 20261025-7 → 20261025-10)",
   );
 });
 

@@ -27,6 +27,7 @@ import {
   readConversationIndex,
   type ConversationIndexEntry,
 } from "./antigravity.js";
+import { parseOmp, extractOmpTranscript } from "./omp.js";
 import {
   parseOpencode,
   extractOpencodeTranscript,
@@ -69,6 +70,7 @@ const TRANSCRIPT_EXTRACTORS: Record<
   Codex: extractCodexTranscript,
   Antigravity: extractAntigravityTranscript,
   "DeepSeek Harness": extractDshTranscript,
+  "Oh-My-Pi": extractOmpTranscript,
 };
 
 // conversation_summaries.db is read once per config root per refresh/import
@@ -108,6 +110,8 @@ function savedAgentAdapter(agent: string | undefined | null): AdapterName {
       return "dsh";
     case "OpenCode":
       return "opencode";
+    case "Oh-My-Pi":
+      return "omp";
     default:
       throw new ValidationError(
         `已登记会话的 Agent 标识无法识别（${agent}）；已跳过该文件，防止误按 Codex 口径分流`,
@@ -588,7 +592,9 @@ ALTER TABLE source_migrated RENAME TO source;`,
             ? [parsePi(p)]
             : adapter === "opencode"
               ? parseOpencode(p)
-              : [parseDsh(p)];
+              : adapter === "omp"
+                ? [parseOmp(p)]
+                : [parseDsh(p)];
     const after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
@@ -1006,7 +1012,9 @@ ALTER TABLE source_migrated RENAME TO source;`,
         elapsed !== null &&
         start !== null &&
         end !== null &&
-        (sessionObj.agent === "Pi" || sessionObj.agent === "DeepSeek Harness")
+        (sessionObj.agent === "Pi" ||
+          sessionObj.agent === "DeepSeek Harness" ||
+          sessionObj.agent === "Oh-My-Pi")
       ) {
         applyTiming(calculatePiTiming(entries, start, end, elapsed));
       } else if (

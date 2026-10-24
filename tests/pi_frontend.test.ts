@@ -54,8 +54,8 @@ test("Pi can be enabled and the preference persists; others still cannot", () =>
   assert.equal(new Directories(store, "/other-home").get("pi").enabled, true);
   dirs.save("pi", null, false);
   assert.equal(dirs.get("pi").enabled, false);
-  // OpenCode and Antigravity are implemented adapters now; OMP stays unsupported.
-  assert.throws(() => dirs.save("omp", null, true), /不能启用/);
+  // Every adapter in NAMES (OpenCode and Oh-My-Pi included) is implemented now.
+  assert.throws(() => dirs.save("nonexistent" as never, null, true));
 });
 
 const piRows = () => [
@@ -152,21 +152,20 @@ test("CLI import accepts --agent pi, advertises it in help and rejects others", 
   } finally {
     store.close();
   }
-  // OpenCode is a valid --agent now; the unsupported "omp" alias must still
-  // be rejected, and the help line must list every implemented adapter.
+  // The help line and the rejection error must list every implemented adapter.
   const bad = cli([
     "import",
     "--agent",
-    "omp",
+    "nonexistent",
     "--db",
     path.join(dir, "cli.sqlite3"),
     p,
   ]);
   assert.notEqual(bad.status, 0);
-  assert.match(bad.stderr, /codex\|claude\|pi\|antigravity\|dsh\|opencode/);
+  assert.match(bad.stderr, /codex\|claude\|pi\|antigravity\|dsh\|opencode\|omp/);
   const help = cli(["--help"]);
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /codex\|claude\|pi\|antigravity\|dsh\|opencode/);
+  assert.match(help.stdout, /codex\|claude\|pi\|antigravity\|dsh\|opencode\|omp/);
 });
 test("Pi is advertised as a supported source with three-state event split", () => {
   const pi = SOURCES.find((s) => s.agent === "Pi")!;
@@ -181,11 +180,11 @@ test("frontend copy includes Pi and drawer renders optional breakdown sections",
     "utf8",
   );
   assert.ok(
-    js.includes("当前接入 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 与 OpenCode"),
+    js.includes("当前接入 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness、OpenCode 与 Oh-My-Pi"),
   );
   assert.ok(!js.includes("当前接入 Codex 和 Claude Code"));
   assert.ok(
-    js.includes("启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness 或 OpenCode 数据目录"),
+    js.includes("启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness、OpenCode 或 Oh-My-Pi 数据目录"),
   );
   assert.ok(js.includes("model_api_breakdown"));
   assert.ok(js.includes("thinking_breakdown"));

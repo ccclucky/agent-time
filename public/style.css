@@ -1102,6 +1102,10 @@ h1#title {
   color: #4D6BFE; /* DeepSeek 品牌蓝 */
 }
 
+.agent-mark-omp {
+  color: #F97316; /* Oh-My-Pi 官方徽标连接器橙 */
+}
+
 .agent-mark-opencode {
   color: #FFB224; /* OpenCode 品牌橙黄 */
 }

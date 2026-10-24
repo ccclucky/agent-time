@@ -36,6 +36,14 @@ export function isSessionFile(agent: string, file: string): boolean {
     // Canonical name only: transcript_full.jsonl is a mirror and would
     // double-count; the basename check implies .jsonl.
     return path.basename(file) === "transcript.jsonl";
+  if (agent === "omp")
+    // Session streams are named [<timestamp>_]<uuid>.jsonl (both shapes in the
+    // real corpus); the sibling <uuid>/ workspace directories hold arbitrary
+    // agent artifacts (DesignerSpec.jsonl etc.) that must never be discovered
+    // as sessions (ADR 0004 rule 1).
+    return /^(?:\d{4}-\d\d-\d\dT[\d-]+Z_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i.test(
+      path.basename(file),
+    );
   return (
     file.endsWith(".jsonl") ||
     (agent === "codex" && file.endsWith(".jsonl.zst")) ||

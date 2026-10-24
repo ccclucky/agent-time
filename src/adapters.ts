@@ -31,9 +31,9 @@ export const SOURCES = [
   },
   {
     agent: "Oh-My-Pi",
-    status: "已调研 · 尚未接入",
-    supported: false,
-    note: "与 Pi 分别适配，需验证完成时间和分支归属。",
+    status: "只读导入 · 事件流三态切分",
+    supported: true,
+    note: "读取 sessions/<编码工作目录>/<uuid>.jsonl 事件流（仅识别 UUID 命名的会话流，工作区产物不导入），按模型响应与工具执行跨度切分纯工作；轮次边界优先文件内用户消息，旧版文件回退 history.db 只读提示（秒级精度，ADR 0004）。审批提示不落盘，等待人审阅保持未知；history.db/agent.db 仅作辅助证据，绝不写库。",
   },
   {
     agent: "Antigravity",
