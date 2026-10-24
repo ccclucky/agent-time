@@ -75,7 +75,7 @@ test("Round4 #4: 自选段按钮存在，激活时直接展示实际区段", () 
   assert.ok(rangeClick.includes('data-action="dates"'));
 });
 
-test("Round4: 版本戳推进到 20261025-11", () => {
+test("Round4: 版本戳推进到 20261025-12", () => {
   const v = html.match(/app\.js\?v=([0-9-]+)/)![1];
-  assert.equal(v, "20261025-11");
+  assert.equal(v, "20261025-12");
 });
