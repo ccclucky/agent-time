@@ -131,8 +131,8 @@ test("Slice 7 Turn Inspector: index.html bumps the cache-busting stamp and adds 
   assert.equal(cssV, jsV, "both assets must share one version stamp");
   assert.equal(
     cssV,
-    "20261025-6",
-    "version stamp must advance with each visual round (feedback fixes: 20261025-5 → 20261025-6)",
+    "20261025-7",
+    "version stamp must advance with each visual round (feedback fixes: 20261025-5 → 20261025-7)",
   );
   assert.ok(
     html.includes("prev-turn") && html.includes("next-turn"),

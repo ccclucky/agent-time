@@ -24,10 +24,13 @@ export const NAMES: Record<Agent, string> = {
   antigravity: "Antigravity",
 };
 // Single source of truth for which filenames count as session files per
-// agent: Codex accepts .jsonl and .jsonl.zst, every other adapter only .jsonl.
-// Shared by the CLI import walk, directory discovery, and Store.importFile so
-// the three can never drift apart.
+// agent: Codex accepts .jsonl and .jsonl.zst, Antigravity only the canonical
+// transcript.jsonl (transcript_full.jsonl is a mirror and would double-count),
+// every other adapter only .jsonl. Shared by the CLI import walk, directory
+// discovery, and Store.importFile so the three can never drift apart.
 export function isSessionFile(agent: string, file: string): boolean {
+  if (agent === "antigravity")
+    return file.endsWith(".jsonl") && path.basename(file) === "transcript.jsonl";
   return (
     file.endsWith(".jsonl") ||
     (agent === "codex" && file.endsWith(".jsonl.zst"))

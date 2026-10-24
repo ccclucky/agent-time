@@ -20,6 +20,12 @@ import {
 } from "./codex.js";
 import { parseClaude, extractClaudeTranscript } from "./claude.js";
 import { parsePi, extractPiTranscript } from "./pi.js";
+import {
+  parseAntigravity,
+  extractAntigravityTranscript,
+  readConversationIndex,
+  type ConversationIndexEntry,
+} from "./antigravity.js";
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
@@ -56,7 +62,12 @@ const TRANSCRIPT_EXTRACTORS: Record<
   "Claude Code": extractClaudeTranscript,
   Pi: extractPiTranscript,
   Codex: extractCodexTranscript,
+  Antigravity: extractAntigravityTranscript,
 };
+
+// conversation_summaries.db is read once per config root per refresh/import
+// call, mirroring the session_index cache above.
+type ConversationIndexCache = Map<string, Map<string, ConversationIndexEntry>>;
 
 function sessionIndex(
   configRoot: string,
@@ -65,6 +76,16 @@ function sessionIndex(
   const key = path.resolve(configRoot);
   let index = cache.get(key);
   if (!index) cache.set(key, (index = readSessionIndex(key)));
+  return index;
+}
+
+function conversationIndex(
+  configRoot: string,
+  cache: ConversationIndexCache,
+): Map<string, ConversationIndexEntry> {
+  const key = path.resolve(configRoot);
+  let index = cache.get(key);
+  if (!index) cache.set(key, (index = readConversationIndex(key)));
   return index;
 }
 
@@ -357,6 +378,7 @@ export class Store {
     configRoot: string | null = null,
     adapter: AdapterName = "codex",
     indexCache: SessionIndexCache = new Map(),
+    convIndexCache: ConversationIndexCache = new Map(),
   ): Promise<{
     events: number;
     issues: string[];
@@ -377,24 +399,42 @@ export class Store {
     const codex = adapter === "codex" ? await parse(p) : null,
       data =
         codex ??
-        (adapter === "claude" ? parseClaude(p) : parsePi(p)),
+        (adapter === "claude"
+          ? parseClaude(p)
+          : adapter === "antigravity"
+            ? parseAntigravity(p)
+            : parsePi(p)),
       after = statSync(p, { bigint: true });
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs)
       throw new ValidationError("文件正在变化，本次保留旧记录；稍后重新同步");
     const sid = hash(p),
       m = data.session;
-    // session_index.jsonl lives under the config root the file was discovered
-    // in (CODEX_HOME-aware); CLI imports without a config root stay untitled.
-    // The title is recomputed on every import, so an entry dropped from the
-    // index clears the stored title rather than leaving a stale one.
+    // Title/projects are single-channel enriched from each harness's global
+    // registry (Codex: session_index.jsonl; Antigravity: conversation_summaries.db;
+    // Claude/Pi: title inside the session file itself). Recomputed on every
+    // import, so a dropped registry entry clears the stored value rather than
+    // leaving a stale one.
+    const conversation =
+      adapter === "antigravity" && configRoot
+        ? conversationIndex(configRoot, convIndexCache).get(m.id.replace(/^antigravity\//, ""))
+        : undefined;
     const title =
       adapter === "codex" && configRoot
         ? (sessionIndex(configRoot, indexCache).get(m.id)?.name ?? "").slice(
             0,
             100,
           ) || null
-        : ((m as { title?: string | null }).title ?? null);
-    const tokens = codex ? codex.tokens : [];
+        : adapter === "antigravity"
+          ? (conversation?.title ?? null)
+          : ((m as { title?: string | null }).title ?? null);
+    const project =
+      adapter === "antigravity" ? (conversation?.project ?? m.project) : m.project;
+    const tokens =
+      codex
+        ? codex.tokens
+        : adapter === "antigravity"
+          ? ((data as { tokens?: ({ turn_id: string } & TokenUsage)[] }).tokens ?? [])
+          : [];
     this.transaction(() => {
       this.db
         .prepare(
@@ -404,7 +444,7 @@ export class Store {
           sid,
           p,
           m.id,
-          m.project,
+          project,
           m.client,
           JSON.stringify(data.issues),
           configRoot,
@@ -501,6 +541,7 @@ export class Store {
     // One shared index cache for the whole refresh: every config root's
     // session_index.jsonl is read and parsed at most once below.
     const indexCache: SessionIndexCache = new Map();
+    const convIndexCache: ConversationIndexCache = new Map();
     let ok = 0,
       failed = 0,
       excluded = 0,
@@ -529,8 +570,11 @@ export class Store {
               ? "claude"
               : savedAgent === "Pi"
                 ? "pi"
-                : "codex"),
+                : savedAgent === "Antigravity"
+                  ? "antigravity"
+                  : "codex"),
           indexCache,
+          convIndexCache,
         );
         ok++;
       } catch (error) {
@@ -771,7 +815,9 @@ export class Store {
         elapsed !== null &&
         start !== null &&
         end !== null &&
-        (sessionObj.agent === "Claude Code" || sessionObj.agent === "Codex")
+        (sessionObj.agent === "Claude Code" ||
+          sessionObj.agent === "Codex" ||
+          sessionObj.agent === "Antigravity")
       ) {
         applyTiming(calculateEventTiming(entries, start, end, elapsed));
       } else if (

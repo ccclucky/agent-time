@@ -177,9 +177,9 @@ test("frontend copy includes Pi and drawer renders optional breakdown sections",
     new URL("../public/app.js", import.meta.url).pathname,
     "utf8",
   );
-  assert.ok(js.includes("当前接入 Codex、Claude Code 与 Pi"));
+  assert.ok(js.includes("当前接入 Codex、Claude Code、Pi 与 Antigravity"));
   assert.ok(!js.includes("当前接入 Codex 和 Claude Code"));
-  assert.ok(js.includes("启用 Codex、Claude Code 或 Pi 数据目录"));
+  assert.ok(js.includes("启用 Codex、Claude Code、Pi 或 Antigravity 数据目录"));
   assert.ok(js.includes("model_api_breakdown"));
   assert.ok(js.includes("thinking_breakdown"));
   // 防御性访问：字段缺失时不渲染该小节（沿用 breakdown?. 可选链风格）

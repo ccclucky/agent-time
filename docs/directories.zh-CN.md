@@ -13,7 +13,7 @@
 | Oh-My-Pi | `~/.omp/agent` | `sessions` 子目录；命名 profile 和迁移后的 XDG 目录另行解析 | Oh-My-Pi `DirResolver`、`getSessionsDir` |
 | Pi | `~/.pi/agent` | `sessions/<编码后的工作目录>/*.jsonl` | Pi `getAgentDir`、`getDefaultSessionDirPath` |
 | OpenCode | `~/.local/share/opencode` | 该数据目录内的 SQLite 会话数据库；稳定渠道通常为 `opencode.db` | OpenCode `global-roots.ts` 和 `database-path.ts` |
-| Antigravity | 留空 | 未取得已验证的 IDE 会话位置规则 | 不借用 CLI 或其他产品的配置位置 |
+| Antigravity | `~/.gemini/antigravity` | `brain/<会话 ID>/.system_generated/logs/transcript.jsonl` | 2026-10 本机实测验证；上游未公开目录规范，evidence 留空 |
 
 **这些是核实过的目录规则，不是对用户电脑安装状态的断言。** AgentTime 无法从云环境知道用户电脑上另一个进程的启动参数。目录存在与实际拥有可读会话也分别判断，不把“目录存在”写成“已成功接入”。
 
@@ -55,6 +55,6 @@
 
 [cc-switch 的 DirectorySettings.tsx](https://github.com/farion1231/cc-switch/blob/c776fd0ebfe35d769b5909b86bdfa1ccdf089988/src/components/settings/DirectorySettings.tsx) 仅作为“按工具编辑、展示展开位置、恢复默认”的交互参考。实际会话位置以各工具的一手实现为依据。
 
-cc-switch 的 `agy_config.rs` 面向 Antigravity CLI，不能证明 Antigravity IDE 的会话目录或格式；本次未据此填入 IDE 默认位置。
+cc-switch 的 `agy_config.rs` 面向 Antigravity CLI，不能证明 Antigravity IDE 的会话目录或格式；Antigravity 默认位置最终以 2026-10 本机真实语料实测为准（`brain/<会话 ID>/.system_generated/logs/transcript.jsonl`），上游无公开规范，故 evidence 保持留空。
 
 目前 Codex 和 Claude Code 具备日志导入能力；Claude 使用消息记录跨度口径，与 Codex 执行区间不同。其他工具的路径规则核实不等于已实现适配器，也不代表已经读取过用户本机的真实数据。已有自定义路径不会因为默认规则修正而被静默覆盖。

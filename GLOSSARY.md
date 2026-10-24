@@ -52,3 +52,11 @@ _Avoid_: 导入会话, 迁移轮次
 基于源记录中的会话级累计 Token 快照，按"轮末快照减去前轮末快照"差分得到的轮次用量；各轮差分之和精确等于会话最后快照。缺失快照时不计入，绝不以 0 冒充。
 _Avoid_: Token 求和, 单次响应用量
 
+
+**ask_question 阻断 (Antigravity Review Wait)**:
+Antigravity 以 `ask_question` 工具调用向用户提问，其结果记录在用户作答时才落盘；调用到结果记录的区间即为等待人审阅，完整落在轮次内，与待命时长不重复计量。
+_Avoid_: 提问耗时, 对话框时间
+
+**后台任务完成标记 (Background Task Completion Receipt)**:
+Antigravity 把长命令转为进程内后台任务（task id 形如 `<会话 ID>/task-N`），后续以轮询与 `SYSTEM_MESSAGE` 完成回执落盘；工具耗时按完成回执时刻结算，未完成的不计（不编造）。`invoke_subagent` 派生按同机制打 `agent_id` 标供下钻。
+_Avoid_: 后台耗时估算, 子任务时长

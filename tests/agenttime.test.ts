@@ -306,7 +306,9 @@ test("default directories are metadata-only, disabled and evidence-backed", asyn
   assert(list.every((i) => !i.enabled));
   assert.equal(store.sessions().length, 0);
   assert.equal(list.find((i) => i.agent === "omp")!.path, "~/.omp/agent");
-  assert.equal(list.find((i) => i.agent === "antigravity")!.path, null);
+  // Antigravity 位置已在本机实测验证（brain/<id>/.system_generated/logs），
+  // 但上游无公开目录规范，evidence_url 保持留空（诚实口径，不伪造出处）。
+  assert.equal(list.find((i) => i.agent === "antigravity")!.path, "~/.gemini/antigravity");
   assert(
     list
       .filter((i) => i.agent !== "antigravity")
