@@ -75,7 +75,9 @@ test("Round4 #4: 自选段按钮存在，激活时直接展示实际区段", () 
   assert.ok(rangeClick.includes('data-action="dates"'));
 });
 
-test("Round4: 版本戳推进到 20261025-11", () => {
-  const v = html.match(/app\.js\?v=([0-9-]+)/)![1];
-  assert.equal(v, "20261025-11");
+test("Round4: 两个静态资源的版本戳保持一致且可递增", () => {
+  const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
+  const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
+  assert.equal(cssV, jsV);
+  assert.match(jsV, /^\d{8}-\d+$/);
 });
