@@ -48,7 +48,7 @@ export function extractReleaseNotes(body) {
  *
  * - no draft                        → create one for the target tag
  * - draft already on target tag     → append
- * - draft on a published tag        → retag onto the next patch, then append
+ * - draft on a published tag        → retag onto the next *unpublished* patch
  * - draft on some other open tag    → append (respect a manually chosen tag)
  */
 export function planDraft({ releases, packageVersion }) {
@@ -57,8 +57,11 @@ export function planDraft({ releases, packageVersion }) {
   );
   const draft = releases.find((release) => release.draft) ?? null;
 
+  // main 的版本追平常滞后于已发布 tag（可连续多个补丁，例如 v0.2.1 与 v0.2.2
+  // 均已发布而 main 仍是 0.2.1）。只顺延一次会把草稿再次挂到已发布 tag 上，
+  // 即 #44 的原样复现，因此循环顺延到第一个未发布的补丁位。
   let targetTag = `v${packageVersion}`;
-  if (publishedTags.has(targetTag)) targetTag = `v${nextPatch(packageVersion)}`;
+  while (publishedTags.has(targetTag)) targetTag = `v${nextPatch(targetTag.slice(1))}`;
 
   if (!draft) return { action: "create", tag: targetTag, releaseId: null };
   if (draft.tag_name === targetTag)
@@ -115,6 +118,18 @@ export async function collectNotes({ repo, sha, payload }) {
   return [];
 }
 
+/** Paginate through /releases so publishedTags is complete, not a 30-item window. */
+async function listAllReleases(repo) {
+  const releases = [];
+  // 上限 10 页（1000 条）防御性收口；正常仓库远达不到。
+  for (let page = 1; page <= 10; page++) {
+    const batch = await api(`/repos/${repo}/releases?per_page=100&page=${page}`);
+    releases.push(...batch);
+    if (batch.length < 100) return releases;
+  }
+  return releases;
+}
+
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
   const repo = process.env.GITHUB_REPOSITORY;
@@ -132,7 +147,7 @@ async function main() {
   }
   const newContent = notes.join("\n");
 
-  const releases = await api(`/repos/${repo}/releases?per_page=30`);
+  const releases = await listAllReleases(repo);
   const plan = planDraft({ releases, packageVersion });
 
   console.log(`目标 tag：${plan.tag}（动作：${plan.action}）`);

@@ -27,6 +27,24 @@ test("版本号不来自硬编码字符串", () => {
   );
 });
 
+// URL.pathname 保留百分号编码：中文/空格路径（如 /Users/张三/…）下 spawn 会按
+// 字面路径找文件直接 MODULE_NOT_FOUND。CI 路径是纯 ASCII 所以永远测不出来，
+// 必须从源头禁掉 .pathname 派生进程路径的写法。
+test("check-cli 派生 CLI 路径必须经 fileURLToPath 解码", () => {
+  const source = readFileSync(
+    new URL("../scripts/check-cli.mjs", import.meta.url),
+    "utf8",
+  );
+  assert(
+    source.includes("fileURLToPath"),
+    "check-cli.mjs 必须用 fileURLToPath 而非 URL.pathname",
+  );
+  assert(
+    !/\.pathname/.test(source),
+    "check-cli.mjs 不得用 .pathname 派生子进程路径（percent-编码路径下必挂）",
+  );
+});
+
 test("SQLite 实验警告被过滤，其余警告照常上抛", () => {
   const seen: string[] = [];
   const original = process.emitWarning;

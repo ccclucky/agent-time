@@ -68,6 +68,25 @@ test("草稿指向已发布的 tag 时改挂到下一个补丁版本", () => {
   assert.equal(plan.tag, "v0.2.2");
 });
 
+// main 的版本追平滞后于已发布 tag 是常态（v0.2.1 追平就是发版后补的 PR）。
+// 只顺延一位会在「v0.2.1 与 v0.2.2 均已发布、main 仍是 0.2.1」时把草稿再次
+// 挂到已发布的 v0.2.2 上——#44 的原样复现。必须连跳到第一个未发布的补丁位。
+test("连续多个补丁 tag 均已发布时连跳到第一个未发布位", () => {
+  const plan = planDraft({
+    releases: [release("v0.2.1", true), release("v0.2.2"), release("v0.2.1"), release("v0.2.0")],
+    packageVersion: "0.2.1",
+  });
+  assert.equal(plan.action, "retag");
+  assert.equal(plan.tag, "v0.2.3");
+
+  const created = planDraft({
+    releases: [release("v0.2.2"), release("v0.2.1")],
+    packageVersion: "0.2.1",
+  });
+  assert.equal(created.action, "create");
+  assert.equal(created.tag, "v0.2.3");
+});
+
 test("草稿挂着人工指定的其他 tag 时尊重原 tag", () => {
   const plan = planDraft({
     releases: [release("v0.3.0", true), release("v0.2.1")],

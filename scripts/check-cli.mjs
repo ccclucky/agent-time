@@ -14,10 +14,13 @@
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
 const pkg = JSON.parse(readFileSync(new URL("package.json", root), "utf8"));
-const cli = new URL("dist/cli.js", root).pathname;
+// URL 的 pathname 属性保留百分号编码（中文/空格路径 → %E4%B8%AD…），spawn
+// 会按字面路径找文件直接 MODULE_NOT_FOUND；必须经 fileURLToPath 解码。
+const cli = fileURLToPath(new URL("dist/cli.js", root));
 
 function run(args) {
   const result = spawnSync(process.execPath, [cli, ...args], {
