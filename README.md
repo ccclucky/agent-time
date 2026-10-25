@@ -49,14 +49,14 @@ AgentTime 是一个**本地优先**的 Agent 时间账本：把 Codex、Claude C
 npx @ccclucky/agent-time
 ```
 
-打开 `http://127.0.0.1:8765`（仅绑定本机），在「配置与接入」页启用你的 Agent 数据目录，点「同步记录」即可。也可以全局安装：
+启动后会自动打开 `http://127.0.0.1:8765`（仅绑定本机，`--no-open` 可关闭），在「配置与接入」页启用你的 Agent 数据目录，点「同步记录」即可。也可以全局安装：
 
 ```sh
 npm install -g @ccclucky/agent-time
 agent-time        # 或无连字符别名 agenttime
 ```
 
-要求 **Node.js ≥ 22.15**（内建 SQLite 与 zstd，无需编译原生模块）。CLI 还支持 `--port`、`--db` 与 `import --agent <adapter> <路径>` 单独导入，见 `agent-time --help`。
+要求 **Node.js ≥ 22.15**（内建 SQLite 与 zstd，无需编译原生模块）。CLI 还支持 `--port`、`--db`、`--no-open` 与 `import --agent <adapter> <路径>` 单独导入，见 `agent-time --help`。
 
 ## 支持的 Harness
 
@@ -118,7 +118,8 @@ agent-time        # 或无连字符别名 agenttime
 ```sh
 git clone https://github.com/ccclucky/agent-time && cd agent-time
 npm ci
-npm test          # 244 条测试
+npm test          # 全量测试（node:test，无外部测试框架）
+npm run check     # 类型检查
 npm run dev       # 从源码启动
 ```
 
