@@ -145,34 +145,37 @@ test("Slice 10 UI language: default layer has no English annotations (definition
   }
 });
 
-test("Slice 10 UI language: time-flow funnel reads 记录总时长 → 扣除等待确认 → 扣除待命 → 剩下 AI 工作", () => {
+test("Slice 10 UI language: 时间流向 renders one partition bar (AI 工作 → 等待确认 → 待命) with an honest 0% legend (#38)", () => {
   const source = app();
   const body = sliceFunction(source, "function funnel()");
   assert.ok(
     body.includes("时间流向"),
     "funnel section title must be 时间流向",
   );
-  // Stages 2/3 derive their noun from the shared dimension table, so resolve
-  // dimensionTitle("wait"|"standby") before reading the rendered labels.
-  const byKey = Object.fromEntries(
-    dimensionMeta(source).entries.map((e) => [e.key, e.label]),
-  );
-  const resolved = body.replace(
-    /\$\{h\(dimensionTitle\("([^"]+)"\)\)\}/g,
-    (_m, key) => byKey[key] ?? `未知维度(${key})`,
-  );
-  const labels = [...resolved.matchAll(/<span>\d\.\s*([^<]+)<\/span>/g)].map(
-    (m) => m[1].trim(),
-  );
-  assert.deepEqual(
-    labels,
-    ["记录总时长", "扣除等待确认", "扣除待命", "剩下 AI 工作"],
-    "the four stages must use the authoritative display words in order",
-  );
+  // Caption must state the composite total in display words, not require math.
   assert.ok(
-    body.includes("100% 记录总时长"),
-    "stage 1 inside fill must read 100% 记录总时长",
+    body.includes("记录总时长") && body.includes("（AI 工作 + 等待确认 + 待命）"),
+    "caption must read 记录总时长 …（AI 工作 + 等待确认 + 待命）",
   );
+  // One bar, three segments in the canonical formula order.
+  const segColors = [...body.matchAll(/renderFlowSegment\((?:[^,]+,\s*)?"(var\(--state-[a-z]+\))"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    segColors,
+    ["var(--state-work)", "var(--state-wait)", "var(--state-standby)"],
+    "segments must render AI 工作 → 等待确认 → 待命 in formula order",
+  );
+  // wait/standby labels derive from the shared dimension table, not literals.
+  assert.ok(body.includes('h(dimensionTitle("wait"))'), "wait label must derive from dimensionTitle");
+  assert.ok(body.includes('h(dimensionTitle("standby"))'), "standby label must derive from dimensionTitle");
+  // Zero-width segments are disclosed honestly in the legend, never dropped.
+  assert.ok(
+    body.includes("0.0%（本时段无发生）"),
+    "legend must disclose 0% segments as 本时段无发生",
+  );
+  // The deducted-funnel shape is gone from the default layer.
+  assert.equal(body.includes("funnel-bar-row"), false, "four-row funnel must be retired");
+  assert.equal(body.includes("100% 记录总时长"), false, "stage-1 full-width row must be retired");
+  assert.equal(body.includes("扣除"), false, "扣除 wording must be retired with the funnel");
 });
 
 test("Slice 10 UI language: one truth source drives the four dimension labels everywhere", () => {
@@ -285,30 +288,30 @@ test("Slice 10 UI language: tooltips expose the glossary layer on stats, funnel,
   );
 
   const funnel = sliceFunction(source, "function funnel()");
-  const funnelRows = [...funnel.matchAll(/<div class="funnel-bar-row"/g)].length;
-  assert.equal(funnelRows, 4, "each funnel stage row needs a 口径 tooltip");
-  // Stage 1 (composite) and stage 4 (AI work = model + tool) stay explicit.
+  // Caption (composite) and AI-work segment stay explicit literals.
   assert.match(
     funnel,
-    /<div class="funnel-bar-row" title="口径：记录总时长 = AI 工作 work_ms/,
-    "stage 1 tooltip must name the composite breakdown fields",
+    /class="flow-caption" title="口径：记录总时长 = AI 工作 work_ms/,
+    "caption tooltip must name the composite breakdown fields",
   );
-  assert.match(
-    funnel,
-    /<div class="funnel-bar-row" title="口径：AI 工作 work_ms = 模型推理 \+ 本地工具"/,
-    "stage 4 tooltip must name the AI work components",
+  assert.ok(
+    funnel.includes('"口径：AI 工作 work_ms = 模型推理 + 本地工具"'),
+    "AI 工作 segment tooltip must name the model + tool components",
   );
-  // Stages 2/3 must derive their tooltip from the shared dimension table
-  // instead of re-copying the hint strings.
+  // wait/standby tooltips must derive from the shared dimension table.
   for (const key of ["wait", "standby"]) {
-    assert.match(
-      funnel,
-      new RegExp(
-        `<div class="funnel-bar-row" title="\\$\\{h\\(dimensionHint\\("${key}"\\)\\)\\}"`,
-      ),
-      `stage tooltip must derive from dimensionHint("${key}")`,
+    assert.ok(
+      funnel.includes(`dimensionHint("${key}")`),
+      `segment tooltip must derive from dimensionHint("${key}")`,
     );
   }
+  // The segment helper escapes whatever tooltip it receives.
+  const segHelper = sliceFunction(source, "function renderFlowSegment(");
+  assert.match(
+    segHelper,
+    /title="\$\{h\(tooltip\)\}"/,
+    "renderFlowSegment must h()-escape the tooltip it renders",
+  );
 
   const card = sliceFunction(source, "function viewportBreakdownCard(");
   assert.match(

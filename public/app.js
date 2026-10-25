@@ -397,26 +397,12 @@ function stats() {
 // 严格对齐 GLOSSARY.md：严禁粗暴相减，真实数据核算
 // ========================================================
 
-function renderFunnelStageTrack(pct, color, fullText, isGlow = false) {
-  if (pct <= 0) {
-    return `
-      <div class="funnel-fill" style="width: 0%; padding:0; min-width:0;"></div>
-      <span class="funnel-outside-hint">0.0%（本阶段无扣除）</span>
-    `;
-  }
-  if (pct < 25) {
-    return `
-      <div class="funnel-fill" style="width: ${pct}%; background: ${color}; padding: 0; min-width:0; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}"></div>
-      <span class="funnel-outside-label" style="color: ${color};">
-        ${fullText}
-      </span>
-    `;
-  }
+// 占比条分段（#38 方案 A）：宽度不足 12% 时段内不写字（图例兜底），0% 段不渲染
+function renderFlowSegment(pct, colorVar, label, tooltip, isGlow = false) {
+  if (Number(pct) <= 0) return "";
+  const inside = Number(pct) >= 12 ? `<span class="flow-seg-text">${label} ${pct}%</span>` : "";
   return `
-    <div class="funnel-fill" style="width: ${pct}%; background: ${color}; padding: 0 12px; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}">
-      <span class="funnel-text-inside">${fullText}</span>
-    </div>
-  `;
+      <div class="flow-seg" style="width: ${pct}%; background: ${colorVar}; ${isGlow ? "box-shadow: 0 0 10px rgba(204,120,92,0.35);" : ""}" title="${h(tooltip)}">${inside}</div>`;
 }
 
 function funnel() {
@@ -457,6 +443,13 @@ function funnel() {
   const standbyPct = ((standby / grossTotal) * 100).toFixed(1);
   const workPct = ((work / grossTotal) * 100).toFixed(1);
 
+  // 图例兜底：0% 段与窄段装不进条内的信息，全部在这里诚实披露
+  const legendItem = (colorVar, name, ms, pct) => `
+        <span class="flow-legend-item">
+          <i style="background:${colorVar};"></i>${name} <strong>${fmt(ms)}</strong>
+          <span class="flow-legend-pct">${Number(pct) <= 0 ? "0.0%（本时段无发生）" : `${pct}%`}</span>
+        </span>`;
+
   return `
   <section class="funnel-card">
     <div class="section-header">
@@ -467,56 +460,18 @@ function funnel() {
       <span class="funnel-concurrency-pill">${concurrency}x 并发效能倍率</span>
     </div>
 
-    <div class="funnel-stages">
-      <!-- 阶段 1：记录总时长基准 -->
-      <div class="funnel-bar-row" title="口径：记录总时长 = AI 工作 work_ms + 等待确认 review_wait_ms + 待命 standby_ms">
-        <div class="stage-label">
-          <span style="color:#7A7268;">●</span>
-          <span>1. 记录总时长</span>
-        </div>
-        <div class="funnel-track">
-          <div class="funnel-fill" style="width: 100%; background: #9E968B; padding: 0 12px;">
-            <span class="funnel-text-inside">100% 记录总时长</span>
-          </div>
-        </div>
-        <div class="stage-val">${fmt(grossTotal)}</div>
-      </div>
-
-      <!-- 阶段 2：扣除等待确认（review_wait_ms） -->
-      <div class="funnel-bar-row" title="${h(dimensionHint("wait"))}">
-        <div class="stage-label">
-          <span style="color:var(--state-wait);">●</span>
-          <span>2. 扣除${h(dimensionTitle("wait"))}</span>
-        </div>
-        <div class="funnel-track">
-          ${renderFunnelStageTrack(waitPct, "var(--state-wait)", `-${waitPct}% 工具权限审批与方案决策`)}
-        </div>
-        <div class="stage-val">-${fmt(wait)}</div>
-      </div>
-
-      <!-- 阶段 3：扣除待命（standby_ms） -->
-      <div class="funnel-bar-row" title="${h(dimensionHint("standby"))}">
-        <div class="stage-label">
-          <span style="color:var(--state-idle);">●</span>
-          <span>3. 扣除${h(dimensionTitle("standby"))}</span>
-        </div>
-        <div class="funnel-track">
-          ${renderFunnelStageTrack(standbyPct, "#7A7268", `-${standbyPct}% 答复完毕至人类再次唤醒`)}
-        </div>
-        <div class="stage-val">-${fmt(standby)}</div>
-      </div>
-
-      <!-- 阶段 4：剩下 AI 工作（work_ms） -->
-      <div class="funnel-bar-row" title="口径：AI 工作 work_ms = 模型推理 + 本地工具">
-        <div class="stage-label">
-          <span style="color:var(--state-work);">●</span>
-          <span>4. 剩下 AI 工作</span>
-        </div>
-        <div class="funnel-track">
-          ${renderFunnelStageTrack(workPct, "var(--state-work)", `${workPct}% 模型推理 + 本地工具`, true)}
-        </div>
-        <div class="stage-val" style="color:var(--state-work);">${fmt(work)}</div>
-      </div>
+    <div class="flow-caption" title="口径：记录总时长 = AI 工作 work_ms + 等待确认 review_wait_ms + 待命 standby_ms">
+      记录总时长 <strong>${fmt(grossTotal)}</strong>（AI 工作 + 等待确认 + 待命）
+    </div>
+    <div class="flow-bar" role="img" aria-label="三态占比：AI 工作 ${workPct}%、等待确认 ${waitPct}%、待命 ${standbyPct}%">
+      ${renderFlowSegment(workPct, "var(--state-work)", "AI 工作", "口径：AI 工作 work_ms = 模型推理 + 本地工具", true)}
+      ${renderFlowSegment(waitPct, "var(--state-wait)", h(dimensionTitle("wait")), dimensionHint("wait"))}
+      ${renderFlowSegment(standbyPct, "var(--state-standby)", h(dimensionTitle("standby")), dimensionHint("standby"))}
+    </div>
+    <div class="flow-legend">
+${legendItem("var(--state-work)", "AI 工作", work, workPct)}
+${legendItem("var(--state-wait)", h(dimensionTitle("wait")), wait, waitPct)}
+${legendItem("var(--state-standby)", h(dimensionTitle("standby")), standby, standbyPct)}
     </div>
   </section>`;
 }
