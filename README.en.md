@@ -21,7 +21,7 @@ AgentTime is a **local-first** time ledger for AI coding agents. It imports sess
 
 How much did your agents actually work today — and how much went into waiting for your approval? Open the page and see.
 
-![AgentTime overview: the time-flow funnel and full timeline](docs/assets/hero-overview.png)
+![AgentTime overview: the time-flow bar and full timeline](docs/assets/hero-overview.png)
 
 ## Why
 
