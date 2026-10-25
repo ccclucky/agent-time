@@ -11,6 +11,22 @@ import { report } from "./metrics.js";
 import { SOURCES } from "./adapters.js";
 import { ValidationError } from "./types.js";
 const WEB = new URL("../public/", import.meta.url);
+// 静态资源白名单：只暴露下面这几个文件，新增资源必须同时登记在这里。
+// logo 从 1024px/662KB 的 jpg 换成 136px/26KB 的 png —— 侧栏显示位只有 44px。
+const STATIC: Record<string, string> = {
+  "/": "index.html",
+  "/index.html": "index.html",
+  "/app.js": "app.js",
+  "/style.css": "style.css",
+  "/logo.png": "logo.png",
+  "/favicon.png": "favicon.png",
+};
+const MIME: Record<string, string> = {
+  html: "text/html; charset=utf-8",
+  js: "text/javascript; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  png: "image/png",
+};
 export function makeServer(store: Store, directories = new Directories(store)) {
   const respond = (
     res: ServerResponse,
@@ -83,28 +99,13 @@ export function makeServer(store: Store, directories = new Directories(store)) {
               return;
             }
             json(res, transcript);
-          } else if (
-            [
-              "/",
-              "/index.html",
-              "/app.js",
-              "/style.css",
-              "/logo.jpg",
-            ].includes(url.pathname)
-          ) {
-            const file =
-                url.pathname === "/" ? "index.html" : url.pathname.slice(1),
-              mime = file.endsWith(".html")
-                ? "text/html"
-                : file.endsWith(".js")
-                  ? "text/javascript"
-                  : file.endsWith(".css")
-                    ? "text/css"
-                    : "image/jpeg";
+          } else if (STATIC[url.pathname]) {
+            const file = STATIC[url.pathname],
+              ext = file.slice(file.lastIndexOf(".") + 1);
             respond(
               res,
               readFileSync(new URL(file, WEB)),
-              file.endsWith(".jpg") ? mime : mime + "; charset=utf-8",
+              MIME[ext] ?? "application/octet-stream",
             );
           } else json(res, { error: "未找到页面" }, 404);
         } else if (req.method === "POST") {

@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { readdirSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
-import { Store } from "./store.js";
-import { makeServer } from "./server.js";
+import { silenceExperimentalSqliteWarning } from "./warnings.js";
+import { packageVersion } from "./version.js";
 import { isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
 import { ADAPTERS, ValidationError, type AdapterName, isAdapterName } from "./types.js";
+
+// Must run before the sqlite-backed modules are evaluated: node:sqlite emits
+// its ExperimentalWarning during module evaluation, not on first query.
+silenceExperimentalSqliteWarning();
+const { Store } = await import("./store.js");
+const { makeServer } = await import("./server.js");
+
 export function defaultDb() {
   return path.join(
     process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
@@ -15,12 +23,32 @@ export function defaultDb() {
     "agenttime.sqlite3",
   );
 }
+
+/** Best-effort: opening a browser is a convenience, never a failure mode. */
+function openBrowser(url: string) {
+  const [command, args] =
+    process.platform === "darwin"
+      ? ["open", [url]]
+      : process.platform === "win32"
+        ? ["cmd", ["/c", "start", "", url]]
+        : ["xdg-open", [url]];
+  try {
+    const child = spawn(command, args, { stdio: "ignore", detached: true });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // 无桌面环境、缺少 xdg-open 等情况一律静默降级为「手动打开打印出的地址」
+  }
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
     options: {
       db: { type: "string" },
       port: { type: "string" },
       agent: { type: "string" },
+      open: { type: "boolean" },
+      "no-open": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -28,14 +56,16 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH]\nagent-time import --agent " +
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH] [--no-open]\nagent-time import --agent " +
         ADAPTERS.join("|") +
-        " FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，dsh 支持 .jsonl 与 .jsonl.zstd，claude、pi 与 omp（<uuid>.jsonl）支持 .jsonl，antigravity 支持 transcript.jsonl，opencode 支持会话数据库 .db）\n默认启动本地网页；在配置页启用接入后再同步。",
+        " FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n" +
+        "serve 在终端可交互且非 CI 环境下会自动打开浏览器；--no-open 关闭，--open 强制打开。\n" +
+        "（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，dsh 支持 .jsonl 与 .jsonl.zstd，claude、pi 与 omp（<uuid>.jsonl）支持 .jsonl，antigravity 支持 transcript.jsonl，opencode 支持会话数据库 .db）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
   }
   if (values.version) {
-    console.log("0.1.0");
+    console.log(packageVersion());
     return;
   }
   const command = positionals[0] ?? "serve";
@@ -63,9 +93,21 @@ async function main() {
     });
     server.listen(port, "127.0.0.1", () => {
       const addr = server.address();
+      const url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : port}`;
+      // 自动打开仅限「人在终端前」：CI 与管道输出环境（如冒烟脚本）一律跳过，
+      // 否则会在无人值守的机器上拉起浏览器进程。
+      const shouldOpen = values.open
+        ? true
+        : values["no-open"]
+          ? false
+          : Boolean(process.stdout.isTTY) && !process.env.CI;
       console.log(
-        `AgentTime 已启动：http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : port}\n仅绑定本机地址，无遥测。Ctrl+C 停止。`,
+        `AgentTime 已启动：${url}\n仅绑定本机地址，无遥测。Ctrl+C 停止。`,
       );
+      if (shouldOpen) {
+        openBrowser(url);
+        console.log("已尝试在默认浏览器打开；未弹出请手动访问上面的地址。");
+      }
     });
     const stop = () =>
       server.close(() => {

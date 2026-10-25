@@ -55,6 +55,13 @@ jobs:
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
 
+      # 版本号是发布链路最容易漂移的一环：在版本对齐之后、打包之前构建，
+      # 断言 dist 的 --version 等于即将发布的版本，且首跑 stderr 干净。
+      - name: Build & CLI guard
+        run: |
+          npm run build
+          node scripts/check-cli.mjs
+
       - name: Build package & pre-publish smoke test
         id: pack
         run: |

@@ -49,14 +49,14 @@ Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion
 npx @ccclucky/agent-time
 ```
 
-Open `http://127.0.0.1:8765` (bound to localhost only), enable your agents' data directories on the sources page, and hit "Sync records". Or install globally:
+It opens `http://127.0.0.1:8765` for you (bound to localhost only; `--no-open` disables that), enable your agents' data directories on the sources page, and hit "Sync records". Or install globally:
 
 ```sh
 npm install -g @ccclucky/agent-time
 agent-time        # dash-less alias: agenttime
 ```
 
-Requires **Node.js ≥ 22.15** (built-in SQLite and zstd; no native builds). The CLI also supports `--port`, `--db`, and standalone `import --agent <adapter> <path>` — see `agent-time --help`.
+Requires **Node.js ≥ 22.15** (built-in SQLite and zstd; no native builds). The CLI also supports `--port`, `--db`, `--no-open`, and standalone `import --agent <adapter> <path>` — see `agent-time --help`.
 
 ## Supported harnesses
 
@@ -116,7 +116,8 @@ Re-imports are idempotent; files that change mid-sync keep their previous snapsh
 ```sh
 git clone https://github.com/ccclucky/agent-time && cd agent-time
 npm ci
-npm test          # 244 tests
+npm test          # full suite (node:test, no extra test framework)
+npm run check     # type check
 npm run dev       # run from source
 ```
 

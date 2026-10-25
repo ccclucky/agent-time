@@ -46,13 +46,22 @@ test("Slice 4 Frontend: Static assets serve official logo, modern tokens, and 5 
     assert(html.includes("AgentTime"), "Index page must contain AgentTime brand");
     assert(html.includes("sidebar"), "Index page must contain 68px sidebar");
     assert(html.includes("detailDrawer"), "Index page must contain two-stage detail drawer");
-    assert(html.includes("/logo.jpg"), "Index page must reference /logo.jpg");
+    assert(html.includes("/logo.png"), "Index page must reference /logo.png");
+    assert(html.includes("/favicon.png"), "Index page must declare a favicon");
 
-    // 2. 验证 /logo.jpg 官方品牌标识静态服务
-    const logoRes = await request(port, "/logo.jpg");
-    assert.equal(logoRes.status, 200, "GET /logo.jpg must return 200");
-    assert.equal(logoRes.headers["content-type"], "image/jpeg", "Logo must be image/jpeg");
+    // 2. 验证品牌标识静态服务：侧栏显示位只有 44px，136px PNG 已足够。
+    //    1024px/662KB 的 jpg 曾占掉 npm 包体积的 80%，这里加体积上限防回归。
+    const logoRes = await request(port, "/logo.png");
+    assert.equal(logoRes.status, 200, "GET /logo.png must return 200");
+    assert.equal(logoRes.headers["content-type"], "image/png", "Logo must be image/png");
     assert(logoRes.body.length > 1000, "Logo image must have valid binary length");
+    assert(
+      logoRes.body.length < 40_000,
+      `Logo must stay small (got ${logoRes.body.length} bytes); 1024px source cost 662KB`,
+    );
+    const faviconRes = await request(port, "/favicon.png");
+    assert.equal(faviconRes.status, 200, "GET /favicon.png must return 200");
+    assert.equal(faviconRes.headers["content-type"], "image/png");
 
     // 3. 验证 /style.css 视觉令牌与五大核心交互样式
     const cssRes = await request(port, "/style.css");
