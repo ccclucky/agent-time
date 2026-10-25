@@ -1,11 +1,16 @@
 // Test the actual distributable through npm exec, outside the repository.
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
+// 默认 tarball 名跟随 package.json 版本派生：无参调用（test.yml）依赖它，
+// 硬编码版本号会在每次发版 bump 后以 ENOENT 形式爆雷。
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
 const archive = path.resolve(
-  process.argv[2] ?? "ccclucky-agent-time-0.1.0.tgz",
+  process.argv[2] ?? `ccclucky-agent-time-${pkg.version}.tgz`,
 );
 const dir = mkdtempSync(path.join(tmpdir(), "agenttime-package-"));
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
