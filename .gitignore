@@ -9,3 +9,5 @@ node_modules/
 dist/
 *.tgz
 agenttime-diagnostics*/
+# AGENTS.md 约定的任务 worktree 目录，不应污染主工作区
+.worktree/
