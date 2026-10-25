@@ -22,5 +22,10 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: node --check public/app.js
+      # Builds dist and asserts the two things a first-run user sees:
+      # `--version` equals package.json, and stderr is free of the node:sqlite
+      # ExperimentalWarning. Regression gate for src/version.ts + src/warnings.ts.
+      - run: npm run build
+      - run: node scripts/check-cli.mjs
       - run: npm pack
       - run: node scripts/package-smoke.mjs
