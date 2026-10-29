@@ -17,6 +17,14 @@
 
 ---
 
+## AgentTime in 60 Seconds
+
+Time spent should be spent with clarity. In one minute, here is how AgentTime keeps a time ledger for AI coding agents:
+
+https://github.com/user-attachments/assets/08308453-caa0-4b1c-bb41-96cbcdec0dd6
+
+---
+
 AgentTime is a **local-first** time ledger for AI coding agents. It imports sessions from Codex, Claude Code, Pi, Oh-My-Pi, DeepSeek Harness, Antigravity, and OpenCode, splits the recorded time into **pure work, review wait, and standby**, and drills every total down to a single session, turn, and tool call.
 
 How much did your agents actually work today — and how much went into waiting for your approval? Open the page and see.
