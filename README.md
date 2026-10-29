@@ -17,6 +17,14 @@
 
 ---
 
+## 60 秒看懂 AgentTime
+
+时间花了，要花得明白。这一分钟里，AgentTime 怎么给 AI Coding Agent 记一本时间账：
+
+https://github.com/user-attachments/assets/08308453-caa0-4b1c-bb41-96cbcdec0dd6
+
+---
+
 AgentTime 是一个**本地优先**的 Agent 时间账本：把 Codex、Claude Code、Pi、Oh-My-Pi、DeepSeek Harness、Antigravity、OpenCode 等编码 Agent 的会话记录导入本机，切分出**纯工作、等待人审阅、待命**三态耗时，并把总账一路下钻到单个会话、单轮交互、单次工具调用。
 
 你的 Agent 每天到底替你干了多少活、多少时间在等你点头、多少时间在空转？打开页面就能看到。
