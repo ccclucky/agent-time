@@ -57,7 +57,7 @@ Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion
 npx @ccclucky/agent-time
 ```
 
-It opens `http://127.0.0.1:8765` for you (bound to localhost only; `--no-open` disables that), enable your agents' data directories on the sources page, and hit "Sync records". Or install globally:
+It opens `http://127.0.0.1:8765` for you (bound to localhost only; `--no-open` disables that), enable your agents' data directories on the sources page, and hit "Sync records". While the server runs, syncing is automatic: source changes are re-imported and the page refreshes on its own (manual sync stays available). Or install globally:
 
 ```sh
 npm install -g @ccclucky/agent-time

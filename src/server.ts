@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { Temporal } from "@js-temporal/polyfill";
 import { Store } from "./store.js";
 import { Directories } from "./directories.js";
+import { LiveSync } from "./live.js";
 import { report } from "./metrics.js";
 import { SOURCES } from "./adapters.js";
 import { ValidationError } from "./types.js";
@@ -27,7 +28,11 @@ const MIME: Record<string, string> = {
   css: "text/css; charset=utf-8",
   png: "image/png",
 };
-export function makeServer(store: Store, directories = new Directories(store)) {
+export function makeServer(
+  store: Store,
+  directories = new Directories(store),
+  live: LiveSync | null = null,
+) {
   const respond = (
     res: ServerResponse,
     body: Buffer | string,
@@ -87,6 +92,14 @@ export function makeServer(store: Store, directories = new Directories(store)) {
             });
           } else if (url.pathname === "/api/directories")
             json(res, { directories: directories.list() });
+          else if (url.pathname === "/api/pulse")
+            // 自动同步心跳：live 未接入（如测试或自建 server）时如实声明
+            json(
+              res,
+              live
+                ? live.pulse()
+                : { revision: null, note: "此服务未开启自动同步" },
+            );
           else if (url.pathname === "/api/sources")
             json(res, { adapters: SOURCES, ...store.sourceInfo() });
           else if (url.pathname === "/api/session/transcript") {
@@ -150,6 +163,9 @@ export function makeServer(store: Store, directories = new Directories(store)) {
             json(res, {
               directory: directories.save(v.agent, v.path, v.enabled),
             });
+            // 接入面变化立即生效：重排监听并即刻扫描一次（新目录可能已有数据）
+            live?.rearm();
+            live?.nudge();
           } else {
             if (
               !p ||
@@ -160,7 +176,11 @@ export function makeServer(store: Store, directories = new Directories(store)) {
               throw new ValidationError(
                 "请先在配置页保存目录，不能在同步请求中指定任意文件",
               );
-            json(res, await store.refresh(directories));
+            // 有 live 时与自动同步共用单飞队列，防止手动/自动重导并发写库
+            json(
+              res,
+              live ? await live.sync() : await store.refresh(directories),
+            );
           }
         } else json(res, { error: "请求方法不受支持" }, 405);
       } catch (e) {

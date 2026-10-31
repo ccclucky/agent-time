@@ -296,6 +296,37 @@ async function load() {
   }
 }
 
+// ── 实时账本（slice 11）：轮询 /api/pulse 感知服务端自动同步 ──────────────
+// 服务端对源目录变化自动重导入并推进 revision；前端每 5s 探一次，revision
+// 前进即按当前视图状态重新拉取报表（state.range/日期筛选全部存活于 state，
+// 不受重渲染影响）。用户在接入页有未保存草稿时暂停自动刷新，防止重渲染
+// 覆盖正在编辑的输入；离开页面（导航触发 load()）后自然补上。
+let lastPulse = null; // null = 尚未建立基线，下一轮只记录不刷新
+async function pulseLoop() {
+  let p;
+  try {
+    p = await api("/api/pulse");
+  } catch {
+    return; // 服务未开启自动同步或瞬时离线：不作提示，下一轮再试
+  }
+  if (typeof p.revision !== "number") return; // 明确未开启（revision: null）
+  if (lastPulse === null) {
+    lastPulse = p.revision;
+  } else if (p.revision !== lastPulse) {
+    const dirtyDraft = state.page === "sources" && Object.keys(state.drafts).length > 0;
+    if (!dirtyDraft && !state.busy) {
+      lastPulse = p.revision;
+      await load();
+    }
+  }
+  if (p.last_refresh_at_utc) {
+    const el = $("#liveStatus");
+    if (el)
+      el.textContent =
+        "自动同步已开启 · 最近刷新 " + stamp(Date.parse(p.last_refresh_at_utc));
+  }
+}
+
 function render() {
   if (!state.report) return;
 
@@ -2564,6 +2595,9 @@ async function refresh() {
     state.busy = false;
     $("#refresh").disabled = false;
     $("#refresh").textContent = "同步记录";
+    // 手动同步已在 load() 里拿到最新数据：重置基线，避免下一轮 pulse 把
+    // 这次 revision 误判为「有新变化」再刷一遍
+    lastPulse = null;
   }
 }
 
@@ -2810,3 +2844,5 @@ window.addEventListener("hashchange", applyRoute);
 restoreView();
 applyRoute();
 load();
+// 实时账本：源记录变化由服务端自动重导，这里只负责感知并刷新视图
+setInterval(pulseLoop, 5000);
