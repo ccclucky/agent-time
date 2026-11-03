@@ -649,23 +649,47 @@ function trendCard() {
 
 // 归因建议：只输出「从当前页面数字可直接读出」的结论句，上限 4 条；
 // 全部证据缺失时如实说无法生成，不编建议。
+// 工具聚合：name 必须随累加器一起保留，否则排序后只剩 undefined
+// （#57 评审 P2：结论卡与导出曾因此丢工具名）。结论卡与报告导出共用。
+function aggregateToolTotals(sessions) {
+  const toolMap = new Map();
+  for (const sess of sessions)
+    for (const t of sess.turns)
+      for (const tool of t.breakdown?.tools ?? []) {
+        const cur =
+          toolMap.get(tool.name) || { name: tool.name, count: 0, durationMs: 0 };
+        cur.count += tool.count || 0;
+        cur.durationMs += tool.duration_ms || 0;
+        toolMap.set(tool.name, cur);
+      }
+  return [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
+}
+
+// 会话级三态测量和（与 summary/gross 完全同口径：period 等比缩放、
+// standby 不缩放、缺失态不计入）。会话占比必须用它做分子——挂钟时长
+// 含未分类延迟，与三态分母不同量纲，极端样本会算出超 100%（#57 评审 P2）。
+function sessionThreeStateMs(s) {
+  let total = 0;
+  for (const t of s.turns) {
+    const period = t.period_ms ?? null;
+    const scale = (v) =>
+      period !== null && t.elapsed_ms
+        ? Math.round((v * period) / t.elapsed_ms)
+        : v;
+    if (t.work_ms !== null) total += scale(t.work_ms);
+    if (t.review_wait_ms !== null) total += scale(t.review_wait_ms);
+    if (t.standby_ms !== null) total += t.standby_ms;
+  }
+  return total;
+}
+
 function adviceCards() {
   const sessions = state.report.sessions;
   const s = state.report.summary;
   const cards = [];
 
   // 1) 累计执行最久的工具（与「按工具 TOP」同一来源，不截断取全量）
-  const toolMap = new Map();
-  for (const sess of sessions)
-    for (const t of sess.turns)
-      for (const tool of t.breakdown?.tools ?? []) {
-        const cur =
-          toolMap.get(tool.name) || { count: 0, durationMs: 0 };
-        cur.count += tool.count || 0;
-        cur.durationMs += tool.duration_ms || 0;
-        toolMap.set(tool.name, cur);
-      }
-  const tools = [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
+  const tools = aggregateToolTotals(sessions);
   const toolTotal = tools.reduce((acc, t) => acc + t.durationMs, 0);
   if (toolTotal > 0 && tools[0]) {
     const top = tools[0];
@@ -674,9 +698,9 @@ function adviceCards() {
     );
   }
 
-  // 2) 最耗时会话
+  // 2) 最耗时会话：分子分母同为三态测量和，占比恒不超 100%
   const topSession = [...sessions]
-    .map((x) => ({ s: x, ms: sessionClippedPeriodMs(x) }))
+    .map((x) => ({ s: x, ms: sessionThreeStateMs(x) }))
     .filter((x) => x.ms > 0)
     .sort((a, b) => b.ms - a.ms)[0];
   const gross = (s.work_ms || 0) + (s.review_wait_ms || 0) + (s.standby_ms || 0);
@@ -737,12 +761,12 @@ function exportWeeklyReport() {
     lines.push("");
   }
   const top = [...sessions]
-    .map((x) => ({ s: x, ms: sessionClippedPeriodMs(x) }))
+    .map((x) => ({ s: x, ms: sessionThreeStateMs(x) }))
     .filter((x) => x.ms > 0)
     .sort((a, b) => b.ms - a.ms)
     .slice(0, 3);
   if (top.length) {
-    lines.push("**耗时 TOP 3 会话**");
+    lines.push("**耗时 TOP 3 会话**（AI 工作 + 等待确认 + 待命合计口径）");
     top.forEach((x, i) =>
       lines.push(
         `${i + 1}. ${x.s.title || x.s.project || x.s.session_id} · ${x.s.agent} · ${fmt(x.ms)}`,
@@ -750,16 +774,7 @@ function exportWeeklyReport() {
     );
     lines.push("");
   }
-  const toolMap = new Map();
-  for (const sess of sessions)
-    for (const t of sess.turns)
-      for (const tool of t.breakdown?.tools ?? []) {
-        const cur = toolMap.get(tool.name) || { count: 0, durationMs: 0 };
-        cur.count += tool.count || 0;
-        cur.durationMs += tool.duration_ms || 0;
-        toolMap.set(tool.name, cur);
-      }
-  const tools = [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
+  const tools = aggregateToolTotals(sessions);
   if (tools.length)
     lines.push(
       `**累计执行最久工具**：${tools[0].name}（${tools[0].count} 次 · ${fmt(tools[0].durationMs)}；仅统计有细分数据的来源）`,
