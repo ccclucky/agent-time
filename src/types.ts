@@ -143,6 +143,9 @@ export interface Turn {
   subagents?: SubagentSummary[];
   breakdown?: TurnBreakdown | null;
   tokens?: TokenUsage | null;
+  /** 估算花费（USD）：轮内唯一模型可解析出基线/覆盖单价时才有值；
+   *  多模型轮与无价模型如实为 null，绝不估数充数。 */
+  cost_usd?: number | null;
 }
 
 export interface Session {
@@ -160,6 +163,10 @@ export interface Session {
   standby_ms?: number | null;
   subagents?: SubagentSummary[];
   tokens?: TokenUsage | null;
+  /** 可估价轮次的估算花费合计（USD）；unpriced_turns = 未计入的轮数
+   *  （无基线/覆盖价或多模型轮），UI 必须如实披露。 */
+  cost_usd?: number | null;
+  unpriced_turns?: number;
 }
 
 /** On-demand per-turn transcript text, extracted from the local source file

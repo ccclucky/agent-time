@@ -49,7 +49,7 @@ Typical time tracking counts the whole "start to finish" span as work — **your
 
 The web UI renders these states as plain-language labels — **AI 工作 / 等待确认 / 待命** — and the in-app "How is this time measured?" dialog maps every label back to the glossary term and field name.
 
-Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion / 15s+ slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. The overview also gets a day/week three-state trend chart, takeaway cards, and Markdown report export — all generated locally, zero upload. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
+Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion / 15s+ slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. The overview also gets a day/week three-state trend chart, takeaway cards, and Markdown report export — all generated locally, zero upload. A cost dimension: a built-in, locally editable price table (baseline snapshot + SQLite overrides) yields **estimated spend** per model; models without a price and multi-model turns honestly show "—" — never extrapolated. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
 
 ## Quick start
 
@@ -73,7 +73,7 @@ All imports are read-only; formats keep adapting as upstreams evolve (design dec
 | Harness | Three-state timing | Token drill-down | Turn Inspector drawer | Notes |
 | --- | --- | --- | --- | --- |
 | Codex | ✔ completion-anchor calibrated | ✔ cumulative snapshot diff | ✔ | Official reasoning is encrypted (ZDR); honestly labeled |
-| Claude Code | ✔ message-record spans | — | ✔ | Main transcript stream |
+| Claude Code | ✔ message-record spans | ✔ per-turn usage sums | ✔ | Main transcript stream |
 | Pi | ✔ first-hand machine-time accumulation | — | ✔ | Branch topology; only the active path |
 | DeepSeek Harness | ✔ | ✔ per-request | ✔ | Multi-frame zstd event stream |
 | Antigravity | ✔ `ask_question` counted as review wait | — | ✔ | Background tasks counted on completion receipts |

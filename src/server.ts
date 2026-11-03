@@ -102,6 +102,8 @@ export function makeServer(
             );
           else if (url.pathname === "/api/sources")
             json(res, { adapters: SOURCES, ...store.sourceInfo() });
+          else if (url.pathname === "/api/prices")
+            json(res, store.effectivePrices());
           else if (url.pathname === "/api/session/transcript") {
             const id = url.searchParams.get("id");
             if (!id || !/^\S{1,300}$/.test(id))
@@ -122,7 +124,11 @@ export function makeServer(
             );
           } else json(res, { error: "未找到页面" }, 404);
         } else if (req.method === "POST") {
-          if (!["/api/refresh", "/api/directories"].includes(req.url ?? "")) {
+          if (
+            !["/api/refresh", "/api/directories", "/api/prices"].includes(
+              req.url ?? "",
+            )
+          ) {
             json(res, { error: "未找到操作" }, 404);
             return;
           }
@@ -166,7 +172,44 @@ export function makeServer(
             // 接入面变化立即生效：重排监听并即刻扫描一次（新目录可能已有数据）
             live?.rearm();
             live?.nudge();
-          } else {
+          } else if (req.url === "/api/prices") {
+            // 覆盖价设置/清除：{model, input, cached_input, cache_write_input,
+            // output} 设价，{model, clear: true} 回基线；无价字段校验，禁止估数
+            if (!p || typeof p !== "object" || Array.isArray(p))
+              throw new ValidationError("请求格式不正确");
+            const v = p as Record<string, unknown>;
+            if (typeof v.model !== "string" || !v.model || v.model.length > 160)
+              throw new ValidationError("请指定有效模型名");
+            if (v.clear === true) {
+              store.setPriceOverride(v.model, null);
+              json(res, store.effectivePrices());
+            } else {
+              const num = (x: unknown) =>
+                typeof x === "number" && Number.isFinite(x) && x >= 0
+                  ? x
+                  : null;
+              const input = num(v.input),
+                cached = num(v.cached_input),
+                write = num(v.cache_write_input),
+                output = num(v.output);
+              if (
+                input === null ||
+                cached === null ||
+                write === null ||
+                output === null
+              )
+                throw new ValidationError(
+                  "单价需要四个非负数字字段：input / cached_input / cache_write_input / output",
+                );
+              store.setPriceOverride(v.model, {
+                input,
+                cached_input: cached,
+                cache_write_input: write,
+                output,
+              });
+              json(res, store.effectivePrices());
+            }
+          } else if (req.url === "/api/refresh") {
             if (
               !p ||
               typeof p !== "object" ||

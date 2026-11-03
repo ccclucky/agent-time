@@ -159,6 +159,15 @@ const tokenSub = (t) =>
     ? `输入 ${fmtTokens(t.input_tokens)} · 缓存 ${fmtTokens(t.cached_input_tokens)} · 输出 ${fmtTokens(t.output_tokens)}`
     : "源记录未携带 Token 快照";
 
+// 估算花费格式：null/undefined 一律「—」（无价或多模型轮，绝不估数）；
+// 小额保留 4 位小数，避免 $0.00 误读成免费
+function fmtUsd(n) {
+  if (n === null || n === undefined) return "—";
+  if (n < 0.01) return `$${n.toFixed(5)}`;
+  if (n < 1) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
+}
+
 const statuses = {
   completed: "已完结",
   aborted: "已中止",
@@ -1239,6 +1248,53 @@ function viewportAggregationCard(model) {
   const emptyRow =
     '<div class="s1-empty">当前视口内没有可聚合的会话。</div>';
 
+  // 估算花费（按模型）：只合计「轮内唯一模型 + 可估价」的轮；多模型轮与
+  // 无价模型不计入也不估数（与后端 cost_usd 口径一致），缺价如实披露
+  const costByModel = new Map();
+  let unpricedTurns = 0;
+  for (const item of sessions)
+    for (const t of item.turns) {
+      if (!t.tokens) continue;
+      if (t.cost_usd === null || t.cost_usd === undefined) {
+        unpricedTurns++;
+        continue;
+      }
+      if (t.models.length !== 1) continue;
+      const cur = costByModel.get(t.models[0]) || {
+        cost: 0,
+        tokens: 0,
+        turns: 0,
+      };
+      cur.cost += t.cost_usd;
+      cur.tokens += t.tokens.total_tokens;
+      cur.turns++;
+      costByModel.set(t.models[0], cur);
+    }
+  const costRows0 = [...costByModel]
+    .map(([model, v]) => ({ model, ...v }))
+    .sort((a, b) => b.cost - a.cost);
+  const maxCost = costRows0[0]?.cost || 0;
+  const costRows = costRows0
+    .slice(0, 5)
+    .map(
+      (r) => `
+      <div class="agg-row">
+        <div class="agg-row-top">
+          <span class="agg-agent"><span class="agg-agent-name" title="${h(r.model)}">${h(r.model)}</span></span>
+          <span class="agg-nums">${r.turns} 轮 · <strong>${fmtUsd(r.cost)}</strong> · ${fmtTokens(r.tokens)} tok</span>
+        </div>
+        ${aggShareBar(maxCost > 0 ? (r.cost / maxCost) * 100 : 0, "var(--state-token)", `${r.model} 的估算花费占比`)}
+      </div>
+    `,
+    )
+    .join("");
+  const costBox = `
+      <div class="s1-box">
+        <div class="s1-title">估算花费（按模型 TOP 5）<button class="textbtn" data-action="price-table">价目表</button></div>
+        <div class="agg-basis">估算口径：本地单价表（可编辑）× 各分量 token · 多模型轮与无价模型不计入${unpricedTurns ? ` · 另 ${unpricedTurns} 轮未估价` : ""}</div>
+        ${costRows || `<div class="s1-empty">当前视口内没有可估价的轮次（无单价匹配或无 token 数据）。</div>`}
+      </div>`;
+
   return `
     <div class="agg-grid" aria-label="维度聚合统计（当前视口）">
       <div class="s1-box">
@@ -1254,6 +1310,7 @@ function viewportAggregationCard(model) {
         <div class="agg-basis">基于已有细分数据的 ${byTool.basisSessions} 个会话 · 未测量来源不计入</div>
         ${toolRows || `<div class="s1-empty">当前视口内没有已测量细分数据的会话（Codex 会话不提供细分数据）。</div>`}
       </div>
+      ${costBox}
     </div>
   `;
 }
@@ -2246,9 +2303,19 @@ function openDrawer(turn, session) {
           <div class="drawer-kpi-sub">${h(tokenSub(turn.tokens))}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
+          <div class="drawer-kpi-title">本轮估算花费</div>
+          <div class="drawer-kpi-val">${fmtUsd(turn.cost_usd)}</div>
+          <div class="drawer-kpi-sub" title="口径：按本轮唯一模型的基线/覆盖单价 × 各分量 token 估算；多模型轮与无价模型如实显示 —">${turn.cost_usd === null || turn.cost_usd === undefined ? turn.tokens ? "多模型轮或无基线价，未估价" : "源记录未携带 Token" : "按本地单价表估算，非账单"}</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
           <div class="drawer-kpi-title">会话累计 Token</div>
           <div class="drawer-kpi-val">${fmtTokens(session.tokens ? session.tokens.total_tokens : null)}</div>
           <div class="drawer-kpi-sub">${session.tokens ? "全部轮次快照差分累计" : "源记录未携带 Token 快照"}</div>
+        </div>
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-token);">
+          <div class="drawer-kpi-title">会话估算花费</div>
+          <div class="drawer-kpi-val">${fmtUsd(session.cost_usd)}</div>
+          <div class="drawer-kpi-sub" title="口径：仅合计可估价轮次；未估价轮不计入也不估数">${session.cost_usd != null && session.unpriced_turns > 0 ? `另 ${session.unpriced_turns} 轮未估价，未计入` : session.cost_usd != null ? "可估价轮次合计" : "无可估价轮次"} · <button class="textbtn" data-action="price-table">价目表</button></div>
         </div>
       </div>
     </div>
@@ -2790,6 +2857,106 @@ function definitions() {
   );
 }
 
+// 价目表弹窗：查看/编辑本地单价（USD per 1M tokens）。基线随代码内置并
+// 标注 asOf；覆盖价存本地 SQLite。可估价 → 页面显示估算花费；无价 →
+// 「—」。全部本地读写，零上传。
+async function priceTable() {
+  let data;
+  try {
+    data = await api("/api/prices");
+  } catch (e) {
+    error(e.message);
+    return;
+  }
+  const row = (m) => {
+    const p = m.price;
+    // data-original 记录当前生效值：保存时只提交有改动的行，避免把
+    // 整张基线表无差别升级成覆盖价
+    const orig = p
+      ? [p.input, p.cached_input, p.cache_write_input, p.output].join("|")
+      : "";
+    return `
+      <tr data-price-model="${h(m.model)}" data-price-original="${h(orig)}">
+        <td style="font-family:var(--font-mono, monospace); font-size:11.5px;" title="${h(m.model)}">${h(m.model.length > 34 ? m.model.slice(0, 33) + "…" : m.model)}</td>
+        <td>${m.source === "override" ? '<span class="state" style="background:#fef3e2;color:#b45309;">覆盖</span>' : m.source === "baseline" ? `<span class="sub">基线 ${h(data.as_of)}</span>` : '<span class="sub">无价</span>'}</td>
+        <td><input type="number" step="any" min="0" style="width:72px;" data-price-field="input" value="${p ? p.input : ""}" placeholder="—"></td>
+        <td><input type="number" step="any" min="0" style="width:72px;" data-price-field="cached_input" value="${p ? p.cached_input : ""}" placeholder="—"></td>
+        <td><input type="number" step="any" min="0" style="width:72px;" data-price-field="cache_write_input" value="${p ? p.cache_write_input : ""}" placeholder="—"></td>
+        <td><input type="number" step="any" min="0" style="width:72px;" data-price-field="output" value="${p ? p.output : ""}" placeholder="—"></td>
+        <td>${m.source === "override" ? `<button class="textbtn" data-price-clear="${h(m.model)}">回基线</button>` : ""}</td>
+      </tr>`;
+  };
+  open(
+    `${head("本地价目表（估算花费依据）", `基线快照 ${h(data.as_of)} · USD / 1M tokens · 覆盖价存本机数据库，不上传`)}
+     <div style="max-height:50vh; overflow:auto;">
+       <table style="width:100%; font-size:12px;">
+         <thead><tr><th>模型</th><th>来源</th><th>输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th></th></tr></thead>
+         <tbody>
+           ${data.models.map(row).join("")}
+         </tbody>
+       </table>
+     </div>
+     <p class="sub" style="font-size:11.5px; margin-top:8px;">留空保存表示清除该模型覆盖价；无基线且无覆盖的模型显示「—」，页面花费估算不推算充数。</p>
+     <button class="btn primary" data-action="save-prices" style="margin-top:10px;">保存覆盖价</button>`,
+    true,
+  );
+}
+
+async function savePrices() {
+  const rows = [...document.querySelectorAll("tr[data-price-model]")];
+  let saved = 0;
+  try {
+    for (const tr of rows) {
+      const model = tr.dataset.priceModel;
+      const fields = [...tr.querySelectorAll("[data-price-field]")];
+      const values = fields.map((i) => i.value.trim());
+      const original = (tr.dataset.priceOriginal || "").split("|");
+      // 与打开弹窗时的生效值逐字段对比：无改动跳过，避免把整张基线表
+      // 无差别写成覆盖价（评审前的实测缺陷）
+      const changed =
+        values.some((v, i) => v !== (original[i] ?? "")) ||
+        (values.every((v) => v === "") && original.some((v) => v !== ""));
+      if (!changed) continue;
+      // 四个字段全空 = 清除覆盖价；部分填写 = 提示补全，不猜数
+      if (values.every((v) => v === "")) {
+        await api("/api/prices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
+          body: JSON.stringify({ model, clear: true }),
+        });
+        saved++;
+        continue;
+      }
+      if (values.some((v) => v === "")) {
+        toast(`「${model}」的四个单价字段需填写完整或全部留空`);
+        return;
+      }
+      const nums = values.map((v) => Number(v));
+      if (nums.some((n) => !Number.isFinite(n) || n < 0)) {
+        toast(`「${model}」的单价需为非负数字`);
+        return;
+      }
+      await api("/api/prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
+        body: JSON.stringify({
+          model,
+          input: nums[0],
+          cached_input: nums[1],
+          cache_write_input: nums[2],
+          output: nums[3],
+        }),
+      });
+      saved++;
+    }
+    toast(saved ? `已保存 ${saved} 个模型的单价` : "没有需要保存的改动");
+    close();
+    await load();
+  } catch (e) {
+    error(e.message);
+  }
+}
+
 function toast(message) {
   $("#live").innerHTML = `<div class="session-pill" style="position:fixed; bottom:24px; right:24px; z-index:9999; background:#FAF9F5; box-shadow:var(--shadow-lg);">${h(message)}</div>`;
   setTimeout(() => ($("#live").innerHTML = ""), 4500);
@@ -2981,6 +3148,21 @@ document.addEventListener("click", async (e) => {
     }
   }
 
+  if (b.dataset.priceClear) {
+    // 单行「回基线」：立即清除覆盖价并重开弹窗呈现最新来源标注
+    try {
+      await api("/api/prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
+        body: JSON.stringify({ model: b.dataset.priceClear, clear: true }),
+      });
+      toast("已清除覆盖价，恢复基线单价");
+      await priceTable();
+    } catch (e) {
+      error(e.message);
+    }
+  }
+
   if (b.dataset.session) {
     // 会话表下钻入口统一改为 #session/:id 详情页路由（旧弹窗 details() 保留但不再从此进入）
     location.hash = "#session/" + encodeURIComponent(b.dataset.session);
@@ -3027,6 +3209,12 @@ document.addEventListener("click", async (e) => {
       break;
     case "export-report":
       exportWeeklyReport();
+      break;
+    case "price-table":
+      await priceTable();
+      break;
+    case "save-prices":
+      await savePrices();
       break;
     case "dates":
       open(

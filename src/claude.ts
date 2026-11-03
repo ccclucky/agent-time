@@ -11,7 +11,7 @@ import {
   truncateCodePoints,
   toolCallDetail,
 } from "./codex.js";
-import { ValidationError, type Event, type TranscriptTurn } from "./types.js";
+import { ValidationError, type Event, type TranscriptTurn, type TokenUsage, addUsage } from "./types.js";
 
 const validId = (v: unknown): v is string =>
   typeof v === "string" && /^[A-Za-z0-9_.:-]{1,200}(?![\s\S])/.test(v);
@@ -43,6 +43,10 @@ export function parseClaude(path: string) {
   const events: Event[] = [],
     issues = new Set<string>(),
     seen = new Set<string>();
+  // Token 下钻：assistant 记录的 message.usage（Anthropic 标准四分量）
+  // 按所属轮累加。归轮口径与 model 事件一致（current || sidechain 的
+  // lastTurnId），流式多个 assistant 记录逐条相加；无 usage 的记录不计。
+  const usageByTurn = new Map<string, TokenUsage>();
   // Keep topology metadata only. Parallel assistant/tool blocks may fan out;
   // reject branching user submissions instead of summing alternative histories.
   const userParents = new Map<string, string>();
@@ -218,6 +222,25 @@ export function parseClaude(path: string) {
               .join(""),
             agentId,
           );
+        // usage 累加：与 model 事件同轮归属；分量缺省按 0 计
+        const usage = r.message?.usage;
+        if (usage && typeof usage === "object" && !Array.isArray(usage)) {
+          const num = (v: unknown) => (typeof v === "number" && v >= 0 ? v : 0);
+          const u: TokenUsage = {
+            input_tokens: num(usage.input_tokens),
+            cached_input_tokens: num(usage.cache_read_input_tokens),
+            cache_write_input_tokens: num(usage.cache_creation_input_tokens),
+            output_tokens: num(usage.output_tokens),
+            reasoning_output_tokens: 0,
+            total_tokens:
+              num(usage.input_tokens) +
+              num(usage.cache_read_input_tokens) +
+              num(usage.cache_creation_input_tokens) +
+              num(usage.output_tokens),
+          };
+          const acc = usageByTurn.get(activeTurn);
+          usageByTurn.set(activeTurn, acc ? addUsage(acc, u) : u);
+        }
         if (Array.isArray(content)) {
           for (const b of content) {
             if (b && typeof b === "object" && (b as ContentBlock).type === "tool_use") {
@@ -260,6 +283,8 @@ export function parseClaude(path: string) {
       client: "claude",
     },
     events: [...unique.values()],
+    // store.importFile 的统一 token 入口：与 Codex/DSH/OpenCode/OMP 同形
+    tokens: [...usageByTurn].map(([turn_id, u]) => ({ turn_id, ...u })),
     issues: [...issues].sort(),
   };
 }
