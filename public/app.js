@@ -78,6 +78,8 @@ const state = {
   zoomEndPct: 100,
   // 首页接入工具筛选（"all" 或当前报告中实际存在的 agent 名）
   overviewAgent: "all",
+  // 跨日趋势的桶粒度（day=按日 / week=按周，周一为一周起点）；随视图状态持久化
+  trendGran: "day",
   // Turn Inspector 抽屉的按需会话文本缓存（session_id → {status, data?, message?}）
   transcriptCache: new Map(),
 };
@@ -89,7 +91,12 @@ function saveView() {
   try {
     localStorage.setItem(
       VIEW_KEY,
-      JSON.stringify({ range: state.range, start: state.start, end: state.end }),
+      JSON.stringify({
+        range: state.range,
+        start: state.start,
+        end: state.end,
+        trendGran: state.trendGran,
+      }),
     );
   } catch {}
 }
@@ -106,6 +113,9 @@ function restoreView() {
     state.range = v.range;
     state.start = start;
     state.end = end;
+    // 趋势粒度是独立于日期区段的用户选择，单独校验、单独恢复
+    if (v.trendGran === "day" || v.trendGran === "week")
+      state.trendGran = v.trendGran;
   } catch {}
 }
 
@@ -505,6 +515,277 @@ ${legendItem("var(--state-wait)", h(dimensionTitle("wait")), wait, waitPct)}
 ${legendItem("var(--state-standby)", h(dimensionTitle("standby")), standby, standbyPct)}
     </div>
   </section>`;
+}
+
+// ========================================================
+// 模块 2.5：洞察三件套 —— 跨日趋势 / 归因建议 / Markdown 报告导出（#54）
+// 数据全部取自现有报表逐轮字段，零后端改动；口径原则不变：
+// 只陈述可从页面数字直接推出的结论，证据缺失如实说，不做推测性归因。
+// ========================================================
+
+// 本地时区的 YYYY-MM-DD 键（浏览器时区与页面其余展示一致）
+const dayKey = (ms) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(ms);
+
+// 周桶以周一为起点，桶键即周一日期串；标签为「MM/DD–MM/DD」
+function weekBucket(ms) {
+  const key = dayKey(ms);
+  const start = new Date(key + "T12:00:00");
+  const dow = (start.getDay() + 6) % 7; // 周一=0
+  start.setDate(start.getDate() - dow);
+  return dayKey(start.getTime());
+}
+
+function weekLabel(mondayKey) {
+  const start = new Date(mondayKey + "T12:00:00");
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const md = (d) => d.getMonth() + 1 + "/" + d.getDate();
+  return `${md(start)}–${md(end)}`;
+}
+
+// 三态贡献与 summary 完全同口径：跨范围裁剪后的 period 等比缩放，
+// standby 不缩放；某态缺失的轮不计入该态（绝不记 0 充数）。
+function trendBuckets(sessions, gran) {
+  const buckets = new Map();
+  for (const s of sessions) {
+    for (const t of s.turns) {
+      const start = t.start_ms ?? t.end_ms ?? null;
+      if (start === null) continue;
+      const key = gran === "week" ? weekBucket(start) : dayKey(start);
+      const b =
+        buckets.get(key) ?? { key, work: 0, wait: 0, standby: 0, turns: 0 };
+      b.turns++;
+      const period = t.period_ms ?? null;
+      const scale = (v) =>
+        period !== null && t.elapsed_ms
+          ? Math.round((v * period) / t.elapsed_ms)
+          : v;
+      if (t.work_ms !== null) b.work += scale(t.work_ms);
+      if (t.review_wait_ms !== null) b.wait += scale(t.review_wait_ms);
+      if (t.standby_ms !== null) b.standby += t.standby_ms;
+      buckets.set(key, b);
+    }
+  }
+  return [...buckets.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+}
+
+function trendCard() {
+  const gran = state.trendGran;
+  const sessions = state.report.sessions;
+  const buckets = trendBuckets(sessions, gran);
+  const exportBtn = `<button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
+  const header = `
+      <div class="section-header">
+        <div>
+          <span class="section-title">跨日趋势</span>
+          <span class="section-subtitle">三态按轮次开始${gran === "week" ? "周" : "日"}归属 · 跨${gran === "week" ? "周" : "日"}轮整体计入起始${gran === "week" ? "周" : "日"} · 柱高按平方根缩放</span>
+        </div>
+        <div class="trend-toolbar">
+          <button class="textbtn${gran === "day" ? " active" : ""}" data-trend-gran="day" aria-pressed="${gran === "day"}">按日</button>
+          <button class="textbtn${gran === "week" ? " active" : ""}" data-trend-gran="week" aria-pressed="${gran === "week"}">按周</button>
+          ${exportBtn}
+        </div>
+      </div>`;
+
+  if (!buckets.length)
+    return `
+    <section class="funnel-card">
+      ${header}
+      <div class="demo" style="margin: 8px 0 0;">
+        <strong>暂无趋势</strong>
+        <span>本时段的轮次缺少可定位的开始时刻，无法按${gran === "week" ? "周" : "日"}归桶。</span>
+      </div>
+    </section>`;
+
+  // 柱高非线性缩放（平方根 + 8px 底高）：多数聚跨度大时常态数据不被压成细线
+  const totals = buckets.map((b) => b.work + b.wait + b.standby);
+  const maxTotal = Math.max(...totals, 1);
+  const n = buckets.length;
+  // 桶多时只标注两端与等距采样，避免 367 根柱挤成一排标签
+  const labelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
+  const bars = buckets
+    .map((b, i) => {
+      const total = totals[i];
+      const height = total > 0 ? 8 + 82 * Math.sqrt(total / maxTotal) : 2;
+      const seg = (v, cls, name) =>
+        v > 0
+          ? `<i class="${cls}" style="height:${((v / total) * 100).toFixed(1)}%;" title="${name} ${fmt(v)}"></i>`
+          : "";
+      const fill =
+        total > 0
+          ? seg(b.work, "trend-w", "AI 工作") +
+            seg(b.wait, "trend-h", h(dimensionTitle("wait"))) +
+            seg(b.standby, "trend-s", h(dimensionTitle("standby")))
+          : "";
+      const showLabel = i % labelEvery === 0 || i === n - 1;
+      const label = gran === "week" ? weekLabel(b.key) : b.key.slice(5).replace("-", "/");
+      return `
+      <div class="trend-col">
+        <div class="trend-bar" style="height:${height.toFixed(1)}px;" title="${h(label)}：AI 工作 ${fmt(b.work)} · ${h(dimensionTitle("wait"))} ${fmt(b.wait)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮">${fill}</div>
+        <span class="trend-day">${showLabel ? h(label) : ""}</span>
+      </div>`;
+    })
+    .join("");
+
+  return `
+  <section class="funnel-card">
+    ${header}
+    <div class="trend-scroll">
+      <div class="trend-bars" role="img" aria-label="按${gran === "week" ? "周" : "日"}三态趋势柱状图，共 ${n} 个${gran === "week" ? "周" : "日"}桶">${bars}</div>
+    </div>
+    <div class="flow-legend">
+      <span class="flow-legend-item"><i style="background:var(--state-work);"></i>AI 工作</span>
+      <span class="flow-legend-item"><i style="background:var(--state-wait);"></i>${h(dimensionTitle("wait"))}</span>
+      <span class="flow-legend-item"><i style="background:var(--state-standby);"></i>${h(dimensionTitle("standby"))}</span>
+    </div>
+  </section>`;
+}
+
+// 归因建议：只输出「从当前页面数字可直接读出」的结论句，上限 4 条；
+// 全部证据缺失时如实说无法生成，不编建议。
+function adviceCards() {
+  const sessions = state.report.sessions;
+  const s = state.report.summary;
+  const cards = [];
+
+  // 1) 累计执行最久的工具（与「按工具 TOP」同一来源，不截断取全量）
+  const toolMap = new Map();
+  for (const sess of sessions)
+    for (const t of sess.turns)
+      for (const tool of t.breakdown?.tools ?? []) {
+        const cur =
+          toolMap.get(tool.name) || { count: 0, durationMs: 0 };
+        cur.count += tool.count || 0;
+        cur.durationMs += tool.duration_ms || 0;
+        toolMap.set(tool.name, cur);
+      }
+  const tools = [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
+  const toolTotal = tools.reduce((acc, t) => acc + t.durationMs, 0);
+  if (toolTotal > 0 && tools[0]) {
+    const top = tools[0];
+    cards.push(
+      `<b>${h(toolLabel(top.name))}</b> 是本时段累计执行最久的工具：${top.count} 次 · <b>${fmt(top.durationMs)}</b>（占已测量工具执行 ${((top.durationMs / toolTotal) * 100).toFixed(1)}%）`,
+    );
+  }
+
+  // 2) 最耗时会话
+  const topSession = [...sessions]
+    .map((x) => ({ s: x, ms: sessionClippedPeriodMs(x) }))
+    .filter((x) => x.ms > 0)
+    .sort((a, b) => b.ms - a.ms)[0];
+  const gross = (s.work_ms || 0) + (s.review_wait_ms || 0) + (s.standby_ms || 0);
+  if (topSession && gross > 0)
+    cards.push(
+      `<b>${h(topSession.s.title || topSession.s.project || topSession.s.session_id)}</b> 是本时段最耗时会话：<b>${fmt(topSession.ms)}</b>（占记录总时长 ${((topSession.ms / gross) * 100).toFixed(1)}%）`,
+    );
+
+  // 3) 等待确认集中日
+  if ((s.review_wait_ms || 0) > 0) {
+    const dayBuckets = trendBuckets(sessions, "day");
+    const peak = [...dayBuckets].sort((a, b) => b.wait - a.wait)[0];
+    if (peak && peak.wait > 0)
+      cards.push(
+        `${h(peak.key.slice(5).replace("-", "/"))} 是等待确认最集中的一天：<b>${fmt(peak.wait)}</b>（占本时段等待确认 ${((peak.wait / s.review_wait_ms) * 100).toFixed(1)}%）`,
+      );
+  }
+
+  // 4) 待命占比（显著时才提示，中性陈述）
+  if (gross > 0 && (s.standby_ms || 0) / gross >= 0.3)
+    cards.push(
+      `待命占记录总时长 <b>${((s.standby_ms / gross) * 100).toFixed(1)}%</b>（${fmt(s.standby_ms)}）：主要为会话之间的间隔时间`,
+    );
+
+  const body = cards.length
+    ? cards.map((c) => `<div class="advice-card">${c}</div>`).join("")
+    : `<div class="advice-card">本时段没有可测量的细分数据，暂无法生成结论。</div>`;
+  return `
+  <section class="funnel-card" aria-label="本时段结论">
+    <div class="section-header">
+      <div>
+        <span class="section-title">本时段结论</span>
+        <span class="section-subtitle">仅陈述可从页面数字直接推出的观察 · 不做推测性归因</span>
+      </div>
+    </div>
+    ${body}
+  </section>`;
+}
+
+// Markdown 报告导出：与 CSV 同为本地 Blob 下载，零上传；
+// 只汇总当前所选区间（与页面同源同口径），无数据的段落如实省略。
+function exportWeeklyReport() {
+  const s = state.report.summary;
+  const sessions = state.report.sessions;
+  const lines = [];
+  lines.push(`## AgentTime 时间报告（${state.start} ~ ${state.end}）`);
+  lines.push("");
+  const gross = (s.work_ms || 0) + (s.review_wait_ms || 0) + (s.standby_ms || 0);
+  if (gross > 0) {
+    const pct = (v) => ((v / gross) * 100).toFixed(1) + "%";
+    lines.push(
+      `**记录总时长** ${fmt(gross)} ｜ **AI 工作** ${fmt(s.work_ms)}（${pct(s.work_ms || 0)}）｜ **${dimensionTitle("wait")}** ${fmt(s.review_wait_ms)} ｜ **${dimensionTitle("standby")}** ${fmt(s.standby_ms)}`,
+    );
+    lines.push(`（口径：记录总时长 = AI 工作 + 等待确认 + 待命）`);
+    lines.push("");
+  } else {
+    lines.push("本时段没有可测量的三态耗时数据。");
+    lines.push("");
+  }
+  const top = [...sessions]
+    .map((x) => ({ s: x, ms: sessionClippedPeriodMs(x) }))
+    .filter((x) => x.ms > 0)
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 3);
+  if (top.length) {
+    lines.push("**耗时 TOP 3 会话**");
+    top.forEach((x, i) =>
+      lines.push(
+        `${i + 1}. ${x.s.title || x.s.project || x.s.session_id} · ${x.s.agent} · ${fmt(x.ms)}`,
+      ),
+    );
+    lines.push("");
+  }
+  const toolMap = new Map();
+  for (const sess of sessions)
+    for (const t of sess.turns)
+      for (const tool of t.breakdown?.tools ?? []) {
+        const cur = toolMap.get(tool.name) || { count: 0, durationMs: 0 };
+        cur.count += tool.count || 0;
+        cur.durationMs += tool.duration_ms || 0;
+        toolMap.set(tool.name, cur);
+      }
+  const tools = [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
+  if (tools.length)
+    lines.push(
+      `**累计执行最久工具**：${tools[0].name}（${tools[0].count} 次 · ${fmt(tools[0].durationMs)}；仅统计有细分数据的来源）`,
+    );
+  const dayBuckets = trendBuckets(sessions, "day").filter(
+    (b) => b.work + b.wait + b.standby > 0,
+  );
+  if (dayBuckets.length) {
+    const peak = [...dayBuckets].sort(
+      (a, b) => b.work + b.wait + b.standby - (a.work + a.wait + a.standby),
+    )[0];
+    lines.push(
+      `**趋势峰值**：${peak.key}（AI 工作 ${fmt(peak.work)} / 记录总时长 ${fmt(peak.work + peak.wait + peak.standby)}）`,
+    );
+  }
+  lines.push("");
+  lines.push(`生成于 AgentTime 本地数据 · 仅含所选区间 · 无遥测`);
+  const blob = new Blob([lines.join("\n")], {
+    type: "text/markdown;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `agenttime-report-${state.start}-to-${state.end}.md`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ========================================================
@@ -2121,12 +2402,14 @@ function overview() {
   return `
     ${stats()}
     ${funnel()}
+    ${trendCard()}
     ${timeline(model)}
     <div class="s1-grid">
       ${topSessionsCard(scopedModel)}
       ${viewportBreakdownCard(scopedModel)}
     </div>
     ${viewportAggregationCard(scopedModel)}
+    ${adviceCards()}
     ${sessionStream()}
   `;
 }
@@ -2674,6 +2957,15 @@ document.addEventListener("click", async (e) => {
     }
   }
 
+  if (b.dataset.trendGran) {
+    // 趋势粒度切换：纯视图状态，数据不变，重渲染即可；随视图持久化
+    if (["day", "week"].includes(b.dataset.trendGran)) {
+      state.trendGran = b.dataset.trendGran;
+      saveView();
+      render();
+    }
+  }
+
   if (b.dataset.session) {
     // 会话表下钻入口统一改为 #session/:id 详情页路由（旧弹窗 details() 保留但不再从此进入）
     location.hash = "#session/" + encodeURIComponent(b.dataset.session);
@@ -2717,6 +3009,9 @@ document.addEventListener("click", async (e) => {
       break;
     case "export":
       exportCSV();
+      break;
+    case "export-report":
+      exportWeeklyReport();
       break;
     case "dates":
       open(

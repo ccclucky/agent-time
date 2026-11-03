@@ -49,7 +49,7 @@ Typical time tracking counts the whole "start to finish" span as work — **your
 
 The web UI renders these states as plain-language labels — **AI 工作 / 等待确认 / 待命** — and the in-app "How is this time measured?" dialog maps every label back to the glossary term and field name.
 
-Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion / 15s+ slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
+Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion / 15s+ slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. The overview also gets a day/week three-state trend chart, takeaway cards, and Markdown report export — all generated locally, zero upload. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
 
 ## Quick start
 

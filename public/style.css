@@ -2212,3 +2212,70 @@ input[type="search"] {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ── #54 洞察三件套：跨日趋势 / 本时段结论 ─────────────────────────── */
+.trend-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.trend-toolbar .textbtn.active {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.trend-scroll {
+  overflow-x: auto;
+  margin-top: 10px;
+  padding-bottom: 4px;
+}
+.trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 100%;
+  width: max-content;
+  min-height: 100px;
+  /* 桶少时均匀分布占满容器，桶多时定宽横向滚动，绝不整根拉满 */
+  justify-content: space-around;
+}
+.trend-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 24px;
+  max-width: 24px;
+}
+.trend-bar {
+  width: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 3px 3px 0 0;
+  overflow: hidden;
+  min-height: 2px;
+  background: transparent;
+}
+.trend-bar i {
+  display: block;
+}
+.trend-w { background: var(--state-work); }
+.trend-h { background: var(--state-wait); }
+.trend-s { background: var(--state-standby); }
+.trend-day {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  color: var(--text-3, #888);
+  white-space: nowrap;
+}
+.advice-card {
+  border: 1px solid var(--line, #e5e5e5);
+  border-left: 3px solid var(--state-wait, #d9a441);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-2, #555);
+  margin-top: 8px;
+  background: #fffdf8;
+}
+.advice-card b { color: var(--text-1, #111); }
