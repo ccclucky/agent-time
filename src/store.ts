@@ -37,6 +37,12 @@ import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
 import { unionMs } from "./metrics.js";
 import {
+  baselinePrice,
+  estimateCost,
+  PRICING_AS_OF,
+  type PriceSet,
+} from "./pricing.js";
+import {
   addUsage,
   mapUsage,
   ValidationError,
@@ -849,21 +855,43 @@ ALTER TABLE source_migrated RENAME TO source;`,
     };
   }
   sessions(): Session[] {
-    const { sources, events, tokenRows } = this.transaction(() => ({
-      sources: this.db
-        .prepare("SELECT * FROM source ORDER BY id")
-        .all() as unknown as Source[],
-      events: this.db
-        .prepare(
-          "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name,e.end_ms,e.thinking_level FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
-        )
-        .all() as unknown as (Event & { session_id: string })[],
-      tokenRows: this.db
-        .prepare(
-          "SELECT s.session_id,t.turn_id,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens FROM token_usage t JOIN source s ON s.id=t.source_id ORDER BY t.total_tokens",
-        )
-        .all() as unknown as (TokenUsage & { session_id: string; turn_id: string })[],
-    }));
+    const { sources, events, tokenRows, priceOverrides } = this.transaction(
+      () => ({
+        sources: this.db
+          .prepare("SELECT * FROM source ORDER BY id")
+          .all() as unknown as Source[],
+        events: this.db
+          .prepare(
+            "SELECT DISTINCT s.session_id,e.key,e.turn_id,e.kind,e.at_ms,e.model,e.agent_id,e.tool_id,e.tool_name,e.end_ms,e.thinking_level FROM event e JOIN source s ON s.id=e.source_id ORDER BY e.at_ms,e.key",
+          )
+          .all() as unknown as (Event & { session_id: string })[],
+        tokenRows: this.db
+          .prepare(
+            "SELECT s.session_id,t.turn_id,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens FROM token_usage t JOIN source s ON s.id=t.source_id ORDER BY t.total_tokens",
+          )
+          .all() as unknown as (TokenUsage & {
+            session_id: string;
+            turn_id: string;
+          })[],
+        priceOverrides: this.db
+          .prepare(
+            "SELECT model,input,cached_input,cache_write_input,output FROM price_override",
+          )
+          .all() as unknown as (PriceSet & { model: string })[],
+      }),
+    );
+    // 单价解析：覆盖价优先，其次基线子串规则；都无 → null（如实不计）
+    const priceOf = (model: string): PriceSet | null => {
+      const o = priceOverrides.find((p) => p.model === model);
+      return o
+        ? {
+            input: o.input,
+            cached_input: o.cached_input,
+            cache_write_input: o.cache_write_input,
+            output: o.output,
+          }
+        : baselinePrice(model);
+    };
     // Session ids and turn ids cannot contain NUL, so this pair key is
     // collision-free and cheaper than JSON.stringify.
     const pairKey = (a: string, b: string) => a + "\u0000" + b;
@@ -1049,7 +1077,18 @@ ALTER TABLE source_migrated RENAME TO source;`,
         subagents: turnSubagents.length ? turnSubagents : undefined,
         breakdown,
         tokens: turnTokens.get(pairKey(sid, tid)) ?? null,
+        cost_usd: null,
       });
+    }
+    // 估算花费：轮内唯一模型才能唯一归属单价；多模型轮不拆分（token
+    // 用量本就是轮级合计，无法按模型切分），与无价模型一样如实计为未估价。
+    for (const s of sessions.values()) {
+      for (const t of s.turns) {
+        if (!t.tokens || t.models.length !== 1) continue;
+        const price = priceOf(t.models[0]);
+        if (!price) continue;
+        t.cost_usd = estimateCost(t.tokens, price);
+      }
     }
     for (const s of sessions.values()) {
       s.turns.sort(
@@ -1091,6 +1130,16 @@ ALTER TABLE source_migrated RENAME TO source;`,
       s.tokens = tokenSums.length
         ? tokenSums.reduce((acc, u) => addUsage(acc, u), zeroUsage())
         : null;
+
+      // 会话级花费合计 + 未估价轮数（有 token 但无价/多模型），供 UI 披露
+      const costed = s.turns.filter(
+        (t) => typeof t.cost_usd === "number" && t.tokens,
+      );
+      const tokenedTurnCount = s.turns.filter((t) => t.tokens).length;
+      s.cost_usd = costed.length
+        ? costed.reduce((acc, t) => acc + (t.cost_usd ?? 0), 0)
+        : null;
+      s.unpriced_turns = tokenedTurnCount - costed.length;
 
       const sessionSubagents = groupSubagents(
         s.turns.flatMap((t) => t.events),
@@ -1167,5 +1216,58 @@ ALTER TABLE source_migrated RENAME TO source;`,
       privacy:
         "仅本机存储统计元数据，不保存工具参数或凭据；会话详情页在打开抽屉时按需从本机源文件读取该轮的提问与模型思考文本用于本地展示，仍仅限本机、不上传。",
     };
+  }
+  /** 价目表视图：基线 + 覆盖 + 数据中出现但两边都没有价的模型（price 为
+   *  null，UI 显示「—」）。供 /api/prices 与前端价目编辑弹窗。 */
+  effectivePrices() {
+    const overrides = this.db
+      .prepare(
+        "SELECT model,input,cached_input,cache_write_input,output,updated_at FROM price_override ORDER BY model",
+      )
+      .all() as unknown as (PriceSet & { model: string; updated_at: string })[];
+    const overridden = new Set(overrides.map((o) => o.model));
+    const seen = this.db
+      .prepare("SELECT DISTINCT model FROM event WHERE model IS NOT NULL")
+      .all() as unknown as { model: string }[];
+    const models: {
+      model: string;
+      source: "override" | "baseline" | null;
+      price: PriceSet | null;
+      updated_at?: string;
+    }[] = overrides.map((o) => ({
+      model: o.model,
+      source: "override",
+      price: {
+        input: o.input,
+        cached_input: o.cached_input,
+        cache_write_input: o.cache_write_input,
+        output: o.output,
+      },
+      updated_at: o.updated_at,
+    }));
+    for (const seenModel of seen.map((s) => s.model)) {
+      if (overridden.has(seenModel)) continue;
+      const price = baselinePrice(seenModel);
+      models.push({ model: seenModel, source: price ? "baseline" : null, price });
+    }
+    return { as_of: PRICING_AS_OF, models };
+  }
+  /** 设置/清除覆盖价（清除 = null，回到基线或无价）。 */
+  setPriceOverride(model: string, prices: PriceSet | null) {
+    if (prices === null) {
+      this.db.prepare("DELETE FROM price_override WHERE model=?").run(model);
+    } else {
+      this.db
+        .prepare(
+          "INSERT INTO price_override(model,input,cached_input,cache_write_input,output,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(model) DO UPDATE SET input=excluded.input,cached_input=excluded.cached_input,cache_write_input=excluded.cache_write_input,output=excluded.output,updated_at=CURRENT_TIMESTAMP",
+        )
+        .run(
+          model,
+          prices.input,
+          prices.cached_input,
+          prices.cache_write_input,
+          prices.output,
+        );
+    }
   }
 }
