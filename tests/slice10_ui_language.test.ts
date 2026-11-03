@@ -382,10 +382,10 @@ test("Slice 10 UI language: definitions() carries the full three-layer mapping t
   );
 });
 
-test("Slice 10 UI language: both assets share the 20261025-12 cache-busting stamp", () => {
+test("Slice 10 UI language: both assets share one cache-busting stamp (slice 11 bumped it)", () => {
   const source = html();
   const cssV = source.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = source.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261025-12", "copy convergence requires a new asset stamp");
+  assert.equal(cssV, "20261031-1", "copy convergence requires a new asset stamp");
 });

@@ -85,13 +85,20 @@ async function main() {
     throw new ValidationError("参数过多；使用 --help 查看用法");
   const store = new Store(values.db ?? defaultDb());
   if (command === "serve") {
-    const server = makeServer(store);
+    // serve 与实时账本共用同一份 directories：监听面与同步面同源，避免漂移
+    const { Directories } = await import("./directories.js");
+    const { LiveSync } = await import("./live.js");
+    const directories = new Directories(store);
+    const live = new LiveSync(directories, store);
+    const server = makeServer(store, directories, live);
     server.on("error", () => {
       console.error("无法启动本地网页，请检查端口及权限。");
+      live.stop();
       store.close();
       process.exitCode = 1;
     });
     server.listen(port, "127.0.0.1", () => {
+      live.start();
       const addr = server.address();
       const url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : port}`;
       // 自动打开仅限「人在终端前」：CI 与管道输出环境（如冒烟脚本）一律跳过，
@@ -102,7 +109,7 @@ async function main() {
           ? false
           : Boolean(process.stdout.isTTY) && !process.env.CI;
       console.log(
-        `AgentTime 已启动：${url}\n仅绑定本机地址，无遥测。Ctrl+C 停止。`,
+        `AgentTime 已启动：${url}\n仅绑定本机地址，无遥测。已启用自动同步：源记录变化将自动重新导入。Ctrl+C 停止。`,
       );
       if (shouldOpen) {
         openBrowser(url);
@@ -111,6 +118,7 @@ async function main() {
     });
     const stop = () =>
       server.close(() => {
+        live.stop();
         store.close();
       });
     process.once("SIGINT", stop);
