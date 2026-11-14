@@ -48,6 +48,10 @@ export interface TurnBreakdown {
   tool_execution_ms: number;
   /** Claude: measured permission wait. Pi: absent (source has no approval events). */
   review_wait_ms?: number;
+  /** 中途停了（守恒口径）：轮内 ≥2 分钟无任何源事件的区间并集（扣除工具
+   *  执行与等待审阅）。可能装着网络阻塞、设备休眠、忙上一条——源记录不写
+   *  原因，只给时长不编造归因。守恒：模型 + 工具 + 审阅 + 停了 = elapsed。 */
+  idle_gap_ms?: number;
   /** Pi: positive tool-ready → tool-start gaps the source cannot attribute
    *  (may contain approval waits, scheduling, rate limiting). */
   unclassified_delay_ms?: number;
@@ -136,6 +140,9 @@ export interface Turn {
   work_ms: number | null;
   review_wait_ms: number | null;
   standby_ms: number | null;
+  /** 排队等待：发出时上一轮尚未答复完毕，本条消息在队列里等了多久。
+   *  等待时长（发送→答复）天然包含这段，无需特殊口径；轮间待命保持 null。 */
+  queue_wait_ms?: number | null;
   human_ms: number | null;
   response_gap_ms: number | null;
   period_ms?: number | null;
@@ -158,6 +165,13 @@ export interface Session {
   work_ms?: number | null;
   review_wait_ms?: number | null;
   standby_ms?: number | null;
+  /** 中途停了合计（仅含可计量轮；口径见 TurnBreakdown.idle_gap_ms）。 */
+  idle_gap_ms?: number | null;
+  /** 排队输入次数与合计排队时长。 */
+  queue_count?: number;
+  queue_wait_ms?: number;
+  /** 最后一条答复完毕的时刻——收尾空档 = 当前时刻 − 此值（前端实时算）。 */
+  last_done_ms?: number | null;
   subagents?: SubagentSummary[];
   tokens?: TokenUsage | null;
 }

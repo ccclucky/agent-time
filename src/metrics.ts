@@ -20,6 +20,27 @@ export function unionMs(intervals: [number, number][]) {
   }
   return total + (left === null ? 0 : right - left);
 }
+/** 从 base 区间集合里扣除 cut 区间集合，返回剩余部分（用于「中途停了」：
+ *  原始无事件缝隙扣除工具执行与等待审阅后才是真正什么都没发生的时段）。 */
+export function subtractMs(
+  base: [number, number][],
+  cut: [number, number][],
+): [number, number][] {
+  let parts = base;
+  for (const [ca, cb] of [...cut].sort((a, b) => a[0] - b[0])) {
+    const next: [number, number][] = [];
+    for (const [a, b] of parts) {
+      if (cb <= a || ca >= b) {
+        next.push([a, b]);
+        continue;
+      }
+      if (ca > a) next.push([a, Math.min(ca, b)]);
+      if (cb < b) next.push([Math.max(cb, a), b]);
+    }
+    parts = next;
+  }
+  return parts;
+}
 export function bounds(
   start: string,
   end: string,
@@ -98,6 +119,9 @@ export function report(
   let totalWork: number | null = null;
   let totalHuman: number | null = null;
   let totalStandby: number | null = null;
+  let totalIdle: number | null = null;
+  let totalQueueWait = 0;
+  let queueCount = 0;
 
   for (const s of included) {
     for (const t of s.turns) {
@@ -120,6 +144,20 @@ export function report(
       if (t.standby_ms !== null) {
         totalStandby = (totalStandby ?? 0) + t.standby_ms;
       }
+      // 中途停了随轮次裁剪同比例缩放（与 work/human 同一裁剪口径）
+      const idle = t.breakdown?.idle_gap_ms;
+      if (idle != null) {
+        const period = t.period_ms ?? null;
+        totalIdle =
+          (totalIdle ?? 0) +
+          (period !== null && t.elapsed_ms
+            ? Math.round((idle * period) / t.elapsed_ms)
+            : idle);
+      }
+      if ((t.queue_wait_ms ?? 0) > 0) {
+        queueCount++;
+        totalQueueWait += t.queue_wait_ms!;
+      }
     }
   }
 
@@ -134,13 +172,16 @@ export function report(
       review_wait_ms: totalHuman,
       standby_ms: totalStandby,
       response_gap_ms: totalStandby,
+      idle_gap_ms: totalIdle,
+      queue_count: queueCount,
+      queue_wait_ms: totalQueueWait,
       sessions: included.length,
       turns: Object.values(counts).reduce((a, b) => a + b, 0),
       measured_turns: counts.completed + counts.aborted + counts.failed,
       statuses: counts,
     },
     basis:
-      "Codex：基于 task_started/task_complete 轮次边界、call_id 工具调用配对与 item_completed 完成锚点的三态耗时切分；本地语料无审批事件，等待人审阅未单独计量（记 0）。Token 用量为 event_msg/token_count 累计快照的轮次差分实测，无快照时不计入。Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。Pi：模型推理耗时与工具执行机时累加为纯工作；Pi 来源不落盘审批事件，等待人审阅保持未知，工具就绪到实际开始的间隔单列为未分类延迟（可能含审批等待、调度或限流），缺失时长证据不编造。DeepSeek Harness：按 step/start → assistant/message 的推理跨度与 tool/call → tool/result 的执行跨度累加为纯工作；Token 用量为 assistant/message 逐请求用量的轮次合计（实测 per-request 而非累计快照）；本地语料审批策略为 never，无审批阻断事件，等待人审阅保持未知。Antigravity：基于 USER_INPUT/PLANNER_RESPONSE/GENERIC 记录流的三态切分，ask_question 阻断区间按等待人审阅计量，后台任务按完成标记计入工具执行；仅收录携带 transcript.jsonl 的会话，标题与项目来自全局索引库富化。Oh-My-Pi：按 assistant 响应跨度（请求起点 + duration）与 tool_execution_start → toolResult 的执行跨度累加为纯工作；轮次边界优先文件内用户消息，旧版文件回退 history.db 只读提示（秒级精度）；审批提示不落盘，等待人审阅保持未知，工具跨度可能包含审批等待，与 Pi 同样不猜测。OpenCode：只读打开数据目录中的 SQLite 会话库，模型生成取助手消息整段流式跨度（消息内流式空档计入模型生成；偏离 spec 字面的 reasoning|text part 口径——text part 90 个中 88 个 start==end 无时长，实测整段口径约为 part 时长和的 4 倍），扣除其中并行工具执行并集得到纯工作，轮内 step 间隙单列为未分类延迟，reasoning 段作为模型推理内部的思考下钻单列；permission 表为 ephemeral 且本地 0 行，等待人审阅记未知；Token 为助手消息逐请求用量的轮次合计（实测 input/output 逐步重置，130/379 条带 total 且全部分量全等，其余由分量推导，非累计快照）。",
+      "守恒口径（Antigravity）：用户等待 = 干活（模型响应 + 工具执行）+ 等待审阅 + 中途停了，恒等于轮次发出→答复完毕的墙钟时长。中途停了 = 轮内 ≥2 分钟无任何源事件的区间并集（扣除工具与审阅），可能含网络阻塞、设备休眠、忙上一条——源记录不写原因，只给时长不编造归因；思考与回复整条落盘不可再分，轮内 ≤2 分钟的响应间隙计入模型响应，更长的间隙无法区分生成与停摆，一律计入中途停了（宁可少报干活）。排队输入：发出时上一轮未答复完毕，消息排队等待（queue_wait_ms），轮间待命保持 null 不产生负间隔。收尾空档 = 当前时刻 − 末轮答复完毕，由前端实时计算。Claude/Codex 轮内分钟级缝隙几乎均为真实模型生成，维持原三态口径不拆停摆。Codex：基于 task_started/task_complete 轮次边界、call_id 工具调用配对与 item_completed 完成锚点的三态耗时切分；本地语料无审批事件，等待人审阅未单独计量（记 0）。Token 用量为 event_msg/token_count 累计快照的轮次差分实测，无快照时不计入。Claude Code：基于 tool_use ↔ tool_result 事件流与 turn_duration 埋点的三态耗时切分（纯工作、等待人审阅、待命）。Pi：模型推理耗时与工具执行机时累加为纯工作；Pi 来源不落盘审批事件，等待人审阅保持未知，工具就绪到实际开始的间隔单列为未分类延迟（可能含审批等待、调度或限流），缺失时长证据不编造。DeepSeek Harness：按 step/start → assistant/message 的推理跨度与 tool/call → tool/result 的执行跨度累加为纯工作；Token 用量为 assistant/message 逐请求用量的轮次合计（实测 per-request 而非累计快照）；本地语料审批策略为 never，无审批阻断事件，等待人审阅保持未知。Antigravity：基于 USER_INPUT/PLANNER_RESPONSE/GENERIC 记录流的三态切分，ask_question 阻断区间按等待人审阅计量，后台任务按完成标记计入工具执行；仅收录携带 transcript.jsonl 的会话，标题与项目来自全局索引库富化。Oh-My-Pi：按 assistant 响应跨度（请求起点 + duration）与 tool_execution_start → toolResult 的执行跨度累加为纯工作；轮次边界优先文件内用户消息，旧版文件回退 history.db 只读提示（秒级精度）；审批提示不落盘，等待人审阅保持未知，工具跨度可能包含审批等待，与 Pi 同样不猜测。OpenCode：只读打开数据目录中的 SQLite 会话库，模型生成取助手消息整段流式跨度（消息内流式空档计入模型生成；偏离 spec 字面的 reasoning|text part 口径——text part 90 个中 88 个 start==end 无时长，实测整段口径约为 part 时长和的 4 倍），扣除其中并行工具执行并集得到纯工作，轮内 step 间隙单列为未分类延迟，reasoning 段作为模型推理内部的思考下钻单列；permission 表为 ephemeral 且本地 0 行，等待人审阅记未知；Token 为助手消息逐请求用量的轮次合计（实测 input/output 逐步重置，130/379 条带 total 且全部分量全等，其余由分量推导，非累计快照）。",
     sessions: included,
   };
 }

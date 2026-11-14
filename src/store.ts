@@ -35,7 +35,7 @@ import {
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
-import { unionMs } from "./metrics.js";
+import { subtractMs, unionMs } from "./metrics.js";
 import {
   addUsage,
   mapUsage,
@@ -185,12 +185,25 @@ export function groupSubagents(
  * same event vocabulary (turn boundaries, tool_use/tool_result pairs keyed by
  * tool_id, optional review_wait_start/end). With no review-wait events it
  * degrades naturally: review_wait_ms = 0 and work = elapsed - tool time.
+ *
+ * 守恒口径（用户视角）：等待(elapsed) = 干活(模型响应 + 工具执行) + 等待审阅
+ * + 中途停了。「中途停了」= 轮内 ≥ IDLE_GAP_MIN_MS 无任何源事件的区间并集
+ * （扣除工具与审阅），可能装着网络阻塞、设备休眠、忙上一条——源记录不写
+ * 原因，只给时长不编造归因。旧 subtractive 差值把这段全塞进「模型推理」，
+ * 实测 Antigravity 会话里 58% 的「工作」其实是它，守恒拆分根治这个失真。
+ *
+ * 仅 Antigravity 启用停摆拆分（opts.idleGap）：其会话横跨休眠与 API 错误
+ * 风暴，长空洞是常态；Claude/Codex 的分钟级缝隙几乎都是真实模型生成
+ * （交互式短轮次），同样拆出来会把正常响应误判成停摆，故保持原三态口径。
  */
+const IDLE_GAP_MIN_MS = 120_000;
+
 export function calculateEventTiming(
   entries: Event[],
   start: number,
   end: number,
   elapsed: number,
+  opts?: { idleGap?: boolean },
 ): {
   work_ms: number;
   review_wait_ms: number;
@@ -226,6 +239,7 @@ export function calculateEventTiming(
   const toolResults = entries.filter((e) => e.kind === "tool_result");
   const usedResultIndices = new Set<number>();
   const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
+  const toolIntervals: [number, number][] = [];
   let totalToolMs = 0;
 
   for (const u of toolUses) {
@@ -255,6 +269,8 @@ export function calculateEventTiming(
         waitInside += overlap;
       }
       tDuration = Math.max(0, rAt - u.at_ms - waitInside);
+      // 原始配对区间（未扣审阅）：供「中途停了」扣除，避免把工具运行误判为停摆
+      toolIntervals.push([u.at_ms, rAt]);
     }
     totalToolMs += tDuration;
     const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
@@ -263,8 +279,25 @@ export function calculateEventTiming(
     toolsMap.set(tname, existing);
   }
 
-  const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait);
-  const work_ms = Math.max(0, elapsed - totalWait);
+  // 中途停了：相邻事件时间戳之间 ≥ IDLE_GAP_MIN_MS 的缝隙，扣除工具执行与
+  // 等待审阅后的并集。工具运行中的缝隙是「命令在跑」不是停摆，必须扣除。
+  // 仅在启用方（Antigravity）生效；其余适配器 idleGapMs 恒 0，口径不变。
+  let idleGapMs = 0;
+  if (opts?.idleGap) {
+    const eventTimes = entries
+      .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
+      .sort((a, b) => a - b);
+    const rawGaps: [number, number][] = [];
+    for (let i = 1; i < eventTimes.length; i++)
+      if (eventTimes[i] - eventTimes[i - 1] >= IDLE_GAP_MIN_MS)
+        rawGaps.push([eventTimes[i - 1], eventTimes[i]]);
+    idleGapMs = unionMs(
+      subtractMs(subtractMs(rawGaps, toolIntervals), waitIntervals),
+    );
+  }
+
+  const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait - idleGapMs);
+  const work_ms = Math.max(0, elapsed - totalWait - idleGapMs);
   return {
     work_ms,
     review_wait_ms: totalWait,
@@ -272,6 +305,7 @@ export function calculateEventTiming(
       model_api_ms: modelApiMs,
       tool_execution_ms: totalToolMs,
       review_wait_ms: totalWait,
+      idle_gap_ms: idleGapMs,
       tools: [...toolsMap.values()],
     },
   };
@@ -1250,7 +1284,13 @@ ALTER TABLE source_migrated RENAME TO source;`,
           sessionObj.agent === "Codex" ||
           sessionObj.agent === "Antigravity")
       ) {
-        applyTiming(calculateEventTiming(entries, start, end, elapsed));
+        applyTiming(
+          calculateEventTiming(entries, start, end, elapsed, {
+            // 停摆拆分仅对 Antigravity 启用（长会话空洞实证口径，见
+            // calculateEventTiming 文档注释）；Claude/Codex 维持原三态。
+            idleGap: sessionObj.agent === "Antigravity",
+          }),
+        );
       } else if (
         elapsed !== null &&
         start !== null &&
@@ -1306,6 +1346,11 @@ ALTER TABLE source_migrated RENAME TO source;`,
         if (prevEnd !== null && currStart !== null && currStart >= prevEnd) {
           s.turns[i].standby_ms = currStart - prevEnd;
           s.turns[i].response_gap_ms = s.turns[i].standby_ms;
+        } else if (prevEnd !== null && currStart !== null) {
+          // 排队输入：发出时上一轮还没答完。用户等待（发送→答复）天然包含
+          // 这段，不产生任何负间隔——只记录排队时长供叙述展示；轮间无空档，
+          // 待命保持 null。实际接单在 prevEnd 之后（交接通常仅数秒到一分钟）。
+          s.turns[i].queue_wait_ms = prevEnd - currStart;
         }
       }
       s.work_ms = s.turns.some((t) => t.work_ms !== null)
@@ -1317,6 +1362,16 @@ ALTER TABLE source_migrated RENAME TO source;`,
       s.standby_ms = s.turns.some((t) => t.standby_ms !== null)
         ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
         : null;
+      // 守恒口径补充：中途停了合计、排队统计、末轮答复完毕时刻（收尾空档的
+      // 锚点，前端用当前时刻实时计算空档时长）。
+      s.idle_gap_ms = s.turns.some((t) => t.breakdown?.idle_gap_ms != null)
+        ? s.turns.reduce((acc, t) => acc + (t.breakdown?.idle_gap_ms ?? 0), 0)
+        : null;
+      const queuedTurns = s.turns.filter((t) => (t.queue_wait_ms ?? 0) > 0);
+      s.queue_count = queuedTurns.length;
+      s.queue_wait_ms = queuedTurns.reduce((acc, t) => acc + t.queue_wait_ms!, 0);
+      s.last_done_ms =
+        s.turns.reduce((acc, t) => Math.max(acc, t.end_ms ?? 0), 0) || null;
 
       const tokened = s.turns.filter((t) => t.tokens);
       // Token rows for turns without event groups (external-import-only)

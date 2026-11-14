@@ -44,6 +44,10 @@
 
   --state-idle: #7A7268;        /* 深亚麻灰 - 待命时长 */
   --state-idle-light: #EEEAE2;  /* 亚麻浅底 */
+  /* 中途停了（守恒口径第 4 态）：轮内 ≥2 分钟无任何源事件的区间——
+     网络阻塞、设备休眠、忙上一条等，原因不明不编造。红 = 白等警示，
+     与轮间间隔（亚麻灰）在同一守恒条中必须一眼可分。 */
+  --state-idle-strong: #B3261E;
 
   /* 4.1 方案 A 多维操作分段色 (SSOT: prototypes/session-first-detail-view.html)
      等待确认统一口径：--color-skills 与 --state-wait 收敛为同一琥珀金
@@ -2261,6 +2265,7 @@ input[type="search"] {
 }
 .trend-w { background: var(--state-work); }
 .trend-h { background: var(--state-wait); }
+.trend-i { background: var(--state-idle-strong); }
 .trend-s { background: var(--state-standby); }
 .trend-day {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
