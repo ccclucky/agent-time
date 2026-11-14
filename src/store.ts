@@ -240,7 +240,6 @@ export function calculateEventTiming(
   const usedResultIndices = new Set<number>();
   const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
   const toolIntervals: [number, number][] = [];
-  let totalToolMs = 0;
 
   for (const u of toolUses) {
     const tname = u.tool_name || "tool";
@@ -263,21 +262,33 @@ export function calculateEventTiming(
     if (rIndex !== -1) {
       usedResultIndices.add(rIndex);
       const rAt = toolResults[rIndex].at_ms;
-      let waitInside = 0;
-      for (const [ws, we] of waitIntervals) {
-        const overlap = Math.max(0, Math.min(rAt, we) - Math.max(u.at_ms, ws));
-        waitInside += overlap;
+      // 工具区间封顶在本轮墙钟内：后台任务回执可能落在下一轮已开始之后，
+      // 不封顶会与下一轮的时长重叠双计（实测一个会话差出 49 分钟，同一页面
+      // 出现两个「AI 工作」）。溢出部分与本轮分解不再相加，守恒恒等式才成立；
+      // 与旧 ADR 的「回执结算全额」相比，这里选择不重复计数而非跨轮归因。
+      const cappedEnd = Math.min(rAt, end);
+      if (cappedEnd > u.at_ms) {
+        let waitInside = 0;
+        for (const [ws, we] of waitIntervals) {
+          const overlap = Math.max(0, Math.min(cappedEnd, we) - Math.max(u.at_ms, ws));
+          waitInside += overlap;
+        }
+        tDuration = Math.max(0, cappedEnd - u.at_ms - waitInside);
+        // 原始配对区间（未扣审阅）：供「中途停了」扣除，避免把工具运行误判为停摆
+        toolIntervals.push([u.at_ms, cappedEnd]);
       }
-      tDuration = Math.max(0, rAt - u.at_ms - waitInside);
-      // 原始配对区间（未扣审阅）：供「中途停了」扣除，避免把工具运行误判为停摆
-      toolIntervals.push([u.at_ms, rAt]);
+      // cappedEnd ≤ 发出时刻（时间戳乱序回写）：本轮墙钟内无执行时长，诚实计 0
     }
-    totalToolMs += tDuration;
     const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
     existing.count += 1;
     existing.duration_ms += tDuration;
     toolsMap.set(tname, existing);
   }
+
+  // 工具执行取配对区间并集（物理墙钟）：并行后台命令同时运行只计一次，
+  // 否则逐次求和会让工具时长超过本轮墙钟、守恒恒等式被击穿。
+  // 逐次明细（toolsMap / 客户端慢操作榜）保留原始时长供下钻。
+  const totalToolMs = unionMs(subtractMs(toolIntervals, waitIntervals));
 
   // 中途停了：相邻事件时间戳之间 ≥ IDLE_GAP_MIN_MS 的缝隙，扣除工具执行与
   // 等待审阅后的并集。工具运行中的缝隙是「命令在跑」不是停摆，必须扣除。

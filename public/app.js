@@ -1895,7 +1895,7 @@ function sessionDetail() {
       ${detailKpiCard(
         "AI 工作",
         autonomy.workSum !== null ? fmt(autonomy.workSum) : "—",
-        autonomy.workSum !== null ? "模型推理 + 本地工具" : "该会话未提供三态切分",
+        autonomy.workSum !== null ? "模型想和写 + 本地工具" : "该会话未提供三态切分",
         "work",
         "口径：AI 工作 work_ms = 模型推理 + 本地工具",
       )}
