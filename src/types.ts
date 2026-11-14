@@ -187,6 +187,11 @@ export interface TranscriptToolCall {
   /** One-line human-readable operation detail (command, patch input, path…),
    *  truncated to ~120 code points; null when the source carries nothing. */
   detail?: string | null;
+  /** 工具输出摘要（结果记录截断预览）。来源不提供时缺省，不编造。 */
+  result?: string | null;
+  /** 调用起止时刻（ms）。Antigravity = 发出与结果落盘时刻；供下钻展示。 */
+  at?: number | null;
+  end?: number | null;
 }
 
 export interface TranscriptTurn {

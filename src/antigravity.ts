@@ -544,11 +544,17 @@ export function extractAntigravityTranscript(path: string): TranscriptTurn[] {
   const pairer = new ToolPairer();
   const callByToolId = new Map<string, OpenTranscriptTool>();
 
-  const closeTool = (tool: PairedTool, at: number) => {
+  const closeTool = (tool: PairedTool, at: number, resultContent: string | null) => {
     const entry = callByToolId.get(tool.id);
     if (!entry) return;
     callByToolId.delete(tool.id);
     entry.call.duration_ms = Math.max(0, at - tool.at);
+    entry.call.at = tool.at;
+    entry.call.end = at;
+    // 输出摘要：结果记录截断预览（空内容如实缺省，不编造）
+    entry.call.result = resultContent && resultContent.trim()
+      ? truncateCodePoints(resultContent.trim(), 300)
+      : null;
   };
 
   for (const r of records) {
@@ -581,6 +587,9 @@ export function extractAntigravityTranscript(path: string): TranscriptTurn[] {
           name: tc.name,
           duration_ms: null,
           detail: detailFromArgs(tc.args ?? {}),
+          at: r.at,
+          end: null,
+          result: null,
         };
         current!.tool_calls.push(call);
         callByToolId.set(issued[i].id, { call, tool: issued[i] });
@@ -589,12 +598,12 @@ export function extractAntigravityTranscript(path: string): TranscriptTurn[] {
     }
     if (r.type === "GENERIC") {
       const tool = pairer.result(currentTurnId, r.at, r.content);
-      if (tool) closeTool(tool, r.at);
+      if (tool) closeTool(tool, r.at, r.content);
       continue;
     }
     if (r.type === "SYSTEM_MESSAGE") {
       const tool = pairer.receipt(r.at, r.content);
-      if (tool) closeTool(tool, r.at);
+      if (tool) closeTool(tool, r.at, r.content);
     }
   }
   // Unresolved tools keep duration_ms null (honest, no invention).

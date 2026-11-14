@@ -1811,6 +1811,8 @@ function dimensionDrilldownData(session, key) {
             value: fmt(c.duration_ms),
             sub: `${tstamp2(c.at)} → ${tstamp2(c.end)}`,
             slow: c.duration_ms > SLOW_OP_THRESHOLD_MS,
+            at: c.at,
+            turnId: c.turnId,
           })),
       }));
     return {
@@ -2319,6 +2321,7 @@ function openDrawer(turn, session) {
     c.classList.toggle("active", c.dataset.turnCapsule === turn.id),
   );
 
+  state.dimensionDrawerKey = null;
   // 总账四卡统一走 resolveRollup：breakdown 缺失时可推导指标回填，
   // 推导不出的维度由 rollupEvidenceNote 给出诚实一行原因
   const rollup = resolveRollup(turn);
@@ -2434,16 +2437,20 @@ function openDrawer(turn, session) {
   `
       : "";
 
+  const tstampShort = (ms) =>
+    ms == null
+      ? ""
+      : new Date(ms).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const toolsHtml = perCallStack.length
     ? perCallStack.map((c) => {
         const isSlow = c.duration_ms > SLOW_OP_THRESHOLD_MS;
         return `
-          <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}">
+          <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}" data-call-at="${c.at ?? ""}">
             <div class="tool-exec-head">
               <strong title="${h(c.name)}">${h(toolLabel(c.name))}</strong>
               <span class="tool-exec-time${isSlow ? " slow" : ""}">${fmt(c.duration_ms)}${isSlow ? "（慢操作）" : ""}</span>
             </div>
-            <div class="tool-exec-detail">${h(c.name)}</div>
+            <div class="tool-exec-detail">${c.at != null ? `${h(tstampShort(c.at))} → ${h(tstampShort(c.end))}` : h(c.name)}${c.at == null ? "" : ' · 输入/输出读取中…'}</div>
           </div>
         `;
       }).join("")
@@ -2524,21 +2531,40 @@ function openDrawer(turn, session) {
         <span style="font-size:12px; font-weight:700; color:var(--fg-title);">本轮工具调用</span>
         <span style="font-size:11px; color:var(--fg-muted);">${toolAgg.length ? `${perCallStack.length} 次调用 · ${toolAgg.length} 类工具` : "无工具调用"}</span>
       </div>
-      ${toolAgg.length ? `
-      <div class="tool-agg-list">
-        ${toolAgg.map((a) => `
-          <div class="tool-agg-row${a.slow ? " slow" : ""}" title="${h(a.name)}">
-            <span class="tool-agg-name">${h(toolLabel(a.name))}<em>×${a.count}</em></span>
-            <span class="tool-agg-total">${fmt(a.total)}</span>
-            <span class="tool-agg-max${a.max > SLOW_OP_THRESHOLD_MS ? " slow" : ""}">最长 ${fmt(a.max)}</span>
-          </div>`).join("")}
+      ${toolAgg.length
+        ? `<div class="tool-agg-list">
+        ${toolAgg
+          .map((a) => {
+            // 一类工具一个可展开块：聚合行为摘要，逐次卡（起止 + 输入/输出）在下方
+            const calls = perCallStack
+              .filter((c) => c.name === a.name)
+              .sort((x, y) => y.duration_ms - x.duration_ms);
+            const cards = calls
+              .map((c) => {
+                const isSlow = c.duration_ms > SLOW_OP_THRESHOLD_MS;
+                return `
+            <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}" data-call-at="${c.at ?? ""}" style="padding:7px 10px;">
+              <div class="tool-exec-head">
+                <strong style="font-size:12px;">轮次内第 ${calls.indexOf(c) + 1} 次</strong>
+                <span class="tool-exec-time${isSlow ? " slow" : ""}" style="font-size:11px;">${fmt(c.duration_ms)}${isSlow ? "（慢操作）" : ""}</span>
+              </div>
+              <div class="tool-exec-detail">${c.at != null ? `${h(tstampShort(c.at))} → ${h(tstampShort(c.end))}` : h(c.name)}${c.at == null ? "" : ' · 输入/输出读取中…'}</div>
+            </div>`;
+              })
+              .join("");
+            return `
+          <details class="dim-drill">
+            <summary><div class="tool-agg-row${a.slow ? " slow" : ""}" title="${h(a.name)}">
+              <span class="tool-agg-name">${h(toolLabel(a.name))}<em>×${a.count}</em></span>
+              <span class="tool-agg-total">${fmt(a.total)}</span>
+              <span class="tool-agg-max${a.max > SLOW_OP_THRESHOLD_MS ? " slow" : ""}">最长 ${fmt(a.max)}</span>
+            </div></summary>
+            <div class="dim-drill-body">${cards}</div>
+          </details>`;
+          })
+          .join("")}
       </div>
-      <details class="tool-call-details">
-        <summary>展开逐次明细（${perCallStack.length} 次 · 按耗时倒序${slowCallCount ? " · 超过 15 秒标红" : ""}）</summary>
-        <div class="tool-list-container">
-          ${toolsHtml}
-        </div>
-      </details>` : toolsHtml}
+      <p class="sub" style="margin:6px 2px 0;">逐次时长 = 发出 → 出结果的墙钟；输入/输出按需读取本机源文件，审批等待不可拆分。</p>` : toolsHtml}
     </div>
   `;
 
@@ -2568,6 +2594,7 @@ function openDimensionDrawer(key, session) {
   // 清掉轮次胶囊高亮：当前抽屉展示的是维度聚合，不是某一轮
   $$(".turn-capsule.active").forEach((c) => c.classList.remove("active"));
   state.selectedTurnId = null;
+  state.dimensionDrawerKey = key;
 
   const dim = breakdownDimension(key);
   const data = dimensionDrilldownData(session, key);
@@ -2583,7 +2610,8 @@ function openDimensionDrawer(key, session) {
         ${r.sub ? `<div class="tool-exec-detail">${h(r.sub)}</div>` : ""}
       </div>`;
           if (!r.calls || !r.calls.length) return aggRow;
-          // 聚合行可展开：逐次调用的起止时刻与时长（按耗时倒序）
+          // 聚合行可展开：逐次调用的起止时刻与时长（按耗时倒序）；
+          // 输入/输出在展开后按需从本机源文件回填（data-call-at 匹配）
           return `
       <details class="dim-drill">
         <summary>${aggRow}</summary>
@@ -2591,12 +2619,12 @@ function openDimensionDrawer(key, session) {
           ${r.calls
             .map(
               (c) => `
-          <div class="tool-exec-card${c.slow ? " slow" : ""}" style="padding:7px 10px;">
+          <div class="tool-exec-card${c.slow ? " slow" : ""}" style="padding:7px 10px;" data-call-at="${c.at ?? ""}" data-call-turn="${h(c.turnId || "")}">
             <div class="tool-exec-head">
               <strong style="font-size:12px;">${h(c.label)}</strong>
               <span class="tool-exec-time${c.slow ? " slow" : ""}" style="font-size:11px;">${h(c.value)}</span>
             </div>
-            <div class="tool-exec-detail">${h(c.sub)}</div>
+            <div class="tool-exec-detail">${h(c.sub)}${c.at != null ? ' · 输入/输出读取中…' : ""}</div>
           </div>`,
             )
             .join("")}
@@ -2617,12 +2645,44 @@ function openDimensionDrawer(key, session) {
     </div>
   `;
   d.classList.remove("collapsed");
+
+  // tool 维度：按需读取本机源文件，给每次调用回填输入/输出
+  if (key === "tool") {
+    const sessionAtClose = session;
+    fetchSessionTranscript(session).then((entry) => {
+      // 抽屉已被切换/关闭时放弃回填，防止串内容
+      if (state.dimensionDrawerKey !== key || state.activeSessionId !== sessionAtClose.id) return;
+      if (!entry || entry.status !== "ok") return;
+      const byTurnId = new Map((entry.data?.turns || []).map((x) => [x.turn_id, x]));
+      $$("#drawerBody .tool-exec-card[data-call-at][data-call-turn]").forEach((card) => {
+        const tt = byTurnId.get(card.dataset.callTurn);
+        if (!tt) return;
+        const at = Number(card.dataset.callAt);
+        const call = (tt.tool_calls || []).find((x) => x.at === at);
+        if (!call) return;
+        const detail = card.querySelector(".tool-exec-detail");
+        if (!detail) return;
+        if (detail.dataset.ioFilled === "1") return;
+        detail.dataset.ioFilled = "1";
+        detail.textContent = detail.textContent.replace(" · 输入/输出读取中…", "");
+        const lines = [];
+        if (call.detail) lines.push(`<b>输入</b> ${h(String(call.detail))}`);
+        if (call.result) lines.push(`<b>输出</b> ${h(String(call.result))}`);
+        if (lines.length)
+          detail.insertAdjacentHTML(
+            "beforeend",
+            `<div class="tool-exec-io">${lines.join('<div class="tool-exec-io-sep"></div>')}</div>`,
+          );
+      });
+    });
+  }
 }
 
 function closeDrawer() {
   const d = $("#detailDrawer");
   if (d) d.classList.add("collapsed");
   state.selectedTurnId = null;
+  state.dimensionDrawerKey = null;
   // 同步清掉轮次胶囊高亮
   $$(".turn-capsule.active").forEach((c) => c.classList.remove("active"));
 }
@@ -2637,9 +2697,8 @@ function navigateTurn(dir) {
   if (target) openDrawer(target, s);
 }
 
-// 按需拉取该会话的轮次提问/思考文本（GET /api/session/transcript），
-// 按 session_id 缓存：同会话内切换轮次不重复请求
-async function loadDrawerTranscript(session, turn) {
+// 会话 transcript 的统一取数（缓存共享给维度下钻的输入/输出回填）
+async function fetchSessionTranscript(session) {
   let entry = state.transcriptCache.get(session.id);
   if (!entry) {
     try {
@@ -2654,6 +2713,13 @@ async function loadDrawerTranscript(session, turn) {
     }
     state.transcriptCache.set(session.id, entry);
   }
+  return entry;
+}
+
+// 按需拉取该会话的轮次提问/思考文本（GET /api/session/transcript），
+// 按 session_id 缓存：同会话内切换轮次不重复请求
+async function loadDrawerTranscript(session, turn) {
+  const entry = await fetchSessionTranscript(session);
   renderDrawerTranscript(entry, session, turn);
 }
 
@@ -2679,6 +2745,28 @@ function renderDrawerTranscript(entry, session, turn) {
 
   const t = (entry.data?.turns || []).find((x) => x.turn_id === turn.id);
   const notes = entry.data?.missing_fields || [];
+  // 工具卡输入/输出回填：按发出时刻匹配（transcript 与事件流同一配对语义）
+  if (entry.status === "ok") {
+    const tcalls = (t?.tool_calls || []).slice();
+    $$("#drawerBody .tool-exec-card[data-call-at]").forEach((card) => {
+      const at = Number(card.dataset.callAt);
+      const call = tcalls.find((x) => x.at === at) || null;
+      if (!call) return;
+      const detail = card.querySelector(".tool-exec-detail");
+      if (!detail) return;
+      if (detail.dataset.ioFilled === "1") return;
+      detail.dataset.ioFilled = "1";
+      detail.textContent = detail.textContent.replace(" · 输入/输出读取中…", "");
+      const lines = [];
+      if (call.detail) lines.push(`<b>输入</b> ${h(String(call.detail))}`);
+      if (call.result) lines.push(`<b>输出</b> ${h(String(call.result))}`);
+      if (lines.length)
+        detail.insertAdjacentHTML(
+          "beforeend",
+          `<div class="tool-exec-io">${lines.join('<div class="tool-exec-io-sep"></div>')}</div>`,
+        );
+    });
+  }
   if (!t) {
     // 来源文件整体缺失/不可读时，后端会以 turns:[] + missing_fields 说明原因；
     // missing_fields 里可能混有思考链加密等与提问无关的说明，
