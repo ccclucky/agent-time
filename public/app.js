@@ -1716,6 +1716,170 @@ function aggregateTurnsByTool(sessions) {
   };
 }
 
+// 区间集合减法：从 base 扣除 cut（镜像 src/metrics.ts 的 subtractMs）
+function subtractIntervals(base, cut) {
+  let parts = base;
+  for (const [ca, cb] of [...cut].sort((a, b) => a[0] - b[0])) {
+    const next = [];
+    for (const [a, b] of parts) {
+      if (cb <= a || ca >= b) { next.push([a, b]); continue; }
+      if (ca > a) next.push([a, Math.min(ca, b)]);
+      if (cb < b) next.push([Math.max(cb, a), b]);
+    }
+    parts = next;
+  }
+  return parts;
+}
+
+// 轮内「中途停了」的具体区间（与后端 calculateEventTiming 的 idle 口径镜像：
+// ≥2 分钟无事件缝隙，扣除工具执行与等待确认）。只读 turn 一手事件，纯函数。
+const IDLE_GAP_MIN_MS_UI = 120000;
+function turnIdleIntervals(turn) {
+  const evs = [...(turn.events || [])].sort((a, b) => a.at_ms - b.at_ms);
+  const waits = reviewWaitIntervals(turn);
+  const uses = evs.filter((e) => e.kind === "tool_use");
+  const results = evs.filter((e) => e.kind === "tool_result");
+  const used = new Set();
+  const toolIv = [];
+  for (const u of uses) {
+    let rIdx = -1;
+    if (u.tool_id) {
+      rIdx = results.findIndex((r, i) => !used.has(i) && r.tool_id === u.tool_id && r.at_ms >= u.at_ms);
+    }
+    if (rIdx === -1) {
+      rIdx = results.findIndex((r, i) => !used.has(i) && r.at_ms >= u.at_ms);
+    }
+    if (rIdx === -1) continue;
+    used.add(rIdx);
+    const r = results[rIdx];
+    const end = Math.min(r.end_ms != null ? r.end_ms : r.at_ms, turn.end_ms != null ? turn.end_ms : Infinity);
+    if (end > u.at_ms) toolIv.push([u.at_ms, end]);
+  }
+  const times = [];
+  for (const e of evs) {
+    times.push(e.at_ms);
+    if (e.end_ms != null) times.push(e.end_ms);
+  }
+  times.sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = 1; i < times.length; i++) {
+    if (times[i] - times[i - 1] >= IDLE_GAP_MIN_MS_UI) gaps.push([times[i - 1], times[i]]);
+  }
+  return subtractIntervals(subtractIntervals(gaps, toolIv), waits);
+}
+
+// 五维下钻数据：全会话聚合（不按轮组织），供维度抽屉消费。纯函数。
+// 每维返回 { head, rows: [{ label, value, sub, slow }], note }
+function dimensionDrilldownData(session, key) {
+  const tstamp = (ms) =>
+    new Date(ms).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  const turns = session.turns || [];
+  const turnNo = (id) => turns.findIndex((t) => t.id === id) + 1;
+
+  if (key === "tool") {
+    const calls = [];
+    turns.forEach((t, i) => {
+      for (const c of perCallToolTimings(t)) calls.push({ ...c, turnIndex: i + 1 });
+    });
+    const map = new Map();
+    for (const c of calls) {
+      const cur = map.get(c.name) ?? { name: c.name, count: 0, total: 0, max: 0, slow: 0, turns: new Set() };
+      cur.count += 1;
+      cur.total += c.duration_ms;
+      cur.max = Math.max(cur.max, c.duration_ms);
+      if (c.duration_ms > SLOW_OP_THRESHOLD_MS) cur.slow += 1;
+      cur.turns.add(c.turnIndex);
+      map.set(c.name, cur);
+    }
+    const rows = [...map.values()]
+      .sort((a, b) => b.total - a.total)
+      .map((a) => ({
+        label: toolLabel(a.name) + " ×" + a.count,
+        value: fmt(a.total),
+        sub: `最长 ${fmt(a.max)} · 出现在轮 ${[...a.turns].sort((x, y) => x - y).join(", ")}` + (a.slow ? ` · 超 15s 慢操作 ${a.slow} 次` : ""),
+        slow: a.slow > 0,
+      }));
+    return {
+      head: `${calls.length} 次调用 · ${rows.length} 类工具`,
+      rows,
+      note: "逐次时长 = 工具发出到出结果的墙钟（含可能的审批等待，来源不落盘则拆不出）",
+    };
+  }
+
+  if (key === "model") {
+    const rows = turns
+      .map((t, i) => ({ label: `轮次 #${i + 1}`, value: t.breakdown ? fmt(t.breakdown.model_api_ms ?? 0) : "—", sub: (t.models || []).join(" / ") || "模型上下文未知", slow: false }))
+      .filter((r) => r.value !== "—");
+    const total = turns.reduce((a, t) => a + (t.breakdown?.model_api_ms ?? 0), 0);
+    return {
+      head: `合计 ${fmt(total)} · ${rows.length} 轮有测量`,
+      rows,
+      note: "思考与回复在源记录中整条落盘、不可再分，统一计入本维度；轮内 ≤2 分钟的响应间隙计入此处，更长间隙归「中途停了」",
+    };
+  }
+
+  if (key === "wait") {
+    const rows = [];
+    turns.forEach((t, i) => {
+      for (const [ws, we] of reviewWaitIntervals(t)) {
+        rows.push({ label: `轮次 #${i + 1}`, value: fmt(we - ws), sub: `${tstamp(ws)} → ${tstamp(we)}`, slow: false });
+      }
+    });
+    return {
+      head: rows.length ? `${rows.length} 次确认 · 合计 ${fmt(session.review_wait_ms || 0)}` : "本会话没有等待确认记录",
+      rows,
+      note: "等待确认 = 工具授权与方案确认的挂起时长；来源不落盘审批事件时该维度如实为空",
+    };
+  }
+
+  if (key === "idle") {
+    const rows = [];
+    turns.forEach((t, i) => {
+      for (const [a, b] of turnIdleIntervals(t)) {
+        rows.push({ label: `轮次 #${i + 1}`, value: fmt(b - a), sub: `${tstamp(a)} → ${tstamp(b)}`, slow: b - a >= 3600000 });
+      }
+    });
+    rows.sort((a, b) => 0);
+    const total = turns.reduce((acc, t) => acc + (t.breakdown?.idle_gap_ms ?? 0), 0);
+    return {
+      head: rows.length ? `${rows.length} 段 · 合计 ${fmt(total)}` : "本会话没有 ≥2 分钟的无事件空白",
+      rows,
+      note: "停摆的具体原因（网络阻塞、设备休眠、忙上一条）源记录不写，只能按两端记录类型推断，故不做定性",
+    };
+  }
+
+  if (key === "standby") {
+    const rows = [];
+    turns.forEach((t, i) => {
+      if (t.standby_ms != null && t.standby_ms > 0) {
+        const prev = turns[i - 1];
+        const start = prev && prev.end_ms != null ? tstamp(prev.end_ms) : "—";
+        rows.push({
+          label: `轮次 #${i + 1}`,
+          value: fmt(t.standby_ms),
+          sub: `上轮 ${start} 交卷 → 你 ${t.start_ms != null ? tstamp(t.start_ms) : "—"} 才发下一条`,
+          slow: t.standby_ms >= 3600000,
+        });
+      }
+      if ((t.queue_wait_ms ?? 0) > 0) {
+        rows.push({
+          label: `轮次 #${i + 1} 排队`,
+          value: fmt(t.queue_wait_ms),
+          sub: "发出时上一轮还没答完——消息排队，它收尾后即接手",
+          slow: false,
+        });
+      }
+    });
+    return {
+      head: rows.length ? `${rows.length} 段轮间间隔 · 合计 ${fmt(session.standby_ms || 0)}` : "本会话没有轮间间隔",
+      rows,
+      note: "轮间间隔是你的时间（阅读、离开、睡觉），AI 零消耗；排队条目表示你提前发了下一条",
+    };
+  }
+
+  return { head: "未知维度", rows: [], note: null };
+}
+
 // 慢操作阈值：单次工具调用超过 15 秒即视为慢操作（用户可见文案统一写作「超 15s 慢操作」）
 const SLOW_OP_THRESHOLD_MS = 15000;
 
@@ -1833,7 +1997,7 @@ function sessionDetail() {
       ? DETAIL_BREAKDOWN_ROWS.map((r) => {
           const pct = (b[r.key] / b.total) * 100;
           return pct > 0
-            ? `<div style="width:${pct.toFixed(1)}%; background:${r.color};" title="${h(r.label)}: ${pct.toFixed(1)}%"></div>`
+            ? `<div style="width:${pct.toFixed(1)}%; background:${r.color};" data-dim-row="${h(r.key)}" role="button" tabindex="0" aria-label="下钻查看${h(r.label)}细分" title="${h(r.label)}: ${pct.toFixed(1)}% · 点击下钻"></div>`
             : "";
         }).join("")
       : "";
@@ -1845,7 +2009,7 @@ function sessionDetail() {
           const ms = b[r.key];
           const pct = ((ms / b.total) * 100).toFixed(1);
           return `
-            <div class="breakdown-row" title="口径：${h(r.hint)}">
+            <div class="breakdown-row" data-dim-row="${h(r.key)}" role="button" tabindex="0" aria-label="下钻查看${h(r.label)}细分" title="口径：${h(r.hint)} · 点击查看全会话细分">
               <div class="breakdown-label">
                 <span class="seg-legend-swatch" style="background:${r.color};"></span>
                 <span>${h(r.label)}</span>
@@ -2367,6 +2531,57 @@ function openDrawer(turn, session) {
   // 按需加载该轮提问/思考文本（缓存按 session 生效，失败时诚实提示）
   loadDrawerTranscript(session, turn);
 
+  d.classList.remove("collapsed");
+}
+
+// 五维下钻抽屉：点击会话详情的分布行 / 色段，弹出该维度全会话聚合视图
+// （总结 + 逐条细分）。复用轮次抽屉面板，不新增页面。
+function openDimensionDrawer(key, session) {
+  const d = $("#detailDrawer");
+  if (!d) return;
+  const markEl = $("#drawerAgentMark");
+  if (markEl) markEl.innerHTML = agentMark(session.agent);
+  const titleEl = $("#drawerTurnTitle");
+  if (titleEl) {
+    titleEl.textContent = `${dimensionTitle(key)} · 会话下钻 · ${session.title || session.project}`;
+    titleEl.title = titleEl.textContent;
+  }
+  const prevBtn = $("#drawerPrevTurn");
+  const nextBtn = $("#drawerNextTurn");
+  if (prevBtn) prevBtn.disabled = true;
+  if (nextBtn) nextBtn.disabled = true;
+
+  // 清掉轮次胶囊高亮：当前抽屉展示的是维度聚合，不是某一轮
+  $$(".turn-capsule.active").forEach((c) => c.classList.remove("active"));
+  state.selectedTurnId = null;
+
+  const dim = breakdownDimension(key);
+  const data = dimensionDrilldownData(session, key);
+  const rowsHtml = data.rows.length
+    ? data.rows
+        .map(
+          (r) => `
+      <div class="tool-exec-card${r.slow ? " slow" : ""}">
+        <div class="tool-exec-head">
+          <strong>${h(r.label)}</strong>
+          <span class="tool-exec-time${r.slow ? " slow" : ""}">${h(r.value)}</span>
+        </div>
+        ${r.sub ? `<div class="tool-exec-detail">${h(r.sub)}</div>` : ""}
+      </div>`,
+        )
+        .join("")
+    : `<div class="empty" style="padding:16px;">该维度在当前会话没有任何可计量的记录。</div>`;
+
+  $("#drawerBody").innerHTML = `
+    <div>
+      <div class="drawer-section-label">${h(dim ? dim.label : key)} · 全会话聚合</div>
+      <div class="drawer-transcript-box" style="font-weight:700; color:var(--fg-title);">${h(data.head)}</div>
+      <div style="margin-top:12px;">
+        ${rowsHtml}
+      </div>
+      ${data.note ? `<p class="drawer-transcript-note">${h(data.note)}</p>` : ""}
+    </div>
+  `;
   d.classList.remove("collapsed");
 }
 
@@ -3000,6 +3215,14 @@ document.addEventListener("click", async (e) => {
   const sessionCard = e.target.closest("[data-open-session]");
   if (sessionCard) {
     location.hash = "#session/" + encodeURIComponent(sessionCard.dataset.openSession);
+    return;
+  }
+
+  // 0.4 五维分布行 / 色段：打开维度下钻抽屉（全会话聚合）
+  const dimRow = e.target.closest("[data-dim-row]");
+  if (dimRow) {
+    const s = detailSession();
+    if (s) openDimensionDrawer(dimRow.dataset.dimRow, s);
     return;
   }
 
