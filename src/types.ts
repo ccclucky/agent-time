@@ -189,4 +189,14 @@ export interface SessionTranscript {
   missing_fields: string[];
 }
 
-export class ValidationError extends Error {}
+export class ValidationError extends Error {
+  /** 确定性失败：同一份字节内容重试永远同样失败（体积上限、单条记录超限、
+   *  来源不明等纯内容判定）。refresh 据此把失败文件的 size+mtimeNs 签名落库
+   *  （import_failure），稳态同步跳过重解析；服务启动时清空 memo，适配器
+   *  升级或上游修复后自动重新探测。瞬态失败（权限、文件变化中）不得标记。 */
+  permanent?: boolean;
+  constructor(message: string, options?: { permanent?: boolean }) {
+    super(message);
+    if (options?.permanent) this.permanent = true;
+  }
+}

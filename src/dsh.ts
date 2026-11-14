@@ -71,7 +71,7 @@ const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 export function* dshLines(path: string): Generator<string> {
   const buf = readFileSync(path);
   if (buf.length > SOURCE_CAP)
-    throw new ValidationError("会话文件超过 512 MiB；未读取");
+    throw new ValidationError("会话文件超过 512 MiB；未读取", { permanent: true });
   if (!buf.subarray(0, 4).equals(ZSTD_MAGIC)) {
     for (const line of lines(path)) yield line.toString("utf8");
     return;
