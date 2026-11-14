@@ -2110,6 +2110,67 @@ input[type="search"] {
   }
 }
 
+/* 工具聚合行：一类工具一行（次数 / 合计 / 最慢一次），逐次明细折叠在其下 */
+.tool-agg-list {
+  margin-bottom: 8px;
+}
+.tool-agg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: #FFFFFF;
+}
+.tool-agg-row.slow {
+  border-left: 3px solid #DC2626;
+}
+.tool-agg-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--fg-title);
+}
+.tool-agg-name em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: 6px;
+}
+.tool-agg-total {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-title);
+  white-space: nowrap;
+}
+.tool-agg-max {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.tool-agg-max.slow {
+  color: #DC2626;
+  font-weight: 700;
+}
+.tool-call-details summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 6px 2px;
+  user-select: none;
+}
+.tool-call-details summary:hover {
+  color: var(--fg-title);
+}
+
 /* 抽屉内的逐次工具调用卡 (.slow = 单次 >15s, 3px 红色左边框) */
 .tool-exec-card {
   padding: 10px 12px;

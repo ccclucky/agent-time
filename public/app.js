@@ -2190,6 +2190,21 @@ function openDrawer(turn, session) {
   // 耗时倒序排序
   toolsList.sort((a, b) => b.duration_ms - a.duration_ms);
 
+  // 按工具聚合（用户视角：先看哪类工具吃了多少时间，逐次明细按需展开）
+  const toolAgg = (() => {
+    const map = new Map();
+    for (const c of perCallStack) {
+      const cur = map.get(c.name) ?? { name: c.name, count: 0, total: 0, max: 0, slow: 0 };
+      cur.count += 1;
+      cur.total += c.duration_ms;
+      cur.max = Math.max(cur.max, c.duration_ms);
+      if (c.duration_ms > SLOW_OP_THRESHOLD_MS) cur.slow += 1;
+      map.set(c.name, cur);
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  })();
+  const slowCallCount = perCallStack.filter((c) => c.duration_ms > SLOW_OP_THRESHOLD_MS).length;
+
   // 可选分项（如 Pi 的事件流切分）：仅在数据落盘存在时渲染该小节
   const unclassifiedMs = turn.breakdown?.unclassified_delay_ms ?? null;
   const waitCaption = unclassifiedMs !== null
@@ -2325,15 +2340,27 @@ function openDrawer(turn, session) {
     <!-- Pi 未分类延迟（工具就绪到实际开始，无法归因为人审） -->
     ${unclassifiedHtml}
 
-    <!-- 详细脚本与慢工具清单 -->
+    <!-- 工具调用：按工具聚合先行，逐次明细按需展开 -->
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
         <span style="font-size:12px; font-weight:700; color:var(--fg-title);">本轮工具调用</span>
-        <span style="font-size:11px; color:var(--fg-muted);">单次调用粒度 · 按耗时倒序 · 超过 15 秒标红</span>
+        <span style="font-size:11px; color:var(--fg-muted);">${toolAgg.length ? `${perCallStack.length} 次调用 · ${toolAgg.length} 类工具` : "无工具调用"}</span>
       </div>
-      <div class="tool-list-container">
-        ${toolsHtml}
+      ${toolAgg.length ? `
+      <div class="tool-agg-list">
+        ${toolAgg.map((a) => `
+          <div class="tool-agg-row${a.slow ? " slow" : ""}" title="${h(a.name)}">
+            <span class="tool-agg-name">${h(toolLabel(a.name))}<em>×${a.count}</em></span>
+            <span class="tool-agg-total">${fmt(a.total)}</span>
+            <span class="tool-agg-max${a.max > SLOW_OP_THRESHOLD_MS ? " slow" : ""}">最长 ${fmt(a.max)}</span>
+          </div>`).join("")}
       </div>
+      <details class="tool-call-details">
+        <summary>展开逐次明细（${perCallStack.length} 次 · 按耗时倒序${slowCallCount ? " · 超过 15 秒标红" : ""}）</summary>
+        <div class="tool-list-container">
+          ${toolsHtml}
+        </div>
+      </details>` : toolsHtml}
     </div>
   `;
 
