@@ -1555,6 +1555,9 @@ function perCallToolTimings(turn) {
       duration_ms: duration,
       callId: u.tool_id || null,
       turnId: turn.id,
+      // 起止时刻：供维度下钻展示每次调用的具体时间窗
+      at: u.at_ms,
+      end: r.end_ms != null && r.end_ms > r.at_ms ? r.end_ms : r.at_ms,
     });
   }
   return calls;
@@ -1781,6 +1784,8 @@ function dimensionDrilldownData(session, key) {
     turns.forEach((t, i) => {
       for (const c of perCallToolTimings(t)) calls.push({ ...c, turnIndex: i + 1 });
     });
+    const tstamp2 = (ms) =>
+      new Date(ms).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
     const map = new Map();
     for (const c of calls) {
       const cur = map.get(c.name) ?? { name: c.name, count: 0, total: 0, max: 0, slow: 0, turns: new Set() };
@@ -1798,6 +1803,15 @@ function dimensionDrilldownData(session, key) {
         value: fmt(a.total),
         sub: `最长 ${fmt(a.max)} · 出现在轮 ${[...a.turns].sort((x, y) => x - y).join(", ")}` + (a.slow ? ` · 超 15s 慢操作 ${a.slow} 次` : ""),
         slow: a.slow > 0,
+        calls: calls
+          .filter((c) => c.name === a.name)
+          .sort((x, y) => y.duration_ms - x.duration_ms)
+          .map((c) => ({
+            label: `轮次 #${c.turnIndex}`,
+            value: fmt(c.duration_ms),
+            sub: `${tstamp2(c.at)} → ${tstamp2(c.end)}`,
+            slow: c.duration_ms > SLOW_OP_THRESHOLD_MS,
+          })),
       }));
     return {
       head: `${calls.length} 次调用 · ${rows.length} 类工具`,
@@ -2559,16 +2573,36 @@ function openDimensionDrawer(key, session) {
   const data = dimensionDrilldownData(session, key);
   const rowsHtml = data.rows.length
     ? data.rows
-        .map(
-          (r) => `
-      <div class="tool-exec-card${r.slow ? " slow" : ""}">
+        .map((r) => {
+          const aggRow = `
+      <div class="tool-exec-card${r.slow ? " slow" : ""}" style="cursor:${r.calls ? "pointer" : "default"};">
         <div class="tool-exec-head">
           <strong>${h(r.label)}</strong>
           <span class="tool-exec-time${r.slow ? " slow" : ""}">${h(r.value)}</span>
         </div>
         ${r.sub ? `<div class="tool-exec-detail">${h(r.sub)}</div>` : ""}
-      </div>`,
-        )
+      </div>`;
+          if (!r.calls || !r.calls.length) return aggRow;
+          // 聚合行可展开：逐次调用的起止时刻与时长（按耗时倒序）
+          return `
+      <details class="dim-drill">
+        <summary>${aggRow}</summary>
+        <div class="dim-drill-body">
+          ${r.calls
+            .map(
+              (c) => `
+          <div class="tool-exec-card${c.slow ? " slow" : ""}" style="padding:7px 10px;">
+            <div class="tool-exec-head">
+              <strong style="font-size:12px;">${h(c.label)}</strong>
+              <span class="tool-exec-time${c.slow ? " slow" : ""}" style="font-size:11px;">${h(c.value)}</span>
+            </div>
+            <div class="tool-exec-detail">${h(c.sub)}</div>
+          </div>`,
+            )
+            .join("")}
+        </div>
+      </details>`;
+        })
         .join("")
     : `<div class="empty" style="padding:16px;">该维度在当前会话没有任何可计量的记录。</div>`;
 

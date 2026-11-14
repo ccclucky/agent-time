@@ -1765,6 +1765,13 @@ input[type="search"] {
 }
 
 /* 首屏第一视觉：会话专属操作与耗时分布 */
+.session-breakdown-full .multi-seg-bar > [data-dim-row] {
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.session-breakdown-full .multi-seg-bar > [data-dim-row]:hover {
+  filter: brightness(1.12);
+}
 .session-breakdown-full {
   background: var(--card-muted);
   border: 2px solid var(--line);
@@ -1793,6 +1800,17 @@ input[type="search"] {
   font-family: var(--font-mono);
 }
 
+.breakdown-row {
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.breakdown-row:hover {
+  background: #FFFBF9;
+}
+.breakdown-row:focus-visible {
+  outline: 2px solid var(--state-work);
+  outline-offset: 1px;
+}
 .breakdown-row {
   display: flex;
   align-items: center;
@@ -2017,6 +2035,7 @@ input[type="search"] {
 .turn-capsule {
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 12px 16px;
   background: #FFFFFF;
   border: 1px solid var(--line);
@@ -2084,7 +2103,6 @@ input[type="search"] {
   border-radius: 4px;
   overflow: hidden;
   display: flex;
-  margin-right: 16px;
 }
 
 .capsule-duration {
@@ -2103,7 +2121,7 @@ input[type="search"] {
   }
 
   .capsule-bar {
-    width: 100%;
+    flex: 1 1 100%;
     order: 3;
     margin-top: 8px;
     margin-right: 0;
@@ -2160,6 +2178,37 @@ input[type="search"] {
   color: #DC2626;
   font-weight: 700;
 }
+.dim-drill {
+  margin-bottom: 8px;
+}
+.dim-drill > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.dim-drill > summary::-webkit-details-marker {
+  display: none;
+}
+.dim-drill[open] > summary .tool-exec-card {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.dim-drill > summary .tool-exec-card::after {
+  content: "▸ 展开";
+  font-size: 10px;
+  color: var(--fg-muted);
+  margin-left: 8px;
+}
+.dim-drill[open] > summary .tool-exec-card::after {
+  content: "▾ 收起";
+}
+.dim-drill-body {
+  padding: 0 0 8px 14px;
+  border-left: 2px solid var(--line);
+}
+.dim-drill-body .tool-exec-card {
+  margin-bottom: 6px;
+}
+
 .tool-call-details summary {
   cursor: pointer;
   font-size: 11px;
