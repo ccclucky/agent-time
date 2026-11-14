@@ -1538,7 +1538,10 @@ function perCallToolTimings(turn) {
     used.add(rIdx);
     const r = results[rIdx];
     let duration;
-    if (r.end_ms != null && r.end_ms >= r.at_ms) {
+    // end_ms 严格大于 at_ms 才是真实执行区间（Pi：at=工具就绪、end=完成）；
+    // Antigravity 的结果记录是单时间戳（end_ms == at_ms，相减恒 0），必须
+    // 回退为 发出→结果 的口径（扣除区间内等待确认），否则逐次全显 0ms。
+    if (r.end_ms != null && r.end_ms > r.at_ms) {
       duration = r.end_ms - r.at_ms;
     } else {
       let waitInside = 0;
