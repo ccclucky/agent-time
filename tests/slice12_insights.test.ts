@@ -105,9 +105,9 @@ test("Slice 12 评审回归: 工具聚合保留 name，会话占比分子分母�
   );
 });
 
-test("Slice 12 静态资源: 版本戳统一递增到 20261115-6", () => {
+test("Slice 12 静态资源: 版本戳统一递增到 20261115-7", () => {
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "两个资源共用一个版本戳");
-  assert.equal(cssV, "20261115-6", "本次改动必须伴随新戳");
+  assert.equal(cssV, "20261115-7", "本次改动必须伴随新戳");
 });
