@@ -2367,13 +2367,13 @@ input[type="search"] {
   height: 100%;
 }
 .trend-col .trend-val {
-  position: absolute;
-  top: -2px;
+  /* 流内元素：随 flex-end 底部锚定，正好骑在各柱顶上（不再钉死列顶） */
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 10px;
   font-weight: 600;
   color: var(--fg-title, #1F1E1D);
   white-space: nowrap;
+  line-height: 12px;
 }
 .trend-bar {
   width: 100%;
