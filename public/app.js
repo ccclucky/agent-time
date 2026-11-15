@@ -626,7 +626,7 @@ function trendCard() {
   const labelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
   const bars = buckets
     .map((b, i) => {
-      const height = b.work > 0 ? 8 + 82 * Math.sqrt(b.work / maxWork) : 2;
+      const height = b.work > 0 ? 10 + 200 * Math.sqrt(b.work / maxWork) : 2;
       const seg = (v, cls, name) =>
         v > 0
           ? `<i class="${cls}" style="height:${((v / total) * 100).toFixed(1)}%;" title="${name} ${fmt(v)}"></i>`
