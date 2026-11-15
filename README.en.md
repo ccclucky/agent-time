@@ -39,17 +39,22 @@ How much did your agents actually work today — and how much went into waiting 
 
 Typical time tracking counts the whole "start to finish" span as work — **your reading, thinking, and approval time all get billed as AI effort**. AgentTime splits that bill using first-hand evidence from the session event streams.
 
-## The three-state timing model
+## The conservation timing model
 
 | State | Meaning | Measured from |
 | --- | --- | --- |
-| **Pure work** `work_ms` | Model inference + local tool execution | First-hand machine time accumulated from response spans and paired tool spans |
+| **Pure work** `work_ms` | Model thinking-and-writing + local tool execution | First-hand machine time accumulated from response spans and paired tool spans |
 | **Review wait** `review_wait_ms` | Human approval / confirmation blocks | Only counted when the source records approval events; otherwise honestly reported as unknown — never invented |
-| **Standby** `standby_ms` | Reply-finished → next submission interval | Turn boundary arithmetic; includes your reading and thinking time |
+| **Idle gap** `idle_gap_ms` | In-turn stretches with no source events at all (network blocking, device sleep, busy with the previous message) | Union of in-turn event-free intervals ≥ threshold, minus tool and review spans; sources never state the cause, so only duration is reported |
+| **Standby (turn gap)** `standby_ms` | Reply-finished → next submission interval | Turn boundary arithmetic; your time, zero AI consumption |
 
-The web UI renders these states as plain-language labels — **AI 工作 / 等待确认 / 待命** — and the in-app "How is this time measured?" dialog maps every label back to the glossary term and field name.
+Conservation identity: **pure work + review wait + idle gap = turn wall clock** (submission → final reply), to the millisecond. Idle thresholds are per-adapter: Antigravity/Pi/Oh-My-Pi/DeepSeek Harness/OpenCode ≥2 minutes; Claude Code/Codex ≥30 minutes (minute-level gaps in interactive turns are genuine generation).
 
-Accompanying drill-downs: four turn KPIs (total time / AI work / auto-completion / 15s+ slow ops), per-turn rollup, slowest-operations ranking, per-model and per-thinking-level breakdowns, and per-turn token usage. The overview also gets a day/week three-state trend chart, takeaway cards, and Markdown report export — all generated locally, zero upload. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
+Queued submissions (sent while the previous turn was still running) are recorded separately as `queue_wait_ms`; the tail gap after the final reply is computed live by the frontend — neither is folded into any other dimension.
+
+The web UI renders these states as plain-language labels — **AI 工作 / 等待确认 / 中途停了 / 轮间间隔** — and the in-app "How is this time measured?" dialog maps every label back to the glossary term and field name.
+
+Accompanying drill-downs: six turn KPIs (total time / AI work / auto-completion / 15s+ slow ops / queued submissions / tail gap), per-turn rollup with per-segment conservation breakdown, slowest-operations ranking, per-tool call details with input/output and start/end times, per-model and per-thinking-level breakdowns, and per-turn token usage. The overview also gets a "daily AI work" trend chart (day/week toggle, auto-weekly for long ranges), a per-session work timeline, takeaway cards, and Markdown report export — all generated locally, zero upload. **Missing evidence is always labeled as such — never extrapolated.** That is AgentTime's first design principle.
 
 ## Quick start
 
@@ -89,7 +94,7 @@ All imports are read-only; formats keep adapting as upstreams evolve (design dec
 
 ## Screenshots
 
-**Session detail**: three-state split, four KPIs, slowest operations, and attribution.
+**Session detail**: five-dimension split (click any row to drill down), six KPIs, slowest operations, and attribution.
 
 ![Session detail](docs/assets/session-detail.png)
 
