@@ -622,25 +622,28 @@ function trendCard() {
   const topDayKeys = new Set(
     [...buckets].sort((a, b) => b.work - a.work).slice(0, 3).map((b) => b.key),
   );
-  // 桶多时只标注两端与等距采样，避免 367 根柱挤成一排标签
-  const labelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
+  // 数值标注：柱顶显示当天干活时长。柱少（列宽 ≥26px）时每根都标；
+  // 柱多时按等距抽稀防重叠，但 TOP3 峰值永远标注。
+  const labelStep = n <= 40 ? 1 : Math.max(1, Math.ceil(n / 40));
+  // 柱高用容器百分比：最长柱 = 容器 92%，其余按 √ 相对计算——不留大片
+  // 空白，且随容器实际高度自适应。基线由列的 justify-content: flex-end 锚定。
+  // 日期标签：按柱数自适应密度（最多约 16 个），与数值标签相互独立
+  const dateLabelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
   const bars = buckets
     .map((b, i) => {
-      const height = b.work > 0 ? 10 + 200 * Math.sqrt(b.work / maxWork) : 2;
-      const seg = (v, cls, name) =>
-        v > 0
-          ? `<i class="${cls}" style="height:${((v / total) * 100).toFixed(1)}%;" title="${name} ${fmt(v)}"></i>`
-          : "";
-      // 单指标改版：柱 = 当天 AI 干活合计（一眼看出哪天 AI 真在干活）；
-      // 数值只标全局 TOP3 峰值日，日期标签按柱数自适应密度（最多约 12 个）。
+      const heightPct =
+        b.work > 0 ? (4 + 88 * Math.sqrt(b.work / maxWork)).toFixed(1) : "2";
       const isTop3 = topDayKeys.has(b.key);
-      const valueLabel = isTop3 ? `<span class="trend-val">${(b.work / 3600000).toFixed(1)}h</span>` : "";
-      const showLabel = i % labelEvery === 0 || i === n - 1;
+      const showVal = (i % labelStep === 0 || isTop3) && b.work > 0;
+      const hrs = b.work / 3600000;
+      const valText = hrs >= 1 ? `${hrs.toFixed(1)}h` : `${Math.round(b.work / 60000)}m`;
+      const valueLabel = showVal ? `<span class="trend-val">${valText}</span>` : "";
+      const showLabel = i % dateLabelEvery === 0 || i === n - 1;
       const label = gran === "week" ? weekLabel(b.key) : b.key.slice(5).replace("-", "/");
       return `
       <div class="trend-col">
         ${valueLabel}
-        <div class="trend-bar" style="height:${height.toFixed(1)}px;" title="${h(label)}：AI 干活 ${fmt(b.work)} · ${h(dimensionTitle("idle"))} ${fmt(b.idle || 0)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮"><div class="trend-w" style="height:100%;"></div></div>
+        <div class="trend-bar" style="height:${heightPct}%;" title="${h(label)}：AI 干活 ${fmt(b.work)} · ${h(dimensionTitle("idle"))} ${fmt(b.idle || 0)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮"><div class="trend-w" style="height:100%;"></div></div>
         <span class="trend-day">${showLabel ? h(label) : ""}</span>
       </div>`;
     })
