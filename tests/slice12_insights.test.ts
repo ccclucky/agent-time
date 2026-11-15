@@ -95,18 +95,19 @@ test("Slice 12 评审回归: 工具聚合保留 name，会话占比分子分母�
     js.includes("{ name: tool.name, count: 0, durationMs: 0 }"),
     "累加器必须携带 name",
   );
-  assert.ok(js.includes("function sessionThreeStateMs"), "同口径会话测量函数");
-  const uses = js.split("sessionThreeStateMs(x)").length - 1;
-  assert.ok(uses >= 2, "结论卡与导出都使用同口径测量");
+  // 守恒口径统一后：结论卡与导出都用干活合计（Σ work_ms）做主数字，
+  // 与 TOP 榜同源；墙钟跨度不再冒充耗时（omp 1250h 实证）
+  const workAgg = js.split('(x.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0)').length - 1;
+  assert.ok(workAgg >= 2, "结论卡与导出都使用干活合计口径");
   assert.ok(
-    js.includes("AI 工作 + 等待确认 + 待命合计口径"),
+    js.includes("**干活 TOP 3 会话**（AI 工作 work_ms 合计口径）"),
     "导出的 TOP 会话列表标注口径",
   );
 });
 
-test("Slice 12 静态资源: 版本戳统一递增到 20261104-1", () => {
+test("Slice 12 静态资源: 版本戳统一递增到 20261115-7", () => {
   const cssV = html.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = html.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "两个资源共用一个版本戳");
-  assert.equal(cssV, "20261104-1", "本次改动必须伴随新戳");
+  assert.equal(cssV, "20261115-7", "本次改动必须伴随新戳");
 });

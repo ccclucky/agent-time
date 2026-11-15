@@ -145,7 +145,7 @@ test("Slice 10 UI language: default layer has no English annotations (definition
   }
 });
 
-test("Slice 10 UI language: 时间流向 renders one partition bar (AI 工作 → 等待确认 → 待命) with an honest 0% legend (#38)", () => {
+test("Slice 10 UI language: 时间流向 renders one partition bar (AI 工作 → 等待确认 → [中途停了] → 轮间间隔) with an honest 0% legend (#38)", () => {
   const source = app();
   const body = sliceFunction(source, "function funnel()");
   assert.ok(
@@ -153,9 +153,12 @@ test("Slice 10 UI language: 时间流向 renders one partition bar (AI 工作 �
     "funnel section title must be 时间流向",
   );
   // Caption must state the composite total in display words, not require math.
+  // 中途停了段为条件渲染（仅守恒口径启用方有数据），词面允许条件出现。
   assert.ok(
-    body.includes("记录总时长") && body.includes("（AI 工作 + 等待确认 + 待命）"),
-    "caption must read 记录总时长 …（AI 工作 + 等待确认 + 待命）",
+    body.includes("记录总时长") &&
+      body.includes("（AI 工作 + 等待确认") &&
+      body.includes("+ 轮间间隔）"),
+    "caption must read 记录总时长 …（AI 工作 + 等待确认 [+ 中途停了] + 轮间间隔）",
   );
   // One bar, three segments in the canonical formula order.
   const segColors = [...body.matchAll(/renderFlowSegment\((?:[^,]+,\s*)?"(var\(--state-[a-z]+\))"/g)].map((m) => m[1]);
@@ -182,7 +185,7 @@ test("Slice 10 UI language: one truth source drives the four dimension labels ev
   const source = app();
   const { block, entries } = dimensionMeta(source);
   const labels = entries.map((e) => e.label);
-  assert.deepEqual(labels, ["本地工具", "模型推理", "等待确认", "待命"]);
+  assert.deepEqual(labels, ["本地工具", "模型想和写", "等待确认", "中途停了", "轮间间隔"]);
 
   assert.match(
     source,
@@ -241,15 +244,15 @@ test("Slice 10 UI language: one truth source drives the four dimension labels ev
   );
 });
 
-test("Slice 10 UI language: drawer four cards read 模型推理 / 本地工具 / 等待确认 / 本轮时长", () => {
+test("Slice 10 UI language: drawer cards read 模型想和写 / 本地工具 / 等待确认 / 本轮时长 (+ 中途停了)", () => {
   const body = sliceFunction(app(), "function openDrawer(");
   const keys = [
     ...body.matchAll(/class="drawer-kpi-title">\$\{h\(dimensionTitle\("([^"]+)"\)\)\}/g),
   ].map((m) => m[1]);
   assert.deepEqual(
     keys,
-    ["model", "tool", "wait"],
-    "the first three cards must be the shared 模型推理/本地工具/等待确认 dimensions",
+    ["model", "tool", "wait", "idle"],
+    "the cards must be the shared 本地工具/模型想和写/等待确认/中途停了 dimensions",
   );
   assert.ok(
     body.includes('class="drawer-kpi-title">本轮时长<'),
@@ -263,10 +266,17 @@ test("Slice 10 UI language: drawer four cards read 模型推理 / 本地工具 /
   assert.ok(body.includes("不计入等待确认"), "unclassified note must end 不计入等待确认");
 });
 
-test("Slice 10 UI language: detail page four KPIs read 总时长 / AI 工作 / 自动完成度 / 超 15s 慢操作", () => {
+test("Slice 10 UI language: detail page KPIs read 总时长 / AI 工作 / 自动完成度 / 超 15s 慢操作 (+ 排队输入 / 收尾空档)", () => {
   const body = sliceFunction(app(), "function sessionDetail(");
   const titles = [...body.matchAll(/detailKpiCard\(\s*"([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(titles, ["总时长", "AI 工作", "自动完成度", "超 15s 慢操作"]);
+  assert.deepEqual(titles, [
+    "总时长",
+    "AI 工作",
+    "自动完成度",
+    "超 15s 慢操作",
+    "排队输入",
+    "收尾空档",
+  ]);
   assert.ok(
     body.includes("本会话操作与耗时分布"),
     "breakdown panel must read 本会话操作与耗时分布",
@@ -282,20 +292,22 @@ test("Slice 10 UI language: tooltips expose the glossary layer on stats, funnel,
     stats.includes('title="口径：累计工作时长 processing_ms'),
     "stats card must hint 累计工作时长 processing_ms",
   );
-  assert.ok(
-    stats.includes('title="口径：并行去重时长 processing_union_ms'),
-    "stats card must hint 并行去重时长 processing_union_ms",
+  // 并行去重时长卡已按用户主张移除（不去重合、不去并行）
+  assert.equal(
+    stats.includes("并行去重时长"),
+    false,
+    "并行去重时长 stat card must stay removed",
   );
 
   const funnel = sliceFunction(source, "function funnel()");
   // Caption (composite) and AI-work segment stay explicit literals.
   assert.match(
     funnel,
-    /class="flow-caption" title="口径：记录总时长 = AI 工作 work_ms/,
+    /class="flow-caption" title="守恒口径：记录总时长 = AI 工作 work_ms/,
     "caption tooltip must name the composite breakdown fields",
   );
   assert.ok(
-    funnel.includes('"口径：AI 工作 work_ms = 模型推理 + 本地工具"'),
+    funnel.includes('"口径：AI 工作 work_ms = 模型想和写 + 本地工具"'),
     "AI 工作 segment tooltip must name the model + tool components",
   );
   // wait/standby tooltips must derive from the shared dimension table.
@@ -322,8 +334,15 @@ test("Slice 10 UI language: tooltips expose the glossary layer on stats, funnel,
 
   const detail = sliceFunction(source, "function sessionDetail(");
   const kpiCalls = callBlocks(detail, "detailKpiCard");
-  assert.equal(kpiCalls.length, 4, "sessionDetail must render four KPI cards");
-  const kpiFields = ["sessionWallSpan", "work_ms", "autonomy_rate", "slow_ops"];
+  assert.equal(kpiCalls.length, 6, "sessionDetail must render six KPI cards");
+  const kpiFields = [
+    "sessionWallSpan",
+    "work_ms",
+    "autonomy_rate",
+    "slow_ops",
+    "queue_wait_ms",
+    "last_done_ms",
+  ];
   kpiCalls.forEach((block, i) => {
     assert.ok(
       block.includes("口径："),
@@ -366,11 +385,12 @@ test("Slice 10 UI language: definitions() carries the full three-layer mapping t
     ["本轮时长", "wall time", "elapsed_ms"],
     ["AI 工作", "Active Work Duration", "work_ms = model_ms + tool execution"],
     ["等待确认", "Review Wait", "review_wait_ms"],
-    ["待命", "Standby Duration", "standby_ms"],
+    ["中途停了", "Idle Gap", "idle_gap_ms（≥2 分钟无源事件）"],
+    ["轮间间隔", "Standby Duration", "standby_ms"],
     ["自动完成度", "Autonomy Rate", "autonomy_rate"],
     ["超 15s 慢操作", "Slow Operation Count", "slow_ops"],
     ["本地工具", "Tool Execution Duration", "tool execution"],
-    ["模型推理", "Model API Duration", "model_ms"],
+    ["模型想和写", "Model API Duration", "model_ms（含思考与输出，整条落盘不可再分）"],
   ]);
   assert.ok(
     body.includes("「—」表示 GLOSSARY 无独立条目，口径以字段名为准。"),
@@ -387,5 +407,5 @@ test("Slice 10 UI language: both assets share one cache-busting stamp (slice 12 
   const cssV = source.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = source.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261104-1", "copy convergence requires a new asset stamp");
+  assert.equal(cssV, "20261115-7", "copy convergence requires a new asset stamp");
 });

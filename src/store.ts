@@ -35,7 +35,7 @@ import {
 import { SCHEMA } from "./schema.js";
 import { Directories, isSessionFile } from "./directories.js";
 import { expand } from "./locations.js";
-import { unionMs } from "./metrics.js";
+import { subtractMs, unionMs } from "./metrics.js";
 import {
   addUsage,
   mapUsage,
@@ -185,12 +185,38 @@ export function groupSubagents(
  * same event vocabulary (turn boundaries, tool_use/tool_result pairs keyed by
  * tool_id, optional review_wait_start/end). With no review-wait events it
  * degrades naturally: review_wait_ms = 0 and work = elapsed - tool time.
+ *
+ * 守恒口径（用户视角）：等待(elapsed) = 干活(模型响应 + 工具执行) + 等待审阅
+ * + 中途停了。「中途停了」= 轮内 ≥ IDLE_GAP_MIN_MS 无任何源事件的区间并集
+ * （扣除工具与审阅），可能装着网络阻塞、设备休眠、忙上一条——源记录不写
+ * 原因，只给时长不编造归因。旧 subtractive 差值把这段全塞进「模型推理」，
+ * 实测 Antigravity 会话里 58% 的「工作」其实是它，守恒拆分根治这个失真。
+ *
+ * 仅 Antigravity 启用停摆拆分（opts.idleGap）：其会话横跨休眠与 API 错误
+ * 风暴，长空洞是常态；Claude/Codex 的分钟级缝隙几乎都是真实模型生成
+ * （交互式短轮次），同样拆出来会把正常响应误判成停摆，故保持原三态口径。
  */
+const IDLE_GAP_MIN_MS = 120_000;
+// Claude/Codex 的长挂起阈值：交互式轮次的分钟级缝隙几乎都是真实模型生成
+// （2 分钟即拆会误伤），只有跨小时的无事件空洞才判定为停摆。
+const IDLE_GAP_MIN_MS_LONG_SUSPEND = 1_800_000;
+// 各适配器的停摆阈值（守恒口径覆盖全部来源）
+export const IDLE_GAP_MIN_BY_AGENT: Record<string, number> = {
+  Antigravity: IDLE_GAP_MIN_MS,
+  Pi: IDLE_GAP_MIN_MS,
+  "Oh-My-Pi": IDLE_GAP_MIN_MS,
+  "DeepSeek Harness": IDLE_GAP_MIN_MS,
+  OpenCode: IDLE_GAP_MIN_MS,
+  "Claude Code": IDLE_GAP_MIN_MS_LONG_SUSPEND,
+  Codex: IDLE_GAP_MIN_MS_LONG_SUSPEND,
+};
+
 export function calculateEventTiming(
   entries: Event[],
   start: number,
   end: number,
   elapsed: number,
+  opts?: { idleGapMinMs?: number },
 ): {
   work_ms: number;
   review_wait_ms: number;
@@ -226,7 +252,7 @@ export function calculateEventTiming(
   const toolResults = entries.filter((e) => e.kind === "tool_result");
   const usedResultIndices = new Set<number>();
   const toolsMap = new Map<string, { name: string; count: number; duration_ms: number }>();
-  let totalToolMs = 0;
+  const toolIntervals: [number, number][] = [];
 
   for (const u of toolUses) {
     const tname = u.tool_name || "tool";
@@ -249,22 +275,54 @@ export function calculateEventTiming(
     if (rIndex !== -1) {
       usedResultIndices.add(rIndex);
       const rAt = toolResults[rIndex].at_ms;
-      let waitInside = 0;
-      for (const [ws, we] of waitIntervals) {
-        const overlap = Math.max(0, Math.min(rAt, we) - Math.max(u.at_ms, ws));
-        waitInside += overlap;
+      // 工具区间封顶在本轮墙钟内：后台任务回执可能落在下一轮已开始之后，
+      // 不封顶会与下一轮的时长重叠双计（实测一个会话差出 49 分钟，同一页面
+      // 出现两个「AI 工作」）。溢出部分与本轮分解不再相加，守恒恒等式才成立；
+      // 与旧 ADR 的「回执结算全额」相比，这里选择不重复计数而非跨轮归因。
+      const cappedEnd = Math.min(rAt, end);
+      if (cappedEnd > u.at_ms) {
+        let waitInside = 0;
+        for (const [ws, we] of waitIntervals) {
+          const overlap = Math.max(0, Math.min(cappedEnd, we) - Math.max(u.at_ms, ws));
+          waitInside += overlap;
+        }
+        tDuration = Math.max(0, cappedEnd - u.at_ms - waitInside);
+        // 原始配对区间（未扣审阅）：供「中途停了」扣除，避免把工具运行误判为停摆
+        toolIntervals.push([u.at_ms, cappedEnd]);
       }
-      tDuration = Math.max(0, rAt - u.at_ms - waitInside);
+      // cappedEnd ≤ 发出时刻（时间戳乱序回写）：本轮墙钟内无执行时长，诚实计 0
     }
-    totalToolMs += tDuration;
     const existing = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
     existing.count += 1;
     existing.duration_ms += tDuration;
     toolsMap.set(tname, existing);
   }
 
-  const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait);
-  const work_ms = Math.max(0, elapsed - totalWait);
+  // 工具执行取配对区间并集（物理墙钟）：并行后台命令同时运行只计一次，
+  // 否则逐次求和会让工具时长超过本轮墙钟、守恒恒等式被击穿。
+  // 逐次明细（toolsMap / 客户端慢操作榜）保留原始时长供下钻。
+  const totalToolMs = unionMs(subtractMs(toolIntervals, waitIntervals));
+
+  // 中途停了：相邻事件时间戳之间 ≥ IDLE_GAP_MIN_MS 的缝隙，扣除工具执行与
+  // 等待审阅后的并集。工具运行中的缝隙是「命令在跑」不是停摆，必须扣除。
+  // 仅在启用方（Antigravity）生效；其余适配器 idleGapMs 恒 0，口径不变。
+  let idleGapMs = 0;
+  const idleMin = opts?.idleGapMinMs;
+  if (idleMin != null) {
+    const eventTimes = entries
+      .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
+      .sort((a, b) => a - b);
+    const rawGaps: [number, number][] = [];
+    for (let i = 1; i < eventTimes.length; i++)
+      if (eventTimes[i] - eventTimes[i - 1] >= idleMin)
+        rawGaps.push([eventTimes[i - 1], eventTimes[i]]);
+    idleGapMs = unionMs(
+      subtractMs(subtractMs(rawGaps, toolIntervals), waitIntervals),
+    );
+  }
+
+  const modelApiMs = Math.max(0, elapsed - totalToolMs - totalWait - idleGapMs);
+  const work_ms = Math.max(0, elapsed - totalWait - idleGapMs);
   return {
     work_ms,
     review_wait_ms: totalWait,
@@ -272,6 +330,7 @@ export function calculateEventTiming(
       model_api_ms: modelApiMs,
       tool_execution_ms: totalToolMs,
       review_wait_ms: totalWait,
+      idle_gap_ms: idleGapMs,
       tools: [...toolsMap.values()],
     },
   };
@@ -288,6 +347,7 @@ export function calculatePiTiming(
   start: number,
   end: number,
   elapsed: number,
+  opts?: { idleGapMinMs?: number },
 ): {
   work_ms: number;
   review_wait_ms: number | null;
@@ -297,12 +357,14 @@ export function calculatePiTiming(
   let toolMs = 0;
   const modelTotals = new Map<string, number>();
   const thinkingTotals = new Map<string, number>();
+  const modelSpans: [number, number][] = [];
   // Model events without end_ms (model_change / thinking_level_change
   // markers) carry no duration evidence and contribute zero.
   for (const e of entries) {
     if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
     const dur = e.end_ms - e.at_ms;
     modelApiMs += dur;
+    modelSpans.push([e.at_ms, e.end_ms]);
     // Response spans recorded without a model name (message.model absent)
     // still carry timing evidence; bucket them instead of dropping.
     const modelKey = e.model ?? "未知模型";
@@ -328,11 +390,14 @@ export function calculatePiTiming(
   );
   const usedUses = new Set<number>();
   const delayIntervals: [number, number][] = [];
+  const toolIv: [number, number][] = [];
   for (const r of entries) {
     if (r.kind !== "tool_result") continue;
     const dur =
       r.end_ms != null && r.end_ms >= r.at_ms ? r.end_ms - r.at_ms : 0;
     toolMs += dur;
+    if (r.end_ms != null && r.end_ms > r.at_ms)
+      toolIv.push([r.at_ms, r.end_ms]);
     const tname = r.tool_name || "tool";
     const agg = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
     agg.count += 1;
@@ -348,6 +413,24 @@ export function calculatePiTiming(
     }
   }
   const unclassifiedDelayMs = unionMs(delayIntervals);
+  // 中途停了（守恒口径）：轮内 ≥ idleGapMinMs 无任何事件的区间，扣除模型
+  // 响应跨度、工具执行与就绪延迟后单列。OMP 的 1250h 实证即此类空白。
+  let idleGapMs = 0;
+  if (opts?.idleGapMinMs != null) {
+    const times = entries
+      .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
+      .sort((a, b) => a - b);
+    const rawGaps: [number, number][] = [];
+    for (let i = 1; i < times.length; i++)
+      if (times[i] - times[i - 1] >= opts.idleGapMinMs)
+        rawGaps.push([times[i - 1], times[i]]);
+    idleGapMs = unionMs(
+      subtractMs(
+        subtractMs(subtractMs(rawGaps, toolIv), modelSpans),
+        delayIntervals,
+      ),
+    );
+  }
   return {
     work_ms: modelApiMs + toolMs,
     // Pi sources carry no approval evidence; review wait stays unknown.
@@ -356,6 +439,7 @@ export function calculatePiTiming(
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
       unclassified_delay_ms: unclassifiedDelayMs,
+      idle_gap_ms: idleGapMs,
       tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
       model_api_breakdown: [...modelTotals.entries()]
         .map(([model, duration_ms]) => ({ model, duration_ms }))
@@ -391,7 +475,10 @@ export function calculatePiTiming(
  *  evidence on the events; the turn's wall-clock start/end/elapsed play no
  *  role in the split and the parameters were dead weight.
  */
-export function calculateOpencodeTiming(entries: Event[]): {
+export function calculateOpencodeTiming(
+  entries: Event[],
+  opts?: { idleGapMinMs?: number },
+): {
   work_ms: number;
   review_wait_ms: number | null;
   breakdown: TurnBreakdown;
@@ -447,6 +534,24 @@ export function calculateOpencodeTiming(entries: Event[]): {
     toolsMap.set(tname, agg);
   }
   const modelApiMs = Math.max(0, modelSpanMs - toolMs);
+  // 中途停了（守恒口径）：跨消息的无事件空洞（扣除模型跨度、工具区间与
+  // 既有未分类步间延迟，避免同一时间被两个档位重复计入）
+  let idleGapMs = 0;
+  if (opts?.idleGapMinMs != null) {
+    const times = entries
+      .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
+      .sort((a, b) => a - b);
+    const rawGaps: [number, number][] = [];
+    for (let i = 1; i < times.length; i++)
+      if (times[i] - times[i - 1] >= opts.idleGapMinMs)
+        rawGaps.push([times[i - 1], times[i]]);
+    idleGapMs = unionMs(
+      subtractMs(
+        subtractMs(subtractMs(rawGaps, toolIntervals), modelSpans),
+        delayIntervals,
+      ),
+    );
+  }
   return {
     work_ms: modelApiMs + toolMs,
     review_wait_ms: null,
@@ -454,6 +559,7 @@ export function calculateOpencodeTiming(entries: Event[]): {
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
       unclassified_delay_ms: unclassifiedDelayMs,
+      idle_gap_ms: idleGapMs,
       tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
       model_api_breakdown: [...modelTotals.entries()]
         .map(([model, duration_ms]) => ({ model, duration_ms }))
@@ -1250,7 +1356,11 @@ ALTER TABLE source_migrated RENAME TO source;`,
           sessionObj.agent === "Codex" ||
           sessionObj.agent === "Antigravity")
       ) {
-        applyTiming(calculateEventTiming(entries, start, end, elapsed));
+        applyTiming(
+          calculateEventTiming(entries, start, end, elapsed, {
+            idleGapMinMs: IDLE_GAP_MIN_BY_AGENT[sessionObj.agent],
+          }),
+        );
       } else if (
         elapsed !== null &&
         start !== null &&
@@ -1259,14 +1369,22 @@ ALTER TABLE source_migrated RENAME TO source;`,
           sessionObj.agent === "DeepSeek Harness" ||
           sessionObj.agent === "Oh-My-Pi")
       ) {
-        applyTiming(calculatePiTiming(entries, start, end, elapsed));
+        applyTiming(
+          calculatePiTiming(entries, start, end, elapsed, {
+            idleGapMinMs: IDLE_GAP_MIN_BY_AGENT[sessionObj.agent],
+          }),
+        );
       } else if (
         elapsed !== null &&
         start !== null &&
         end !== null &&
         sessionObj.agent === "OpenCode"
       ) {
-        applyTiming(calculateOpencodeTiming(entries));
+        applyTiming(
+          calculateOpencodeTiming(entries, {
+            idleGapMinMs: IDLE_GAP_MIN_BY_AGENT[sessionObj.agent],
+          }),
+        );
       }
 
       const turnSubagents = groupSubagents(entries);
@@ -1306,6 +1424,11 @@ ALTER TABLE source_migrated RENAME TO source;`,
         if (prevEnd !== null && currStart !== null && currStart >= prevEnd) {
           s.turns[i].standby_ms = currStart - prevEnd;
           s.turns[i].response_gap_ms = s.turns[i].standby_ms;
+        } else if (prevEnd !== null && currStart !== null) {
+          // 排队输入：发出时上一轮还没答完。用户等待（发送→答复）天然包含
+          // 这段，不产生任何负间隔——只记录排队时长供叙述展示；轮间无空档，
+          // 待命保持 null。实际接单在 prevEnd 之后（交接通常仅数秒到一分钟）。
+          s.turns[i].queue_wait_ms = prevEnd - currStart;
         }
       }
       s.work_ms = s.turns.some((t) => t.work_ms !== null)
@@ -1317,6 +1440,16 @@ ALTER TABLE source_migrated RENAME TO source;`,
       s.standby_ms = s.turns.some((t) => t.standby_ms !== null)
         ? s.turns.reduce((acc, t) => acc + (t.standby_ms ?? 0), 0)
         : null;
+      // 守恒口径补充：中途停了合计、排队统计、末轮答复完毕时刻（收尾空档的
+      // 锚点，前端用当前时刻实时计算空档时长）。
+      s.idle_gap_ms = s.turns.some((t) => t.breakdown?.idle_gap_ms != null)
+        ? s.turns.reduce((acc, t) => acc + (t.breakdown?.idle_gap_ms ?? 0), 0)
+        : null;
+      const queuedTurns = s.turns.filter((t) => (t.queue_wait_ms ?? 0) > 0);
+      s.queue_count = queuedTurns.length;
+      s.queue_wait_ms = queuedTurns.reduce((acc, t) => acc + t.queue_wait_ms!, 0);
+      s.last_done_ms =
+        s.turns.reduce((acc, t) => Math.max(acc, t.end_ms ?? 0), 0) || null;
 
       const tokened = s.turns.filter((t) => t.tokens);
       // Token rows for turns without event groups (external-import-only)

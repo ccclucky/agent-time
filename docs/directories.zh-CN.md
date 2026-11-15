@@ -58,4 +58,4 @@
 
 cc-switch 的 `agy_config.rs` 面向 Antigravity CLI，不能证明 Antigravity IDE 的会话目录或格式；Antigravity 默认位置最终以 2026-10 本机真实语料实测为准（`brain/<会话 ID>/.system_generated/logs/transcript.jsonl`），上游无公开规范，故 evidence 保持留空。
 
-目前 Codex、Claude Code、Pi、DeepSeek Harness 和 OpenCode 具备导入能力；Codex 与 OpenCode 提供三态耗时切分（口径不同，界面分别披露），Claude 使用消息记录跨度口径，Pi 与 DeepSeek Harness 按机时跨度累加。其他工具的路径规则核实不等于已实现适配器，也不代表已经读取过用户本机的真实数据。已有自定义路径不会因为默认规则修正而被静默覆盖。
+目前全部七个适配器（Codex、Claude Code、Pi、Oh-My-Pi、DeepSeek Harness、Antigravity、OpenCode）具备导入能力；Antigravity 提供守恒五态切分（含 ≥2 分钟停摆拆分），Codex 与 Claude Code 提供三态切分并拆分 ≥30 分钟长挂起，OpenCode 提供三态切分与停摆，Pi 与 DeepSeek Harness 按机时跨度累加并拆分停摆（口径不同，界面分别披露）。其他工具的路径规则核实不等于已实现适配器，也不代表已经读取过用户本机的真实数据。已有自定义路径不会因为默认规则修正而被静默覆盖。

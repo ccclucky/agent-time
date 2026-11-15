@@ -44,6 +44,10 @@
 
   --state-idle: #7A7268;        /* 深亚麻灰 - 待命时长 */
   --state-idle-light: #EEEAE2;  /* 亚麻浅底 */
+  /* 中途停了（守恒口径第 4 态）：轮内 ≥2 分钟无任何源事件的区间——
+     网络阻塞、设备休眠、忙上一条等，原因不明不编造。红 = 白等警示，
+     与轮间间隔（亚麻灰）在同一守恒条中必须一眼可分。 */
+  --state-idle-strong: #B3261E;
 
   /* 4.1 方案 A 多维操作分段色 (SSOT: prototypes/session-first-detail-view.html)
      等待确认统一口径：--color-skills 与 --state-wait 收敛为同一琥珀金
@@ -284,7 +288,8 @@ a:hover {
 .brand-title-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   margin-bottom: 2px;
 }
 
@@ -294,6 +299,7 @@ h1#title {
   color: var(--fg-title);
   letter-spacing: -0.02em;
   margin: 0;
+  white-space: nowrap;
 }
 
 .session-pill {
@@ -1759,6 +1765,13 @@ input[type="search"] {
 }
 
 /* 首屏第一视觉：会话专属操作与耗时分布 */
+.session-breakdown-full .multi-seg-bar > [data-dim-row] {
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.session-breakdown-full .multi-seg-bar > [data-dim-row]:hover {
+  filter: brightness(1.12);
+}
 .session-breakdown-full {
   background: var(--card-muted);
   border: 2px solid var(--line);
@@ -1787,6 +1800,17 @@ input[type="search"] {
   font-family: var(--font-mono);
 }
 
+.breakdown-row {
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.breakdown-row:hover {
+  background: #FFFBF9;
+}
+.breakdown-row:focus-visible {
+  outline: 2px solid var(--state-work);
+  outline-offset: 1px;
+}
 .breakdown-row {
   display: flex;
   align-items: center;
@@ -2011,6 +2035,7 @@ input[type="search"] {
 .turn-capsule {
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 12px 16px;
   background: #FFFFFF;
   border: 1px solid var(--line);
@@ -2071,14 +2096,13 @@ input[type="search"] {
 }
 
 .capsule-bar {
-  width: 260px;
-  flex-shrink: 0;
+  flex: 0 1 260px;
+  min-width: 120px;
   height: 12px;
   background: #E5E0D8;
   border-radius: 4px;
   overflow: hidden;
   display: flex;
-  margin-right: 16px;
 }
 
 .capsule-duration {
@@ -2091,17 +2115,109 @@ input[type="search"] {
   color: var(--fg-title);
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1100px) {
   .turn-capsule {
     flex-wrap: wrap;
   }
 
   .capsule-bar {
-    width: 100%;
+    flex: 1 1 100%;
     order: 3;
     margin-top: 8px;
     margin-right: 0;
   }
+}
+
+/* 工具聚合行：一类工具一行（次数 / 合计 / 最慢一次），逐次明细折叠在其下 */
+.tool-agg-list {
+  margin-bottom: 8px;
+}
+.tool-agg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: #FFFFFF;
+}
+.tool-agg-row.slow {
+  border-left: 3px solid #DC2626;
+}
+.tool-agg-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--fg-title);
+}
+.tool-agg-name em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: 6px;
+}
+.tool-agg-total {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-title);
+  white-space: nowrap;
+}
+.tool-agg-max {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.tool-agg-max.slow {
+  color: #DC2626;
+  font-weight: 700;
+}
+.dim-drill {
+  margin-bottom: 8px;
+}
+.dim-drill > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.dim-drill > summary::-webkit-details-marker {
+  display: none;
+}
+.dim-drill[open] > summary .tool-exec-card {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.dim-drill > summary .tool-exec-card::after {
+  content: "▸ 展开";
+  font-size: 10px;
+  color: var(--fg-muted);
+  margin-left: 8px;
+}
+.dim-drill[open] > summary .tool-exec-card::after {
+  content: "▾ 收起";
+}
+.dim-drill-body {
+  padding: 0 0 8px 14px;
+  border-left: 2px solid var(--line);
+}
+.dim-drill-body .tool-exec-card {
+  margin-bottom: 6px;
+}
+
+.tool-call-details summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 6px 2px;
+  user-select: none;
+}
+.tool-call-details summary:hover {
+  color: var(--fg-title);
 }
 
 /* 抽屉内的逐次工具调用卡 (.slow = 单次 >15s, 3px 红色左边框) */
@@ -2235,7 +2351,7 @@ input[type="search"] {
   gap: 6px;
   min-width: 100%;
   width: max-content;
-  min-height: 100px;
+  height: 230px;
   /* 桶少时均匀分布占满容器，桶多时定宽横向滚动，绝不整根拉满 */
   justify-content: space-around;
 }
@@ -2243,9 +2359,21 @@ input[type="search"] {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   flex: 0 0 24px;
   max-width: 24px;
+  position: relative;
+  height: 100%;
+}
+.trend-col .trend-val {
+  /* 流内元素：随 flex-end 底部锚定，正好骑在各柱顶上（不再钉死列顶） */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-title, #1F1E1D);
+  white-space: nowrap;
+  line-height: 12px;
 }
 .trend-bar {
   width: 100%;
@@ -2261,12 +2389,14 @@ input[type="search"] {
 }
 .trend-w { background: var(--state-work); }
 .trend-h { background: var(--state-wait); }
+.trend-i { background: var(--state-idle-strong); }
 .trend-s { background: var(--state-standby); }
 .trend-day {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 10px;
   color: var(--text-3, #888);
   white-space: nowrap;
+  height: 14px;
 }
 .advice-card {
   border: 1px solid var(--line, #e5e5e5);

@@ -114,8 +114,10 @@ function restoreView() {
     state.start = start;
     state.end = end;
     // 趋势粒度是独立于日期区段的用户选择，单独校验、单独恢复
-    if (v.trendGran === "day" || v.trendGran === "week")
+    if (v.trendGran === "day" || v.trendGran === "week") {
       state.trendGran = v.trendGran;
+      state.trendGranManual = true;
+    }
   } catch {}
 }
 
@@ -415,11 +417,6 @@ function stats() {
       <div class="number">${fmt(s.processing_ms)}</div>
       <small>各轮可测量记录区间时间相加 ↗</small>
     </div>
-    <div class="stat" title="口径：并行去重时长 processing_union_ms = 重叠时间只计一次">
-      <label>并行去重时长</label>
-      <div class="number">${fmt(s.processing_union_ms)}</div>
-      <small>同时运行的时间仅计一次 ↗</small>
-    </div>
     <div class="stat">
       <label>已测量 / 已记录轮次</label>
       <div class="number">${s.measured_turns} / ${s.turns}</div>
@@ -476,11 +473,15 @@ function funnel() {
   const work = s.work_ms;
   const wait = s.review_wait_ms;
   const standby = s.standby_ms || 0;
+  // 守恒口径第 4 态：中途停了（仅 Antigravity 等启用方有数据，其余来源为 null/0）
+  const idle = s.idle_gap_ms || 0;
+  const queueCount = s.queue_count || 0;
 
-  // 分母必须由三态精确相加构成，确保百分比之和严格为 100%，杜绝击穿
-  const grossTotal = work + wait + standby || 1;
+  // 分母必须由各态精确相加构成，确保百分比之和严格为 100%，杜绝击穿
+  const grossTotal = work + wait + idle + standby || 1;
 
   const waitPct = ((wait / grossTotal) * 100).toFixed(1);
+  const idlePct = ((idle / grossTotal) * 100).toFixed(1);
   const standbyPct = ((standby / grossTotal) * 100).toFixed(1);
   const workPct = ((work / grossTotal) * 100).toFixed(1);
 
@@ -501,17 +502,19 @@ function funnel() {
       <span class="funnel-concurrency-pill">${concurrency}x 并发效能倍率</span>
     </div>
 
-    <div class="flow-caption" title="口径：记录总时长 = AI 工作 work_ms + 等待确认 review_wait_ms + 待命 standby_ms">
-      记录总时长 <strong>${fmt(grossTotal)}</strong>（AI 工作 + 等待确认 + 待命）
+    <div class="flow-caption" title="守恒口径：记录总时长 = AI 工作 work_ms + 等待确认 review_wait_ms + 中途停了 idle_gap_ms + 轮间间隔 standby_ms">
+      记录总时长 <strong>${fmt(grossTotal)}</strong>（AI 工作 + 等待确认${idle > 0 ? " + 中途停了" : ""} + 轮间间隔）${queueCount > 0 ? ` · 排队输入 ${queueCount} 次` : ""}
     </div>
-    <div class="flow-bar" role="img" aria-label="三态占比：AI 工作 ${workPct}%、等待确认 ${waitPct}%、待命 ${standbyPct}%">
-      ${renderFlowSegment(workPct, "var(--state-work)", "AI 工作", "口径：AI 工作 work_ms = 模型推理 + 本地工具", true)}
+    <div class="flow-bar" role="img" aria-label="守恒占比：AI 工作 ${workPct}%、等待确认 ${waitPct}%、${idle > 0 ? `中途停了 ${idlePct}%、` : ""}轮间间隔 ${standbyPct}%">
+      ${renderFlowSegment(workPct, "var(--state-work)", "AI 工作", "口径：AI 工作 work_ms = 模型想和写 + 本地工具", true)}
       ${renderFlowSegment(waitPct, "var(--state-wait)", h(dimensionTitle("wait")), dimensionHint("wait"))}
+      ${idle > 0 ? renderFlowSegment(idlePct, "var(--state-idle-strong, #B3261E)", h(dimensionTitle("idle")), dimensionHint("idle")) : ""}
       ${renderFlowSegment(standbyPct, "var(--state-standby)", h(dimensionTitle("standby")), dimensionHint("standby"))}
     </div>
     <div class="flow-legend">
 ${legendItem("var(--state-work)", "AI 工作", work, workPct)}
 ${legendItem("var(--state-wait)", h(dimensionTitle("wait")), wait, waitPct)}
+${idle > 0 ? legendItem("var(--state-idle-strong, #B3261E)", h(dimensionTitle("idle")), idle, idlePct) : ""}
 ${legendItem("var(--state-standby)", h(dimensionTitle("standby")), standby, standbyPct)}
     </div>
   </section>`;
@@ -559,7 +562,8 @@ function trendBuckets(sessions, gran) {
       if (start === null) continue;
       const key = gran === "week" ? weekBucket(start) : dayKey(start);
       const b =
-        buckets.get(key) ?? { key, work: 0, wait: 0, standby: 0, turns: 0 };
+        buckets.get(key) ??
+        { key, work: 0, wait: 0, idle: 0, standby: 0, turns: 0 };
       b.turns++;
       const period = t.period_ms ?? null;
       const scale = (v) =>
@@ -568,6 +572,8 @@ function trendBuckets(sessions, gran) {
           : v;
       if (t.work_ms !== null) b.work += scale(t.work_ms);
       if (t.review_wait_ms !== null) b.wait += scale(t.review_wait_ms);
+      if (t.breakdown?.idle_gap_ms != null)
+        b.idle += scale(t.breakdown.idle_gap_ms);
       if (t.standby_ms !== null) b.standby += t.standby_ms;
       buckets.set(key, b);
     }
@@ -576,18 +582,23 @@ function trendBuckets(sessions, gran) {
 }
 
 function trendCard() {
-  const gran = state.trendGran;
   const sessions = state.report.sessions;
+  // 自动粒度：日桶超过 60 根时整排小柱等高、失去信息量，自动切按周；
+  // 用户手动点过「按日/按周」（或恢复过持久化选择）后尊重手动选择
+  const autoWeek =
+    !state.trendGranManual &&
+    trendBuckets(sessions, "day").length > 60;
+  const gran = autoWeek ? "week" : state.trendGran;
   const buckets = trendBuckets(sessions, gran);
   const exportBtn = `<button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
   const header = `
       <div class="section-header">
         <div>
           <span class="section-title">跨日趋势</span>
-          <span class="section-subtitle">三态按轮次开始${gran === "week" ? "周" : "日"}归属 · 跨${gran === "week" ? "周" : "日"}轮整体计入起始${gran === "week" ? "周" : "日"} · 柱高按平方根缩放</span>
+          <span class="section-subtitle">按轮次开始${gran === "week" ? "周" : "日"}归属 · 跨${gran === "week" ? "周" : "日"}轮整体计入起始${gran === "week" ? "周" : "日"} · 柱 = 当${gran === "week" ? "周" : "日"} AI 干活合计 · 柱高按平方根缩放${autoWeek ? " · 已自动按周聚合" : ""}</span>
         </div>
         <div class="trend-toolbar">
-          <button class="textbtn${gran === "day" ? " active" : ""}" data-trend-gran="day" aria-pressed="${gran === "day"}">按日</button>
+          <button class="textbtn${state.trendGran === "day" ? " active" : ""}" data-trend-gran="day" aria-pressed="${state.trendGran === "day"}">按日</button>
           <button class="textbtn${gran === "week" ? " active" : ""}" data-trend-gran="week" aria-pressed="${gran === "week"}">按周</button>
           ${exportBtn}
         </div>
@@ -603,31 +614,36 @@ function trendCard() {
       </div>
     </section>`;
 
-  // 柱高非线性缩放（平方根 + 8px 底高）：多数聚跨度大时常态数据不被压成细线
-  const totals = buckets.map((b) => b.work + b.wait + b.standby);
-  const maxTotal = Math.max(...totals, 1);
+  // 单指标：柱高 ∝ 当天 AI 干活（平方根 + 8px 底高），与「一眼看出哪天
+  // AI 真在干活」的改版意图一致；间隔/停了只在 hover 明细中体现
+  const maxWork = Math.max(...buckets.map((b) => b.work), 1);
   const n = buckets.length;
-  // 桶多时只标注两端与等距采样，避免 367 根柱挤成一排标签
-  const labelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
+  // 数值标注：只标干活最久的前 3 个桶（柱多时全标反而成噪音）
+  const topDayKeys = new Set(
+    [...buckets].sort((a, b) => b.work - a.work).slice(0, 3).map((b) => b.key),
+  );
+  // 数值标注：柱顶显示当天干活时长。柱少（列宽 ≥26px）时每根都标；
+  // 柱多时按等距抽稀防重叠，但 TOP3 峰值永远标注。
+  const labelStep = n <= 40 ? 1 : Math.max(1, Math.ceil(n / 40));
+  // 柱高用容器百分比：最长柱 = 容器 92%，其余按 √ 相对计算——不留大片
+  // 空白，且随容器实际高度自适应。基线由列的 justify-content: flex-end 锚定。
+  // 日期标签：按柱数自适应密度（最多约 16 个），与数值标签相互独立
+  const dateLabelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
   const bars = buckets
     .map((b, i) => {
-      const total = totals[i];
-      const height = total > 0 ? 8 + 82 * Math.sqrt(total / maxTotal) : 2;
-      const seg = (v, cls, name) =>
-        v > 0
-          ? `<i class="${cls}" style="height:${((v / total) * 100).toFixed(1)}%;" title="${name} ${fmt(v)}"></i>`
-          : "";
-      const fill =
-        total > 0
-          ? seg(b.work, "trend-w", "AI 工作") +
-            seg(b.wait, "trend-h", h(dimensionTitle("wait"))) +
-            seg(b.standby, "trend-s", h(dimensionTitle("standby")))
-          : "";
-      const showLabel = i % labelEvery === 0 || i === n - 1;
+      const heightPct =
+        b.work > 0 ? (4 + 88 * Math.sqrt(b.work / maxWork)).toFixed(1) : "2";
+      const isTop3 = topDayKeys.has(b.key);
+      const showVal = (i % labelStep === 0 || isTop3) && b.work > 0;
+      const hrs = b.work / 3600000;
+      const valText = hrs >= 1 ? `${hrs.toFixed(1)}h` : `${Math.round(b.work / 60000)}m`;
+      const valueLabel = showVal ? `<span class="trend-val">${valText}</span>` : "";
+      const showLabel = i % dateLabelEvery === 0 || i === n - 1;
       const label = gran === "week" ? weekLabel(b.key) : b.key.slice(5).replace("-", "/");
       return `
       <div class="trend-col">
-        <div class="trend-bar" style="height:${height.toFixed(1)}px;" title="${h(label)}：AI 工作 ${fmt(b.work)} · ${h(dimensionTitle("wait"))} ${fmt(b.wait)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮">${fill}</div>
+        ${valueLabel}
+        <div class="trend-bar" style="height:${heightPct}%;" title="${h(label)}：AI 干活 ${fmt(b.work)} · ${h(dimensionTitle("idle"))} ${fmt(b.idle || 0)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮"><div class="trend-w" style="height:100%;"></div></div>
         <span class="trend-day">${showLabel ? h(label) : ""}</span>
       </div>`;
     })
@@ -637,12 +653,11 @@ function trendCard() {
   <section class="funnel-card">
     ${header}
     <div class="trend-scroll">
-      <div class="trend-bars" role="img" aria-label="按${gran === "week" ? "周" : "日"}三态趋势柱状图，共 ${n} 个${gran === "week" ? "周" : "日"}桶">${bars}</div>
+      <div class="trend-bars" role="img" aria-label="按${gran === "week" ? "周" : "日"}的 AI 干活趋势柱状图，共 ${n} 个${gran === "week" ? "周" : "日"}桶">${bars}</div>
     </div>
     <div class="flow-legend">
-      <span class="flow-legend-item"><i style="background:var(--state-work);"></i>AI 工作</span>
-      <span class="flow-legend-item"><i style="background:var(--state-wait);"></i>${h(dimensionTitle("wait"))}</span>
-      <span class="flow-legend-item"><i style="background:var(--state-standby);"></i>${h(dimensionTitle("standby"))}</span>
+      <span class="flow-legend-item"><i style="background:var(--state-work);"></i>AI 干活（当${gran === "week" ? "周" : "日"}全部轮次合计）</span>
+      <span class="flow-legend-item sub">hover 任意柱：停了 / 间隔 / 轮次明细</span>
     </div>
   </section>`;
 }
@@ -665,24 +680,6 @@ function aggregateToolTotals(sessions) {
   return [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
 }
 
-// 会话级三态测量和（与 summary/gross 完全同口径：period 等比缩放、
-// standby 不缩放、缺失态不计入）。会话占比必须用它做分子——挂钟时长
-// 含未分类延迟，与三态分母不同量纲，极端样本会算出超 100%（#57 评审 P2）。
-function sessionThreeStateMs(s) {
-  let total = 0;
-  for (const t of s.turns) {
-    const period = t.period_ms ?? null;
-    const scale = (v) =>
-      period !== null && t.elapsed_ms
-        ? Math.round((v * period) / t.elapsed_ms)
-        : v;
-    if (t.work_ms !== null) total += scale(t.work_ms);
-    if (t.review_wait_ms !== null) total += scale(t.review_wait_ms);
-    if (t.standby_ms !== null) total += t.standby_ms;
-  }
-  return total;
-}
-
 function adviceCards() {
   const sessions = state.report.sessions;
   const s = state.report.summary;
@@ -698,15 +695,18 @@ function adviceCards() {
     );
   }
 
-  // 2) 最耗时会话：分子分母同为三态测量和，占比恒不超 100%
+  // 2) 干活最久会话：与 TOP 榜同口径（Σ work_ms），搁置跨度不再冒充耗时
   const topSession = [...sessions]
-    .map((x) => ({ s: x, ms: sessionThreeStateMs(x) }))
+    .map((x) => ({
+      s: x,
+      ms: (x.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0),
+    }))
     .filter((x) => x.ms > 0)
     .sort((a, b) => b.ms - a.ms)[0];
-  const gross = (s.work_ms || 0) + (s.review_wait_ms || 0) + (s.standby_ms || 0);
-  if (topSession && gross > 0)
+  const workGross = s.work_ms || 0;
+  if (topSession && workGross > 0)
     cards.push(
-      `<b>${h(topSession.s.title || topSession.s.project || topSession.s.session_id)}</b> 是本时段最耗时会话：<b>${fmt(topSession.ms)}</b>（占记录总时长 ${((topSession.ms / gross) * 100).toFixed(1)}%）`,
+      `<b>${h(topSession.s.title || topSession.s.project || topSession.s.session_id)}</b> 是本时段干活最久的会话：<b>${fmt(topSession.ms)}</b>（占 AI 工作 ${((topSession.ms / workGross) * 100).toFixed(1)}%）`,
     );
 
   // 3) 等待确认集中日
@@ -719,10 +719,17 @@ function adviceCards() {
       );
   }
 
-  // 4) 待命占比（显著时才提示，中性陈述）
+  // 4) 轮间间隔占比（显著时才提示，中性陈述）。
+  // 守恒分母：工作 + 等待确认 + 中途停了 + 轮间间隔（gross 定义随
+  // topSession 块改写丢失过一次，现显式放在使用点之前）
+  const gross =
+    (s.work_ms || 0) +
+    (s.review_wait_ms || 0) +
+    (s.idle_gap_ms || 0) +
+    (s.standby_ms || 0);
   if (gross > 0 && (s.standby_ms || 0) / gross >= 0.3)
     cards.push(
-      `待命占记录总时长 <b>${((s.standby_ms / gross) * 100).toFixed(1)}%</b>（${fmt(s.standby_ms)}）：主要为会话之间的间隔时间`,
+      `${h(dimensionTitle("standby"))}占记录总时长 <b>${((s.standby_ms / gross) * 100).toFixed(1)}%</b>（${fmt(s.standby_ms)}）：主要是你自己的时间（阅读、离开、睡觉），AI 零消耗`,
     );
 
   const body = cards.length
@@ -754,19 +761,22 @@ function exportWeeklyReport() {
     lines.push(
       `**记录总时长** ${fmt(gross)} ｜ **AI 工作** ${fmt(s.work_ms)}（${pct(s.work_ms || 0)}）｜ **${dimensionTitle("wait")}** ${fmt(s.review_wait_ms)} ｜ **${dimensionTitle("standby")}** ${fmt(s.standby_ms)}`,
     );
-    lines.push(`（口径：记录总时长 = AI 工作 + 等待确认 + 待命）`);
+    lines.push(`（口径：记录总时长 = AI 工作 + 等待确认${(s.idle_gap_ms || 0) > 0 ? " + 中途停了" : ""} + 轮间间隔）`);
     lines.push("");
   } else {
     lines.push("本时段没有可测量的三态耗时数据。");
     lines.push("");
   }
   const top = [...sessions]
-    .map((x) => ({ s: x, ms: sessionThreeStateMs(x) }))
+    .map((x) => ({
+      s: x,
+      ms: (x.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0),
+    }))
     .filter((x) => x.ms > 0)
     .sort((a, b) => b.ms - a.ms)
     .slice(0, 3);
   if (top.length) {
-    lines.push("**耗时 TOP 3 会话**（AI 工作 + 等待确认 + 待命合计口径）");
+    lines.push("**干活 TOP 3 会话**（AI 工作 work_ms 合计口径）");
     top.forEach((x, i) =>
       lines.push(
         `${i + 1}. ${x.s.title || x.s.project || x.s.session_id} · ${x.s.agent} · ${fmt(x.ms)}`,
@@ -844,11 +854,7 @@ function computeTimelineModel() {
     : minTime + 1000;
   const totalTimelineSpan = Math.max(1, maxTime - minTime);
 
-  // 严格按选定物理时间范围过滤可视会话与轮次
-  const rangeStartMs = minTime + (state.zoomStartPct / 100) * totalTimelineSpan;
-  const rangeEndMs = minTime + (state.zoomEndPct / 100) * totalTimelineSpan;
-
-  // 方案 A：以会话为一级主体聚合
+  // 方案 A：以会话为一级主体聚合（按首次活动时间排序——全景柱按此序均匀排列）
   const sessionSummaries = sessions.map((s) => {
     let sWork = 0;
     let sWait = 0;
@@ -881,11 +887,11 @@ function computeTimelineModel() {
     };
   });
 
-  // 按物理时间范围过滤可见会话
-  const visibleSessions = sessionSummaries.filter((item) => {
-    if (state.zoomStartPct <= 0 && state.zoomEndPct >= 100) return true;
-    return item.maxTime >= rangeStartMs && item.minTime <= rangeEndMs;
-  });
+  // 排序后再按会话序号区间过滤（滑块拖动 % → 序号区间），柱序与时间序一致
+  sessionSummaries.sort((a, b) => a.minTime - b.minTime);
+  const startIdx = Math.floor((state.zoomStartPct / 100) * sessionSummaries.length);
+  const endIdx = Math.ceil((state.zoomEndPct / 100) * sessionSummaries.length);
+  const visibleSessions = sessionSummaries.slice(startIdx, endIdx);
 
   return {
     sessions,
@@ -896,107 +902,69 @@ function computeTimelineModel() {
     totalTimelineSpan,
     sessionSummaries,
     visibleSessions,
+    startIdx,
+    endIdx,
   };
 }
 
 function timeline(model) {
-  const { sessions, allTurns, totalTurns, minTime, maxTime, totalTimelineSpan } = model;
-  if (!sessions.length || !allTurns.length) return "";
+  const { sessionSummaries, visibleSessions, totalTurns } = model;
+  if (!sessionSummaries.length) return "";
 
-  // 140px 全景时间热力带：48 个等长聚合时间桶
-  const BUCKETS = 48;
-  const bucketDuration = Math.max(1, totalTimelineSpan / BUCKETS);
-  const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
-    start: minTime + i * bucketDuration,
-    end: minTime + (i + 1) * bucketDuration,
-    workMs: 0,
-    waitMs: 0,
-    standbyMs: 0,
-    turnsCount: 0,
-  }));
+  // 每会话一柱（与效果预览一致）：只画有干活数据的会话，均匀排列，
+  // 高度 ∝ √干活；hover 显示会话名 / 工具 / 干活 / 跨度 / 轮数。
+  const withWork = sessionSummaries.filter((item) => item.work > 0);
+  const maxWork = Math.max(1, ...withWork.map((x) => x.work));
+  const visibleSet = new Set(visibleSessions.map((item) => item.session.id));
 
-  for (const { turn } of allTurns) {
-    const tStart = turn.start_ms || minTime;
-    const tEnd = turn.end_ms || tStart + 1000;
-    const work = turn.work_ms || 0;
-    const wait = turn.review_wait_ms || 0;
-    const standby = turn.standby_ms || 0;
-
-    for (let i = 0; i < BUCKETS; i++) {
-      const b = buckets[i];
-      const overlapStart = Math.max(b.start, tStart);
-      const overlapEnd = Math.min(b.end, tEnd);
-      if (overlapEnd > overlapStart) {
-        const overlapRatio = (overlapEnd - overlapStart) / Math.max(1, tEnd - tStart);
-        b.workMs += work * overlapRatio;
-        b.waitMs += wait * overlapRatio;
-        b.standbyMs += standby * overlapRatio;
-        b.turnsCount += 1;
-      }
-    }
-  }
-
-  const maxBucketActivity = Math.max(1, ...buckets.map((b) => b.workMs + b.waitMs));
-
-  const stripBlocks = buckets
-    .map((b, idx) => {
-      const totalActivity = b.workMs + b.waitMs;
-      // 使用次方根非线性缩放 (power scale)，避免单个超长会话峰值把其余中短活跃期压成贴地平线
-      const activityRatio = totalActivity > 0 ? Math.pow(totalActivity / maxBucketActivity, 0.42) : 0;
-      const heightPct = totalActivity > 0 ? Math.max(18, Math.min(100, Math.round(activityRatio * 100))) : 4;
-      const workRatio = totalActivity > 0 ? Math.round((b.workMs / totalActivity) * 100) : 0;
-      const waitRatio = totalActivity > 0 ? 100 - workRatio : 0;
-      const isMuted = totalActivity === 0;
-
-      const bStartPct = (idx / BUCKETS) * 100;
-      const bEndPct = ((idx + 1) / BUCKETS) * 100;
-      const isInViewport = bEndPct >= state.zoomStartPct && bStartPct <= state.zoomEndPct;
-
+  const bars = withWork
+    .map((item) => {
+      const hPct = Math.max(4, Math.round(Math.pow(item.work / maxWork, 0.42) * 100));
+      const t = item.session;
+      const f = item.minTime ? stamp(item.minTime).slice(0, 11) : "";
+      const l = item.maxTime ? stamp(item.maxTime).slice(0, 11) : "";
+      const span = f && l && f !== l ? `${f} → ${l}` : f;
+      const inView = visibleSet.has(t.id);
       return `
-        <div class="brush-bucket-col" title="${stamp(b.start)}: AI 工作 ${fmt(b.workMs)}, 等待确认 ${fmt(b.waitMs)}, 包含 ${b.turnsCount} 轮交互">
-          <div class="brush-bucket-bar ${isInViewport ? "in-viewport" : "out-viewport"}" style="height:${heightPct}%; background:${isMuted ? "#DFD8CE" : "#FAF9F5"};">
-            ${!isMuted ? `
-              <div style="width:100%; height:${workRatio}%; background:var(--state-work);"></div>
-              <div style="width:100%; height:${waitRatio}%; background:var(--state-wait);"></div>
-            ` : ""}
-          </div>
+        <div class="brush-bucket-col" title="${h(t.title || t.project)} · ${h(t.agent)} · 干活 ${fmt(item.work)} · 跨度 ${h(span)} · ${item.turnsCount} 轮">
+          <div class="brush-bucket-bar ${inView ? "in-viewport" : "out-viewport"}" style="height:${hPct}%; background:var(--state-work);"></div>
         </div>
       `;
     })
     .join("");
 
-  // 方案 A：以会话为一级主体聚合 —— 模型已在 computeTimelineModel() 计算
-  const { visibleSessions } = model;
+  const first = withWork[0];
+  const last = withWork.at(-1);
+  const fLabel = first && first.minTime ? stamp(first.minTime) : "";
+  const lLabel = last && last.maxTime ? stamp(last.maxTime) : "";
 
   return `
   <section class="timeline-card">
     <div class="section-header">
       <div>
-        <span class="section-title">全景时间轴</span>
-        <span class="section-subtitle">140px 高度 · 非线性波峰 · 拖动滑块聚焦下方榜单与操作分布</span>
+        <span class="section-title">每个会话干了多久</span>
+        <span class="section-subtitle">柱 = 一个会话的干活合计 · 高度 ∝ √干活 · hover 看会话名与跨度</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         ${(state.zoomStartPct > 0 || state.zoomEndPct < 100) ? `
-          <button class="filter-chip js-reset-zoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
+          <button class="filter-chip js-reset-zoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>
         ` : ""}
-        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话（共 ${sessions.length} 个会话，${totalTurns} 轮交互）</span>
+        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话（共 ${sessionSummaries.length} 个，${totalTurns} 轮交互）</span>
       </div>
     </div>
 
-    <!-- 140px 全景热力画卷 -->
     <div class="brush-section">
       <div class="brush-strip-track" id="brushTrack">
-        ${stripBlocks}
-        <!-- 悬浮双向可拖拽温和半透明选区 -->
+        ${bars}
         <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(6, state.zoomEndPct - state.zoomStartPct)}%;">
-          <div class="brush-handle-bar" data-handle="left" title="向左拖拽调整开始时间"></div>
-          <div class="brush-handle-bar" data-handle="right" title="向右拖拽调整结束时间"></div>
+          <div class="brush-handle-bar" data-handle="left" title="向左拖拽缩小会话范围"></div>
+          <div class="brush-handle-bar" data-handle="right" title="向右拖拽扩大会话范围"></div>
         </div>
       </div>
       <div class="brush-ticks">
-        <span>${h(stamp(minTime))}</span>
-        <span>${h(stamp(Math.round((minTime + maxTime) / 2)))}</span>
-        <span>${h(stamp(maxTime))}</span>
+        <span>${h(fLabel)}</span>
+        <span>${h(fLabel && lLabel && fLabel !== lLabel ? fLabel + " ~ " + lLabel : "")}</span>
+        <span>${h(lLabel)}</span>
       </div>
     </div>
   </section>`;
@@ -1019,26 +987,30 @@ function zoomedViewport() {
 }
 
 function topSessionsCard(model) {
-  // 口径对齐：榜值与详情页「总时长」KPI 同源 ——
-  // 均为会话首末轮次的首尾跨度（sessionWallSpan），
-  // 保证任一会话的首页 TOP 3 榜值恒等于其详情页总时长
+  // 主数字 = AI 干活（守恒口径）：跨天搁置跨度不再污染 TOP 榜；
+  // 墙钟跨度降级为副行（omp 那种 1250h 会显示「干活 74m · 跨度 52 天」）
   const top = model.visibleSessions
     .map((item) => item.session)
-    .map((s) => ({ s, duration: sessionWallSpan(s).wallMs || 0 }))
-    .filter((x) => x.duration > 0)
-    .sort((a, b) => b.duration - a.duration)
+    .map((s) => ({
+      s,
+      work: (s.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0),
+      span: sessionWallSpan(s).wallMs || 0,
+    }))
+    .filter((x) => x.work > 0)
+    .sort((a, b) => b.work - a.work)
     .slice(0, 3);
 
   const rows = top
-    .map(({ s, duration }, idx) => {
+    .map(({ s, work, span }, idx) => {
+      const spanDays = span >= 48 * 3600000 ? ` · 搁置 ${Math.round(span / 86400000)} 天` : "";
       return `
         <div class="rank-mini-item" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
           <span class="rank-num">${String(idx + 1).padStart(2, "0")}</span>
           <div class="rank-main">
             <span class="rank-title">${h(s.title || s.project)}</span>
-            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text">${h(s.project)} · ${h(s.id.slice(0, 16))}</span></span>
+            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text">${h(s.project)} · 干活 ${fmt(work)}${spanDays ? " · 跨度 " + fmt(span) + spanDays : ""}</span></span>
           </div>
-          <span class="rank-duration">${fmt(duration)}</span>
+          <span class="rank-duration">${fmt(work)}</span>
         </div>
       `;
     })
@@ -1046,7 +1018,7 @@ function topSessionsCard(model) {
 
   return `
     <div class="s1-box">
-      <div class="s1-title">会话耗时 TOP 3 榜（当前视口）</div>
+      <div class="s1-title">会话干活 TOP 3 榜（当前视口）</div>
       ${rows || `
         <div class="s1-empty">
           当前视口内没有已测量耗时的会话${zoomedViewport() ? "，可点击" : ""}
@@ -1057,9 +1029,11 @@ function topSessionsCard(model) {
   `;
 }
 
-// 四维配置（维度键 + 短标签 + 分段色 + 口径提示）的唯一真理源：
+// 五维配置（维度键 + 短标签 + 分段色 + 口径提示）的唯一真理源：
 // 首页视口分段条、详情页明细行、轮次胶囊条与会话流迷你条均直接别名或派生自此表，
-// 杜绝同一维度在多个视图漂移出两种颜色或两种写法
+// 杜绝同一维度在多个视图漂移出两种颜色或两种写法。
+// 中途停了 = 轮内 ≥2 分钟无任何源事件的区间（守恒口径，仅 Antigravity 启用）：
+// 可能装着网络阻塞、设备休眠、忙上一条——源记录不写原因，只给时长不编造归因。
 const BREAKDOWN_DIMENSIONS = [
   {
     key: "tool",
@@ -1069,9 +1043,9 @@ const BREAKDOWN_DIMENSIONS = [
   },
   {
     key: "model",
-    label: "模型推理",
+    label: "模型想和写",
     color: "var(--color-system)",
-    hint: "模型推理 model_ms = 模型调用耗时",
+    hint: "模型想和写 model_ms = 模型响应耗时（含思考与输出，源记录整条落盘不可再分）",
   },
   {
     key: "wait",
@@ -1080,10 +1054,16 @@ const BREAKDOWN_DIMENSIONS = [
     hint: "等待确认 review_wait_ms = 工具授权与方案确认的挂起时长",
   },
   {
+    key: "idle",
+    label: "中途停了",
+    color: "var(--state-idle-strong, #B3261E)",
+    hint: "中途停了 idle_gap_ms = 轮内 ≥2 分钟无任何源事件（网络阻塞、设备休眠、忙上一条等，原因不明不编造）",
+  },
+  {
     key: "standby",
-    label: "待命",
+    label: "轮间间隔",
     color: "var(--state-standby)",
-    hint: "待命 standby_ms = 上轮答复完毕至下一轮开始",
+    hint: "轮间间隔 standby_ms = 上轮答复完毕至下一条发出（你的时间，AI 零消耗）",
   },
 ];
 
@@ -1095,17 +1075,21 @@ const dimensionHint = (key) => {
   return d ? `口径：${d.hint}` : "";
 };
 
-// 四维耗时累加器（键序与 BREAKDOWN_DIMENSIONS 一致）：
+// 五维耗时累加器（键序与 BREAKDOWN_DIMENSIONS 一致）：
 // Codex 会话 breakdown 为 null，天然按 0 贡献并优雅降级
 function addTurnBreakdown(agg, t) {
   agg.tool += t.breakdown?.tool_execution_ms ?? 0;
   agg.model += t.breakdown?.model_api_ms ?? 0;
   agg.wait += t.review_wait_ms ?? 0;
+  agg.idle += t.breakdown?.idle_gap_ms ?? 0;
   agg.standby += t.standby_ms ?? 0;
 }
 
 function sumBreakdown(agg) {
-  return { ...agg, total: agg.tool + agg.model + agg.wait + agg.standby };
+  return {
+    ...agg,
+    total: agg.tool + agg.model + agg.wait + (agg.idle || 0) + agg.standby,
+  };
 }
 
 // 多维操作分段条（首页视口图例）的四个维度：直接别名唯一真理源，
@@ -1113,7 +1097,7 @@ function sumBreakdown(agg) {
 const VIEWPORT_SEGMENTS = BREAKDOWN_DIMENSIONS;
 
 function aggregateViewportBreakdown(visibleSessions) {
-  const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
+  const agg = { tool: 0, model: 0, wait: 0, idle: 0, standby: 0 };
   for (const item of visibleSessions) {
     for (const t of item.session.turns) {
       addTurnBreakdown(agg, t);
@@ -1347,7 +1331,7 @@ function sessionStream() {
           <span class="stream-turns-pill">${s.turns.length} 轮交互</span>
         </div>
         <div class="stream-right">
-          <span class="stream-duration">${fmt(sessionClippedPeriodMs(s) || null)}</span>
+          <span class="stream-duration" title="口径：AI 干活 = 全部轮次 work_ms 合计">${fmt((s.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0) || null)}</span>
           <span class="stream-enter-chip">进入会话详情页 →</span>
         </div>
         ${streamMiniBarHtml(s, maxDuration)}
@@ -1437,10 +1421,10 @@ function sessionStatus(s) {
   return { label: `存在未完结轮次（${done}/${total} 轮完结）`, cls: "warn" };
 }
 
-// 会话专属四维聚合：本地工具 / 模型推理 / 等待确认 / 待命
+// 会话专属五维聚合：本地工具 / 模型想和写 / 等待确认 / 中途停了 / 轮间间隔
 // （sessionWallSpan 已并入上方 PURE HELPERS 纯函数块）
 function sessionBreakdown(s) {
-  const agg = { tool: 0, model: 0, wait: 0, standby: 0 };
+  const agg = { tool: 0, model: 0, wait: 0, idle: 0, standby: 0 };
   for (const t of s.turns) {
     addTurnBreakdown(agg, t);
   }
@@ -1515,7 +1499,10 @@ function perCallToolTimings(turn) {
     used.add(rIdx);
     const r = results[rIdx];
     let duration;
-    if (r.end_ms != null && r.end_ms >= r.at_ms) {
+    // end_ms 严格大于 at_ms 才是真实执行区间（Pi：at=工具就绪、end=完成）；
+    // Antigravity 的结果记录是单时间戳（end_ms == at_ms，相减恒 0），必须
+    // 回退为 发出→结果 的口径（扣除区间内等待确认），否则逐次全显 0ms。
+    if (r.end_ms != null && r.end_ms > r.at_ms) {
       duration = r.end_ms - r.at_ms;
     } else {
       let waitInside = 0;
@@ -1529,6 +1516,9 @@ function perCallToolTimings(turn) {
       duration_ms: duration,
       callId: u.tool_id || null,
       turnId: turn.id,
+      // 起止时刻：供维度下钻展示每次调用的具体时间窗
+      at: u.at_ms,
+      end: r.end_ms != null && r.end_ms > r.at_ms ? r.end_ms : r.at_ms,
     });
   }
   return calls;
@@ -1577,6 +1567,13 @@ function resolveRollup(turn, nowMs = Date.now()) {
 
   const waitMs = turn.review_wait_ms ?? null;
   const workMs = turn.work_ms ?? null;
+  // 守恒口径补充：中途停了（breakdown 单列）与排队等待（轮间元数据）
+  const idleMs =
+    hasBd && typeof bd.idle_gap_ms === "number" ? bd.idle_gap_ms : null;
+  const queueWaitMs =
+    typeof turn.queue_wait_ms === "number" && turn.queue_wait_ms > 0
+      ? turn.queue_wait_ms
+      : null;
 
   // 本轮时长（elapsed_ms）：elapsed_ms 优先；open 轮次回退为 起点→当前时刻 的已进行跨度
   let wallMs = turn.elapsed_ms ?? turn.period_ms ?? null;
@@ -1595,6 +1592,8 @@ function resolveRollup(turn, nowMs = Date.now()) {
     toolBackfilled,
     waitMs,
     workMs,
+    idleMs,
+    queueWaitMs,
     wallMs,
     wallBackfilled,
     workRate,
@@ -1681,6 +1680,183 @@ function aggregateTurnsByTool(sessions) {
   };
 }
 
+// 区间集合减法：从 base 扣除 cut（镜像 src/metrics.ts 的 subtractMs）
+function subtractIntervals(base, cut) {
+  let parts = base;
+  for (const [ca, cb] of [...cut].sort((a, b) => a[0] - b[0])) {
+    const next = [];
+    for (const [a, b] of parts) {
+      if (cb <= a || ca >= b) { next.push([a, b]); continue; }
+      if (ca > a) next.push([a, Math.min(ca, b)]);
+      if (cb < b) next.push([Math.max(cb, a), b]);
+    }
+    parts = next;
+  }
+  return parts;
+}
+
+// 轮内「中途停了」的具体区间（与后端 calculateEventTiming 的 idle 口径镜像：
+// ≥2 分钟无事件缝隙，扣除工具执行与等待确认）。只读 turn 一手事件，纯函数。
+const IDLE_GAP_MIN_MS_UI = 120000;
+function turnIdleIntervals(turn) {
+  const evs = [...(turn.events || [])].sort((a, b) => a.at_ms - b.at_ms);
+  const waits = reviewWaitIntervals(turn);
+  const uses = evs.filter((e) => e.kind === "tool_use");
+  const results = evs.filter((e) => e.kind === "tool_result");
+  const used = new Set();
+  const toolIv = [];
+  for (const u of uses) {
+    let rIdx = -1;
+    if (u.tool_id) {
+      rIdx = results.findIndex((r, i) => !used.has(i) && r.tool_id === u.tool_id && r.at_ms >= u.at_ms);
+    }
+    if (rIdx === -1) {
+      rIdx = results.findIndex((r, i) => !used.has(i) && r.at_ms >= u.at_ms);
+    }
+    if (rIdx === -1) continue;
+    used.add(rIdx);
+    const r = results[rIdx];
+    const end = Math.min(r.end_ms != null ? r.end_ms : r.at_ms, turn.end_ms != null ? turn.end_ms : Infinity);
+    if (end > u.at_ms) toolIv.push([u.at_ms, end]);
+  }
+  const times = [];
+  for (const e of evs) {
+    times.push(e.at_ms);
+    if (e.end_ms != null) times.push(e.end_ms);
+  }
+  times.sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = 1; i < times.length; i++) {
+    if (times[i] - times[i - 1] >= IDLE_GAP_MIN_MS_UI) gaps.push([times[i - 1], times[i]]);
+  }
+  return subtractIntervals(subtractIntervals(gaps, toolIv), waits);
+}
+
+// 五维下钻数据：全会话聚合（不按轮组织），供维度抽屉消费。纯函数。
+// 每维返回 { head, rows: [{ label, value, sub, slow }], note }
+function dimensionDrilldownData(session, key) {
+  const tstamp = (ms) =>
+    new Date(ms).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  const turns = session.turns || [];
+  const turnNo = (id) => turns.findIndex((t) => t.id === id) + 1;
+
+  if (key === "tool") {
+    const calls = [];
+    turns.forEach((t, i) => {
+      for (const c of perCallToolTimings(t)) calls.push({ ...c, turnIndex: i + 1 });
+    });
+    const tstamp2 = (ms) =>
+      new Date(ms).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+    const map = new Map();
+    for (const c of calls) {
+      const cur = map.get(c.name) ?? { name: c.name, count: 0, total: 0, max: 0, slow: 0, turns: new Set() };
+      cur.count += 1;
+      cur.total += c.duration_ms;
+      cur.max = Math.max(cur.max, c.duration_ms);
+      if (c.duration_ms > SLOW_OP_THRESHOLD_MS) cur.slow += 1;
+      cur.turns.add(c.turnIndex);
+      map.set(c.name, cur);
+    }
+    const rows = [...map.values()]
+      .sort((a, b) => b.total - a.total)
+      .map((a) => ({
+        label: toolLabel(a.name) + " ×" + a.count,
+        value: fmt(a.total),
+        sub: `最长 ${fmt(a.max)} · 出现在轮 ${[...a.turns].sort((x, y) => x - y).join(", ")}` + (a.slow ? ` · 超 15s 慢操作 ${a.slow} 次` : ""),
+        slow: a.slow > 0,
+        calls: calls
+          .filter((c) => c.name === a.name)
+          .sort((x, y) => y.duration_ms - x.duration_ms)
+          .map((c) => ({
+            label: `轮次 #${c.turnIndex}`,
+            value: fmt(c.duration_ms),
+            sub: `${tstamp2(c.at)} → ${tstamp2(c.end)}`,
+            slow: c.duration_ms > SLOW_OP_THRESHOLD_MS,
+            at: c.at,
+            turnId: c.turnId,
+          })),
+      }));
+    return {
+      head: `${calls.length} 次调用 · ${rows.length} 类工具`,
+      rows,
+      note: "逐次时长 = 工具发出到出结果的墙钟（含可能的审批等待，来源不落盘则拆不出）",
+    };
+  }
+
+  if (key === "model") {
+    const rows = turns
+      .map((t, i) => ({ label: `轮次 #${i + 1}`, value: t.breakdown ? fmt(t.breakdown.model_api_ms ?? 0) : "—", sub: (t.models || []).join(" / ") || "模型上下文未知", slow: false }))
+      .filter((r) => r.value !== "—");
+    const total = turns.reduce((a, t) => a + (t.breakdown?.model_api_ms ?? 0), 0);
+    return {
+      head: `合计 ${fmt(total)} · ${rows.length} 轮有测量`,
+      rows,
+      note: "思考与回复在源记录中整条落盘、不可再分，统一计入本维度；轮内 ≤2 分钟的响应间隙计入此处，更长间隙归「中途停了」",
+    };
+  }
+
+  if (key === "wait") {
+    const rows = [];
+    turns.forEach((t, i) => {
+      for (const [ws, we] of reviewWaitIntervals(t)) {
+        rows.push({ label: `轮次 #${i + 1}`, value: fmt(we - ws), sub: `${tstamp(ws)} → ${tstamp(we)}`, slow: false });
+      }
+    });
+    return {
+      head: rows.length ? `${rows.length} 次确认 · 合计 ${fmt(session.review_wait_ms || 0)}` : "本会话没有等待确认记录",
+      rows,
+      note: "等待确认 = 工具授权与方案确认的挂起时长；来源不落盘审批事件时该维度如实为空",
+    };
+  }
+
+  if (key === "idle") {
+    const rows = [];
+    turns.forEach((t, i) => {
+      for (const [a, b] of turnIdleIntervals(t)) {
+        rows.push({ label: `轮次 #${i + 1}`, value: fmt(b - a), sub: `${tstamp(a)} → ${tstamp(b)}`, slow: b - a >= 3600000 });
+      }
+    });
+    rows.sort((a, b) => 0);
+    const total = turns.reduce((acc, t) => acc + (t.breakdown?.idle_gap_ms ?? 0), 0);
+    return {
+      head: rows.length ? `${rows.length} 段 · 合计 ${fmt(total)}` : "本会话没有 ≥2 分钟的无事件空白",
+      rows,
+      note: "停摆的具体原因（网络阻塞、设备休眠、忙上一条）源记录不写，只能按两端记录类型推断，故不做定性",
+    };
+  }
+
+  if (key === "standby") {
+    const rows = [];
+    turns.forEach((t, i) => {
+      if (t.standby_ms != null && t.standby_ms > 0) {
+        const prev = turns[i - 1];
+        const start = prev && prev.end_ms != null ? tstamp(prev.end_ms) : "—";
+        rows.push({
+          label: `轮次 #${i + 1}`,
+          value: fmt(t.standby_ms),
+          sub: `上轮 ${start} 交卷 → 你 ${t.start_ms != null ? tstamp(t.start_ms) : "—"} 才发下一条`,
+          slow: t.standby_ms >= 3600000,
+        });
+      }
+      if ((t.queue_wait_ms ?? 0) > 0) {
+        rows.push({
+          label: `轮次 #${i + 1} 排队`,
+          value: fmt(t.queue_wait_ms),
+          sub: "发出时上一轮还没答完——消息排队，它收尾后即接手",
+          slow: false,
+        });
+      }
+    });
+    return {
+      head: rows.length ? `${rows.length} 段轮间间隔 · 合计 ${fmt(session.standby_ms || 0)}` : "本会话没有轮间间隔",
+      rows,
+      note: "轮间间隔是你的时间（阅读、离开、睡觉），AI 零消耗；排队条目表示你提前发了下一条",
+    };
+  }
+
+  return { head: "未知维度", rows: [], note: null };
+}
+
 // 慢操作阈值：单次工具调用超过 15 秒即视为慢操作（用户可见文案统一写作「超 15s 慢操作」）
 const SLOW_OP_THRESHOLD_MS = 15000;
 
@@ -1740,9 +1916,10 @@ function attributionLines(s) {
   // 维度短标签沿用 BREAKDOWN_DIMENSIONS，仅归因句式在此处维护
   const verdicts = {
     tool: "瓶颈为本地工具或脚本执行",
-    model: "瓶颈为模型推理等待",
+    model: "瓶颈为模型响应等待",
     wait: "瓶颈为等待确认",
-    standby: "会话大部分时间处于待命",
+    idle: "瓶颈为中途停了（网络阻塞、设备休眠或忙上一条——源记录不写原因）",
+    standby: "会话大部分时间处于轮间间隔",
   };
   const dims = BREAKDOWN_DIMENSIONS.map((d) => ({
     key: d.key,
@@ -1797,7 +1974,7 @@ function sessionDetail() {
       ? DETAIL_BREAKDOWN_ROWS.map((r) => {
           const pct = (b[r.key] / b.total) * 100;
           return pct > 0
-            ? `<div style="width:${pct.toFixed(1)}%; background:${r.color};" title="${h(r.label)}: ${pct.toFixed(1)}%"></div>`
+            ? `<div style="width:${pct.toFixed(1)}%; background:${r.color};" data-dim-row="${h(r.key)}" role="button" tabindex="0" aria-label="下钻查看${h(r.label)}细分" title="${h(r.label)}: ${pct.toFixed(1)}% · 点击下钻"></div>`
             : "";
         }).join("")
       : "";
@@ -1809,7 +1986,7 @@ function sessionDetail() {
           const ms = b[r.key];
           const pct = ((ms / b.total) * 100).toFixed(1);
           return `
-            <div class="breakdown-row" title="口径：${h(r.hint)}">
+            <div class="breakdown-row" data-dim-row="${h(r.key)}" role="button" tabindex="0" aria-label="下钻查看${h(r.label)}细分" title="口径：${h(r.hint)} · 点击查看全会话细分">
               <div class="breakdown-label">
                 <span class="seg-legend-swatch" style="background:${r.color};"></span>
                 <span>${h(r.label)}</span>
@@ -1862,7 +2039,7 @@ function sessionDetail() {
       ${detailKpiCard(
         "AI 工作",
         autonomy.workSum !== null ? fmt(autonomy.workSum) : "—",
-        autonomy.workSum !== null ? "模型推理 + 本地工具" : "该会话未提供三态切分",
+        autonomy.workSum !== null ? "模型想和写 + 本地工具" : "该会话未提供三态切分",
         "work",
         "口径：AI 工作 work_ms = 模型推理 + 本地工具",
       )}
@@ -1882,6 +2059,24 @@ function sessionDetail() {
         slow.length ? "alert" : "",
         "口径：超 15s 慢操作 slow_ops = 单次工具调用 > 15000ms",
       )}
+      ${(s.queue_count ?? 0) > 0
+        ? detailKpiCard(
+            "排队输入",
+            `${s.queue_count} 次`,
+            `累计排队 ${fmt(s.queue_wait_ms || 0)}（发出时上一轮还没答完）`,
+            "",
+            "口径：排队输入 = 发出时上一轮尚未答复完毕的轮次；排队时长 queue_wait_ms = 上轮答复完毕 − 本条发出",
+          )
+        : ""}
+      ${s.last_done_ms
+        ? detailKpiCard(
+            "收尾空档",
+            fmt(Math.max(0, Date.now() - s.last_done_ms)),
+            `最后答复完毕 ${new Date(s.last_done_ms).toLocaleString("zh-CN", { hour12: false })} · 你还没发下一条，空档逐秒增长`,
+            "alert",
+            "口径：收尾空档 = 当前时刻 − 末轮答复完毕（last_done_ms）。与轮间间隔不同：没有下一条锚点，直到你发消息或关闭会话",
+          )
+        : ""}
     </div>
 
     <div class="detail-diag-grid">
@@ -1925,11 +2120,12 @@ function capsuleBarHtml(t) {
     model: t.breakdown?.model_api_ms ?? 0,
     tool: t.breakdown?.tool_execution_ms ?? 0,
     wait: t.review_wait_ms ?? 0,
+    idle: t.breakdown?.idle_gap_ms ?? 0,
     standby: t.standby_ms ?? 0,
   };
   const known = Object.values(msByKey).reduce((sum, ms) => sum + ms, 0);
-  // 顺序沿用原视觉：模型推理 → 本地工具 → 等待确认 → 待命
-  const segs = ["model", "tool", "wait", "standby"]
+  // 顺序沿用原视觉：模型想和写 → 本地工具 → 等待确认 → 中途停了 → 轮间间隔
+  const segs = ["model", "tool", "wait", "idle", "standby"]
     .filter((key) => msByKey[key] > 0)
     .map((key) => ({ key, ms: msByKey[key], dim: breakdownDimension(key) }))
     .filter((x) => x.dim);
@@ -2086,6 +2282,7 @@ function openDrawer(turn, session) {
     c.classList.toggle("active", c.dataset.turnCapsule === turn.id),
   );
 
+  state.dimensionDrawerKey = null;
   // 总账四卡统一走 resolveRollup：breakdown 缺失时可推导指标回填，
   // 推导不出的维度由 rollupEvidenceNote 给出诚实一行原因
   const rollup = resolveRollup(turn);
@@ -2134,6 +2331,21 @@ function openDrawer(turn, session) {
 
   // 耗时倒序排序
   toolsList.sort((a, b) => b.duration_ms - a.duration_ms);
+
+  // 按工具聚合（用户视角：先看哪类工具吃了多少时间，逐次明细按需展开）
+  const toolAgg = (() => {
+    const map = new Map();
+    for (const c of perCallStack) {
+      const cur = map.get(c.name) ?? { name: c.name, count: 0, total: 0, max: 0, slow: 0 };
+      cur.count += 1;
+      cur.total += c.duration_ms;
+      cur.max = Math.max(cur.max, c.duration_ms);
+      if (c.duration_ms > SLOW_OP_THRESHOLD_MS) cur.slow += 1;
+      map.set(c.name, cur);
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  })();
+  const slowCallCount = perCallStack.filter((c) => c.duration_ms > SLOW_OP_THRESHOLD_MS).length;
 
   // 可选分项（如 Pi 的事件流切分）：仅在数据落盘存在时渲染该小节
   const unclassifiedMs = turn.breakdown?.unclassified_delay_ms ?? null;
@@ -2186,16 +2398,20 @@ function openDrawer(turn, session) {
   `
       : "";
 
+  const tstampShort = (ms) =>
+    ms == null
+      ? ""
+      : new Date(ms).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const toolsHtml = perCallStack.length
     ? perCallStack.map((c) => {
         const isSlow = c.duration_ms > SLOW_OP_THRESHOLD_MS;
         return `
-          <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}">
+          <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}" data-call-at="${c.at ?? ""}">
             <div class="tool-exec-head">
               <strong title="${h(c.name)}">${h(toolLabel(c.name))}</strong>
               <span class="tool-exec-time${isSlow ? " slow" : ""}">${fmt(c.duration_ms)}${isSlow ? "（慢操作）" : ""}</span>
             </div>
-            <div class="tool-exec-detail">${h(c.name)}</div>
+            <div class="tool-exec-detail">${c.at != null ? `${h(tstampShort(c.at))} → ${h(tstampShort(c.end))}` : h(c.name)}${c.at == null ? "" : ' · 输入/输出读取中…'}</div>
           </div>
         `;
       }).join("")
@@ -2216,11 +2432,16 @@ function openDrawer(turn, session) {
         <span>本轮时间构成</span>
         <span style="font-size:11px; color:var(--state-work); font-weight:600;">一手数据核算</span>
       </div>
+      ${rollup.queueWaitMs !== null ? `
+      <div class="demo" style="margin:0 0 10px;">
+        <strong>排队输入</strong>
+        <span>你发出这条时上一轮还没答复完毕——这条消息排队了 <strong>${fmt(rollup.queueWaitMs)}</strong>，它答完上一条后才接手处理（交接通常仅数秒到一分钟）。</span>
+      </div>` : ""}
       <div class="drawer-kpi-grid">
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="${h(dimensionHint("model"))}">
           <div class="drawer-kpi-title">${h(dimensionTitle("model"))}</div>
           <div class="drawer-kpi-val">${apiMs !== null ? fmt(apiMs) : "—"}</div>
-          <div class="drawer-kpi-sub">${h(apiMs !== null ? turn.models.join(" / ") || "模型上下文未知" : rollupEvidenceNote(turn) || "模型上下文未知")}</div>
+          <div class="drawer-kpi-sub">${h(apiMs !== null ? (session.agent === "Antigravity" ? "含思考与输出 · 源记录整条落盘不可再分" : turn.models.join(" / ") || "模型上下文未知") : rollupEvidenceNote(turn) || "模型上下文未知")}</div>
         </div>
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-work);" title="${h(dimensionHint("tool"))}">
           <div class="drawer-kpi-title">${h(dimensionTitle("tool"))}</div>
@@ -2235,8 +2456,14 @@ function openDrawer(turn, session) {
         <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle);" title="口径：本轮时长 elapsed_ms = 本轮起点至结束">
           <div class="drawer-kpi-title">本轮时长</div>
           <div class="drawer-kpi-val">${fmt(wall)}</div>
-          <div class="drawer-kpi-sub"><span title="口径：AI 工作占比 = AI 工作 work_ms ÷ 本轮时长 elapsed_ms">AI 工作占比</span>：${workRate !== null ? `${workRate}%` : "—"}${rollup.wallBackfilled ? " · 该轮进行中，按起点至今累计" : ""}</div>
+          <div class="drawer-kpi-sub">${rollup.idleMs !== null ? h(`守恒：干活 ${fmt((apiMs ?? 0) + (toolMs ?? 0))} + 等待确认 ${fmt(wait ?? 0)} + 停了 ${fmt(rollup.idleMs)} = 等待 ${fmt(wall)}`) : h(`AI 工作占比：${workRate !== null ? `${workRate}%` : "—"}${rollup.wallBackfilled ? " · 该轮进行中，按起点至今累计" : ""}`)}</div>
         </div>
+        ${rollup.idleMs !== null ? `
+        <div class="drawer-kpi-box" style="border-top:3px solid var(--state-idle-strong);" title="${h(dimensionHint("idle"))}">
+          <div class="drawer-kpi-title">${h(dimensionTitle("idle"))}</div>
+          <div class="drawer-kpi-val">${fmt(rollup.idleMs)}</div>
+          <div class="drawer-kpi-sub">网络阻塞、设备休眠、忙上一条等 · 源记录不写原因，不编造</div>
+        </div>` : ""}
       </div>
       <!-- Token / 模型下钻：与三态并排呈现；无快照如实留空，绝不 0 断言 -->
       <div class="drawer-kpi-grid" style="margin-top:10px;">
@@ -2259,15 +2486,46 @@ function openDrawer(turn, session) {
     <!-- Pi 未分类延迟（工具就绪到实际开始，无法归因为人审） -->
     ${unclassifiedHtml}
 
-    <!-- 详细脚本与慢工具清单 -->
+    <!-- 工具调用：按工具聚合先行，逐次明细按需展开 -->
     <div>
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
         <span style="font-size:12px; font-weight:700; color:var(--fg-title);">本轮工具调用</span>
-        <span style="font-size:11px; color:var(--fg-muted);">单次调用粒度 · 按耗时倒序 · 超过 15 秒标红</span>
+        <span style="font-size:11px; color:var(--fg-muted);">${toolAgg.length ? `${perCallStack.length} 次调用 · ${toolAgg.length} 类工具` : "无工具调用"}</span>
       </div>
-      <div class="tool-list-container">
-        ${toolsHtml}
+      ${toolAgg.length
+        ? `<div class="tool-agg-list">
+        ${toolAgg
+          .map((a) => {
+            // 一类工具一个可展开块：聚合行为摘要，逐次卡（起止 + 输入/输出）在下方
+            const calls = perCallStack
+              .filter((c) => c.name === a.name)
+              .sort((x, y) => y.duration_ms - x.duration_ms);
+            const cards = calls
+              .map((c) => {
+                const isSlow = c.duration_ms > SLOW_OP_THRESHOLD_MS;
+                return `
+            <div class="tool-exec-card${isSlow ? " slow" : ""}" data-tool-call="${h(c.callId || "")}" data-call-at="${c.at ?? ""}" style="padding:7px 10px;">
+              <div class="tool-exec-head">
+                <strong style="font-size:12px;">轮次内第 ${calls.indexOf(c) + 1} 次</strong>
+                <span class="tool-exec-time${isSlow ? " slow" : ""}" style="font-size:11px;">${fmt(c.duration_ms)}${isSlow ? "（慢操作）" : ""}</span>
+              </div>
+              <div class="tool-exec-detail">${c.at != null ? `${h(tstampShort(c.at))} → ${h(tstampShort(c.end))}` : h(c.name)}${c.at == null ? "" : ' · 输入/输出读取中…'}</div>
+            </div>`;
+              })
+              .join("");
+            return `
+          <details class="dim-drill">
+            <summary><div class="tool-agg-row${a.slow ? " slow" : ""}" title="${h(a.name)}">
+              <span class="tool-agg-name">${h(toolLabel(a.name))}<em>×${a.count}</em></span>
+              <span class="tool-agg-total">${fmt(a.total)}</span>
+              <span class="tool-agg-max${a.max > SLOW_OP_THRESHOLD_MS ? " slow" : ""}">最长 ${fmt(a.max)}</span>
+            </div></summary>
+            <div class="dim-drill-body">${cards}</div>
+          </details>`;
+          })
+          .join("")}
       </div>
+      <p class="sub" style="margin:6px 2px 0;">逐次时长 = 发出 → 出结果的墙钟；输入/输出按需读取本机源文件，审批等待不可拆分。</p>` : toolsHtml}
     </div>
   `;
 
@@ -2277,10 +2535,115 @@ function openDrawer(turn, session) {
   d.classList.remove("collapsed");
 }
 
+// 五维下钻抽屉：点击会话详情的分布行 / 色段，弹出该维度全会话聚合视图
+// （总结 + 逐条细分）。复用轮次抽屉面板，不新增页面。
+function openDimensionDrawer(key, session) {
+  const d = $("#detailDrawer");
+  if (!d) return;
+  const markEl = $("#drawerAgentMark");
+  if (markEl) markEl.innerHTML = agentMark(session.agent);
+  const titleEl = $("#drawerTurnTitle");
+  if (titleEl) {
+    titleEl.textContent = `${dimensionTitle(key)} · 会话下钻 · ${session.title || session.project}`;
+    titleEl.title = titleEl.textContent;
+  }
+  const prevBtn = $("#drawerPrevTurn");
+  const nextBtn = $("#drawerNextTurn");
+  if (prevBtn) prevBtn.disabled = true;
+  if (nextBtn) nextBtn.disabled = true;
+
+  // 清掉轮次胶囊高亮：当前抽屉展示的是维度聚合，不是某一轮
+  $$(".turn-capsule.active").forEach((c) => c.classList.remove("active"));
+  state.selectedTurnId = null;
+  state.dimensionDrawerKey = key;
+
+  const dim = breakdownDimension(key);
+  const data = dimensionDrilldownData(session, key);
+  const rowsHtml = data.rows.length
+    ? data.rows
+        .map((r) => {
+          const aggRow = `
+      <div class="tool-exec-card${r.slow ? " slow" : ""}" style="cursor:${r.calls ? "pointer" : "default"};">
+        <div class="tool-exec-head">
+          <strong>${h(r.label)}</strong>
+          <span class="tool-exec-time${r.slow ? " slow" : ""}">${h(r.value)}</span>
+        </div>
+        ${r.sub ? `<div class="tool-exec-detail">${h(r.sub)}</div>` : ""}
+      </div>`;
+          if (!r.calls || !r.calls.length) return aggRow;
+          // 聚合行可展开：逐次调用的起止时刻与时长（按耗时倒序）；
+          // 输入/输出在展开后按需从本机源文件回填（data-call-at 匹配）
+          return `
+      <details class="dim-drill">
+        <summary>${aggRow}</summary>
+        <div class="dim-drill-body">
+          ${r.calls
+            .map(
+              (c) => `
+          <div class="tool-exec-card${c.slow ? " slow" : ""}" style="padding:7px 10px;" data-call-at="${c.at ?? ""}" data-call-turn="${h(c.turnId || "")}">
+            <div class="tool-exec-head">
+              <strong style="font-size:12px;">${h(c.label)}</strong>
+              <span class="tool-exec-time${c.slow ? " slow" : ""}" style="font-size:11px;">${h(c.value)}</span>
+            </div>
+            <div class="tool-exec-detail">${h(c.sub)}${c.at != null ? ' · 输入/输出读取中…' : ""}</div>
+          </div>`,
+            )
+            .join("")}
+        </div>
+      </details>`;
+        })
+        .join("")
+    : `<div class="empty" style="padding:16px;">该维度在当前会话没有任何可计量的记录。</div>`;
+
+  $("#drawerBody").innerHTML = `
+    <div>
+      <div class="drawer-section-label">${h(dim ? dim.label : key)} · 全会话聚合</div>
+      <div class="drawer-transcript-box" style="font-weight:700; color:var(--fg-title);">${h(data.head)}</div>
+      <div style="margin-top:12px;">
+        ${rowsHtml}
+      </div>
+      ${data.note ? `<p class="drawer-transcript-note">${h(data.note)}</p>` : ""}
+    </div>
+  `;
+  d.classList.remove("collapsed");
+
+  // tool 维度：按需读取本机源文件，给每次调用回填输入/输出
+  if (key === "tool") {
+    const sessionAtClose = session;
+    fetchSessionTranscript(session).then((entry) => {
+      // 抽屉已被切换/关闭时放弃回填，防止串内容
+      if (state.dimensionDrawerKey !== key || state.activeSessionId !== sessionAtClose.id) return;
+      if (!entry || entry.status !== "ok") return;
+      const byTurnId = new Map((entry.data?.turns || []).map((x) => [x.turn_id, x]));
+      $$("#drawerBody .tool-exec-card[data-call-at][data-call-turn]").forEach((card) => {
+        const tt = byTurnId.get(card.dataset.callTurn);
+        if (!tt) return;
+        const at = Number(card.dataset.callAt);
+        const call = (tt.tool_calls || []).find((x) => x.at === at);
+        if (!call) return;
+        const detail = card.querySelector(".tool-exec-detail");
+        if (!detail) return;
+        if (detail.dataset.ioFilled === "1") return;
+        detail.dataset.ioFilled = "1";
+        detail.textContent = detail.textContent.replace(" · 输入/输出读取中…", "");
+        const lines = [];
+        if (call.detail) lines.push(`<b>输入</b> ${h(String(call.detail))}`);
+        if (call.result) lines.push(`<b>输出</b> ${h(String(call.result))}`);
+        if (lines.length)
+          detail.insertAdjacentHTML(
+            "beforeend",
+            `<div class="tool-exec-io">${lines.join('<div class="tool-exec-io-sep"></div>')}</div>`,
+          );
+      });
+    });
+  }
+}
+
 function closeDrawer() {
   const d = $("#detailDrawer");
   if (d) d.classList.add("collapsed");
   state.selectedTurnId = null;
+  state.dimensionDrawerKey = null;
   // 同步清掉轮次胶囊高亮
   $$(".turn-capsule.active").forEach((c) => c.classList.remove("active"));
 }
@@ -2295,9 +2658,8 @@ function navigateTurn(dir) {
   if (target) openDrawer(target, s);
 }
 
-// 按需拉取该会话的轮次提问/思考文本（GET /api/session/transcript），
-// 按 session_id 缓存：同会话内切换轮次不重复请求
-async function loadDrawerTranscript(session, turn) {
+// 会话 transcript 的统一取数（缓存共享给维度下钻的输入/输出回填）
+async function fetchSessionTranscript(session) {
   let entry = state.transcriptCache.get(session.id);
   if (!entry) {
     try {
@@ -2312,6 +2674,13 @@ async function loadDrawerTranscript(session, turn) {
     }
     state.transcriptCache.set(session.id, entry);
   }
+  return entry;
+}
+
+// 按需拉取该会话的轮次提问/思考文本（GET /api/session/transcript），
+// 按 session_id 缓存：同会话内切换轮次不重复请求
+async function loadDrawerTranscript(session, turn) {
+  const entry = await fetchSessionTranscript(session);
   renderDrawerTranscript(entry, session, turn);
 }
 
@@ -2337,6 +2706,28 @@ function renderDrawerTranscript(entry, session, turn) {
 
   const t = (entry.data?.turns || []).find((x) => x.turn_id === turn.id);
   const notes = entry.data?.missing_fields || [];
+  // 工具卡输入/输出回填：按发出时刻匹配（transcript 与事件流同一配对语义）
+  if (entry.status === "ok") {
+    const tcalls = (t?.tool_calls || []).slice();
+    $$("#drawerBody .tool-exec-card[data-call-at]").forEach((card) => {
+      const at = Number(card.dataset.callAt);
+      const call = tcalls.find((x) => x.at === at) || null;
+      if (!call) return;
+      const detail = card.querySelector(".tool-exec-detail");
+      if (!detail) return;
+      if (detail.dataset.ioFilled === "1") return;
+      detail.dataset.ioFilled = "1";
+      detail.textContent = detail.textContent.replace(" · 输入/输出读取中…", "");
+      const lines = [];
+      if (call.detail) lines.push(`<b>输入</b> ${h(String(call.detail))}`);
+      if (call.result) lines.push(`<b>输出</b> ${h(String(call.result))}`);
+      if (lines.length)
+        detail.insertAdjacentHTML(
+          "beforeend",
+          `<div class="tool-exec-io">${lines.join('<div class="tool-exec-io-sep"></div>')}</div>`,
+        );
+    });
+  }
   if (!t) {
     // 来源文件整体缺失/不可读时，后端会以 turns:[] + missing_fields 说明原因；
     // missing_fields 里可能混有思考链加密等与提问无关的说明，
@@ -2776,11 +3167,12 @@ function definitions() {
            <tr><td>本轮时长</td><td class="sub">wall time</td><td><code>elapsed_ms</code></td></tr>
            <tr><td>AI 工作</td><td class="sub">Active Work Duration</td><td><code>work_ms</code> = <code>model_ms</code> + tool execution</td></tr>
            <tr><td>等待确认</td><td class="sub">Review Wait</td><td><code>review_wait_ms</code></td></tr>
-           <tr><td>待命</td><td class="sub">Standby Duration</td><td><code>standby_ms</code></td></tr>
+           <tr><td>中途停了</td><td class="sub">Idle Gap</td><td><code>idle_gap_ms</code>（≥2 分钟无源事件）</td></tr>
+           <tr><td>轮间间隔</td><td class="sub">Standby Duration</td><td><code>standby_ms</code></td></tr>
            <tr><td>自动完成度</td><td class="sub">Autonomy Rate</td><td><code>autonomy_rate</code></td></tr>
            <tr><td>超 15s 慢操作</td><td class="sub">Slow Operation Count</td><td><code>slow_ops</code></td></tr>
            <tr><td>本地工具</td><td class="sub">Tool Execution Duration</td><td>tool execution</td></tr>
-           <tr><td>模型推理</td><td class="sub">Model API Duration</td><td><code>model_ms</code></td></tr>
+           <tr><td>模型想和写</td><td class="sub">Model API Duration</td><td><code>model_ms</code>（含思考与输出，整条落盘不可再分）</td></tr>
          </tbody>
        </table>
      </div>
@@ -2909,6 +3301,14 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
+  // 0.4 五维分布行 / 色段：打开维度下钻抽屉（全会话聚合）
+  const dimRow = e.target.closest("[data-dim-row]");
+  if (dimRow) {
+    const s = detailSession();
+    if (s) openDimensionDrawer(dimRow.dataset.dimRow, s);
+    return;
+  }
+
   // 0.5 轮次胶囊 / 慢操作榜单行：打开右侧 Turn Inspector 抽屉
   const capsule = e.target.closest("[data-turn-capsule]");
   if (capsule) {
@@ -2976,6 +3376,7 @@ document.addEventListener("click", async (e) => {
     // 趋势粒度切换：纯视图状态，数据不变，重渲染即可；随视图持久化
     if (["day", "week"].includes(b.dataset.trendGran)) {
       state.trendGran = b.dataset.trendGran;
+      state.trendGranManual = true; // 用户手动选粒度后不再自动切换
       saveView();
       render();
     }
