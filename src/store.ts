@@ -143,6 +143,14 @@ interface Source {
   title: string | null;
 }
 
+/** refresh 用已落库快照行：last_size/last_mtime_ns 是上次成功导入时源文件的
+ *  签名（mtimeNs 超出 Number 安全整数，存 TEXT 做精确相等比较）。title/project
+ *  一并带出，供跳过路径的富化做纯内存比较，避免逐行 SELECT 的 N+1。 */
+type SavedRow = Pick<
+  Source,
+  "id" | "path" | "session_id" | "config_root" | "agent" | "last_error" | "title"
+> & { project: string; last_size: number | null; last_mtime_ns: string | null };
+
 export function groupSubagents(
   events: Event[],
   turns: Turn[] = [],
@@ -460,6 +468,10 @@ export function calculateOpencodeTiming(entries: Event[]): {
 export class Store {
   readonly path: string;
   readonly db: DatabaseSync;
+  // sessions() 重建是 O(全部事件)，而 /api/report 每次请求都会调用。缓存重建
+  // 结果，任何可能改变其输出的写入（导入、失败标记、快照退役、宿主墓碑清理）
+  // 都必须经 invalidateSessionCache() 失效，漏标会读到陈旧统计。
+  private sessionCache: Session[] | null = null;
   constructor(filename: string) {
     this.path = path.resolve(expand(filename, os.homedir()));
     mkdirSync(path.dirname(this.path), { recursive: true, mode: 0o700 });
@@ -509,6 +521,21 @@ ALTER TABLE source_migrated RENAME TO source;`,
       });
       this.db.exec("PRAGMA foreign_keys=ON");
     }
+    // 增量同步签名列。放在 legacy 重建之后：重建会按显式列清单重建表，先前
+    // ALTER 出的列会被丢掉，重建后再补齐才可靠。
+    const sourceColumns = this.db
+      .prepare("PRAGMA table_info(source)")
+      .all()
+      .map((r) => (r as { name: string }).name);
+    for (const [col, type] of [
+      ["last_size", "INTEGER"],
+      ["last_mtime_ns", "TEXT"],
+    ] as const)
+      if (!sourceColumns.includes(col))
+        this.db.exec(`ALTER TABLE source ADD COLUMN ${col} ${type}`);
+    // 启动即清空确定性失败 memo：每个进程生命周期内对失败文件至少完整探测
+    // 一轮——适配器升级或上游格式修复后，同一份字节内容可能已能成功导入。
+    this.db.exec("DELETE FROM import_failure");
     const eventCols = this.db
       .prepare("PRAGMA table_info(event)")
       .all()
@@ -528,6 +555,11 @@ ALTER TABLE source_migrated RENAME TO source;`,
   }
   close() {
     this.db.close();
+  }
+  /** sessions() 的重建结果是缓存的：导入、失败标记、快照退役、宿主墓碑清理
+   *  等任何会改变其输出的写入都必须调用本方法，漏标会读到陈旧统计。 */
+  private invalidateSessionCache() {
+    this.sessionCache = null;
   }
   transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN");
@@ -563,8 +595,12 @@ ALTER TABLE source_migrated RENAME TO source;`,
               ? "请选择 OpenCode 会话数据库文件（如 opencode.db）"
               : "请选择支持的 Agent .jsonl 会话文件",
       );
-    if (before.size > 512n * 1024n * 1024n)
-      throw new ValidationError("文件超过 512 MiB；请先选择较小的会话文件");
+    try {
+      if (before.size > 512n * 1024n * 1024n)
+        throw new ValidationError(
+          "文件超过 512 MiB；请先选择较小的会话文件",
+          { permanent: true },
+        );
     // The file-change guard spans the awaited parse: stat before and after, so
     // a file rewritten mid-import is rejected instead of half-ingested.
     // OpenCode differs from every other adapter: one .db file carries many
@@ -681,13 +717,131 @@ ALTER TABLE source_migrated RENAME TO source;`,
             );
         }
       }
+      // 增量同步签名：记录本次成功导入时源文件的 size + mtimeNs，refresh
+      // 据此跳过未变化文件。导入失败回滚时签名一并回滚，不会误标。
+      this.db
+        .prepare("UPDATE source SET last_size=?, last_mtime_ns=? WHERE path=?")
+        .run(Number(after.size), after.mtimeNs.toString(), p);
+      // 成功导入即解除确定性失败 memo：同一份内容下次按健康快照走签名跳过。
+      this.db.prepare("DELETE FROM import_failure WHERE path=?").run(p);
     });
-    return {
-      events: parsed.reduce((acc, d) => acc + d.events.length, 0),
-      issues: [...new Set(parsed.flatMap((d) => d.issues))],
-      external_import_only: codex?.external_import_only ?? false,
-    };
+      this.invalidateSessionCache();
+      return {
+        events: parsed.reduce((acc, d) => acc + d.events.length, 0),
+        issues: [...new Set(parsed.flatMap((d) => d.issues))],
+        external_import_only: codex?.external_import_only ?? false,
+      };
+    } catch (e) {
+      if (
+        (e instanceof ValidationError && e.permanent) ||
+        e instanceof ExcludedSessionError
+      ) {
+        // 确定性结论 memo（失败或按设计排除）：同一份字节内容重试必然得到
+        // 同一结论，落签名让稳态同步跳过重解析；构造 Store 时会清空 memo，
+        // 适配器升级后自动重新探测。排除类单独标记，UI 口径仍是 excluded。
+        try {
+          const st = statSync(p, { bigint: true });
+          this.importFailureUpsertStmt().run(
+            p,
+            e instanceof ValidationError ? e.message : "导入被排除",
+            adapter,
+            Number(st.size),
+            st.mtimeNs.toString(),
+            e instanceof ExcludedSessionError ? 1 : 0,
+          );
+        } catch {
+          // 文件已消失等极端情况：memo 落不上就落不上，下一轮如实重试
+        }
+      }
+      throw e;
+    }
   }
+  /** 文件级增量跳过判定：该路径的全部快照健康（无 last_error）且 size+mtimeNs
+   *  与上次成功导入时一致。mtimeNs 以字符串做精确相等比较；旧快照签名为 NULL
+   *  → 不跳过（升级后首轮全量重导一次、落签名后进入稳态）；stat 失败（竞态
+   *  删除等）也不跳过，交给 importFile 走完整的文件变化守卫与错误处理。 */
+  private skipUnchanged(p: string, savedRows: SavedRow[]): boolean {
+    if (
+      savedRows.some(
+        (row) =>
+          row.last_error !== null ||
+          row.last_size === null ||
+          row.last_mtime_ns === null,
+      )
+    )
+      return false;
+    try {
+      const st = statSync(p, { bigint: true });
+      return savedRows.every(
+        (row) =>
+          Number(row.last_size) === Number(st.size) &&
+          row.last_mtime_ns === st.mtimeNs.toString(),
+      );
+    } catch {
+      return false;
+    }
+  }
+  /** 跳过重解析的文件仍走一遍「单通道标题富化」（ADR-0002 §9 语义）：title/
+   *  project 每次导入重算、注册表变化即落库或清除，只是不再重读会话文件本体。
+   *  仅 Codex（session_index.jsonl）与 Antigravity（conversation_summaries.db）
+   *  的富化来自外部注册表；其余适配器的标题在会话文件内部，文件未变即标题未变。
+   *  比较全部在内存完成（saved 行自带 title/project），UPDATE 语句实例级复用，
+   *  避免稳态同步对几百个跳过文件做逐行 prepare 的 N+1。 */
+  private reenrichSkipped(
+    configRoot: string | null,
+    agent: AdapterName,
+    savedRows: SavedRow[],
+    indexCache: SessionIndexCache,
+    convIndexCache: ConversationIndexCache,
+  ) {
+    for (const row of savedRows) {
+      let title: string | null | undefined;
+      let project: string | null | undefined;
+      if (agent === "codex" && configRoot) {
+        title =
+          (sessionIndex(configRoot, indexCache).get(row.session_id)?.name ??
+            "").slice(0, 100) || null;
+      } else if (agent === "antigravity") {
+        const conv = configRoot
+          ? conversationIndex(configRoot, convIndexCache).get(
+              row.session_id.replace(/^antigravity\//, ""),
+            )
+          : undefined;
+        title = conv?.title ?? null;
+        project = conv?.project ?? "未知项目";
+      } else {
+        continue;
+      }
+      const nextTitle = title ?? null,
+        nextProject = project ?? row.project;
+      if (row.title !== nextTitle || row.project !== nextProject) {
+        this.enrichUpdateStmt().run(nextTitle, nextProject, row.id);
+        this.invalidateSessionCache();
+      }
+    }
+  }
+  /** 富化 UPDATE 的实例级预编译：稳态同步会被反复调用，编译一次常驻复用。 */
+  private enrichUpdateStmt() {
+    if (!this.enrichUpdate)
+      this.enrichUpdate = this.db.prepare(
+        "UPDATE source SET title=?, project=? WHERE id=?",
+      );
+    return this.enrichUpdate;
+  }
+  private enrichUpdate:
+    | ReturnType<DatabaseSync["prepare"]>
+    | null = null;
+  /** 确定性失败 memo 的实例级预编译 upsert。 */
+  private importFailureUpsertStmt() {
+    if (!this.importFailureUpsert)
+      this.importFailureUpsert = this.db.prepare(
+        "INSERT INTO import_failure(path,reason,agent,last_size,last_mtime_ns,excluded) VALUES(?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET reason=excluded.reason,agent=excluded.agent,last_size=excluded.last_size,last_mtime_ns=excluded.last_mtime_ns,excluded=excluded.excluded",
+      );
+    return this.importFailureUpsert;
+  }
+  private importFailureUpsert:
+    | ReturnType<DatabaseSync["prepare"]>
+    | null = null;
   async refresh(directories = new Directories(this)) {
     const { files, agents, notices } = directories.collect(),
       configured = new Set(
@@ -715,8 +869,36 @@ ALTER TABLE source_migrated RENAME TO source;`,
       }
     };
     const saved = this.db
-      .prepare("SELECT path,config_root,agent FROM source")
-      .all() as unknown as Pick<Source, "path" | "config_root" | "agent">[];
+      .prepare(
+        "SELECT id,path,session_id,config_root,agent,last_error,last_size,last_mtime_ns,title,project FROM source",
+      )
+      .all() as unknown as SavedRow[];
+    // 按路径聚合：OpenCode 一个 .db 挂多个会话快照，同路径会有多行；跳过判定
+    // 与 agent 回落都必须看「该路径的全部行」，同时取代逐文件线性 find。
+    const savedByPath = new Map<string, SavedRow[]>();
+    for (const s of saved) {
+      const list = savedByPath.get(s.path);
+      if (list) list.push(s);
+      else savedByPath.set(s.path, [s]);
+    }
+    // 确定性失败 memo：从无成功快照的文件（体积超限、来源不明、按设计排除等）
+    // 按签名跳过重解析；agent 列防止目录重分类后误用旧适配器的失败结论。
+    const failureMemo = new Map(
+      (
+        this.db
+          .prepare(
+            "SELECT path,reason,agent,last_size,last_mtime_ns,excluded FROM import_failure",
+          )
+          .all() as unknown as {
+          path: string;
+          reason: string;
+          agent: string;
+          last_size: number | null;
+          last_mtime_ns: string | null;
+          excluded: number;
+        }[]
+      ).map((m) => [m.path, m]),
+    );
     const paths = new Map(
       saved
         .filter((s) => s.config_root === null || configured.has(s.config_root))
@@ -741,7 +923,8 @@ ALTER TABLE source_migrated RENAME TO source;`,
       failed = 0,
       excluded = 0,
       retired = 0,
-      hostDeleted = 0;
+      hostDeleted = 0,
+      skipped = 0;
     for (const [p, r] of [...paths].sort(([a], [b]) => a.localeCompare(b))) {
       try {
         if (missing.has(p)) {
@@ -750,17 +933,71 @@ ALTER TABLE source_migrated RENAME TO source;`,
             // cascade via FK) and surface a notice — never a failure.
             this.db.prepare("DELETE FROM source WHERE path=?").run(p);
             hostDeleted++;
+            this.invalidateSessionCache();
             continue;
           }
           throw new ValidationError(
             "原会话文件已移动或不再位于启用目录；旧快照保留",
           );
         }
-        const savedAgent = saved.find((s) => s.path === p)?.agent;
+        const savedRows = savedByPath.get(p);
+        const savedAgent = savedRows?.[0]?.agent;
+        const agent = agents.get(p) ?? savedAgentAdapter(savedAgent);
+        // 确定性失败 memo 命中：该文件从未成功导入、失败原因纯由内容决定、
+        // 适配器未变且签名一致 → 重解析必然得到同一失败。仍计入 failed 与
+        // 失败清单（UI 口径不变），只是不再白付解析成本。
+        const memo = failureMemo.get(p);
+        if (
+          !savedRows?.length &&
+          memo &&
+          memo.agent === agent &&
+          memo.last_size !== null &&
+          memo.last_mtime_ns !== null
+        ) {
+          try {
+            const st = statSync(p, { bigint: true });
+            if (
+              Number(memo.last_size) === Number(st.size) &&
+              memo.last_mtime_ns === st.mtimeNs.toString()
+            ) {
+              if (memo.excluded) {
+                excluded++;
+                exclusions.set(p, memo.reason);
+              } else {
+                failed++;
+                failures.set(p, memo.reason);
+              }
+              skipped++;
+              continue;
+            }
+          } catch {
+            // stat 失败（竞态删除等）：不跳过，走 importFile 给出准确错误
+          }
+        }
+        // 增量跳过：全部快照健康且文件签名（size+mtimeNs）与上次成功导入一致
+        // 时，不再重新解析——只保留单通道标题富化。签名缺失（旧快照/升级首轮）
+        // 或快照带 last_error 时绝不跳过，保证失败文件每轮都被重试。
+        if (
+          savedRows &&
+          savedRows.length > 0 &&
+          savedAgentAdapter(savedRows[0].agent) === agent &&
+          this.skipUnchanged(p, savedRows)
+        ) {
+          this.reenrichSkipped(
+            r,
+            agent,
+            savedRows,
+            indexCache,
+            convIndexCache,
+          );
+          ok++;
+          skipped++;
+          continue;
+        }
         await this.importFile(
           p,
           r,
-          agents.get(p) ?? savedAgentAdapter(savedAgent),
+          agent,
           indexCache,
           convIndexCache,
         );
@@ -788,6 +1025,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
         this.db
           .prepare("UPDATE source SET last_error=? WHERE path=?")
           .run("最近同步失败；显示上次成功导入的快照", p);
+        this.invalidateSessionCache();
       }
     }
     if (hostDeleted > 0) {
@@ -818,10 +1056,12 @@ ALTER TABLE source_migrated RENAME TO source;`,
         }
       }
     });
+    this.invalidateSessionCache();
     return {
       updated: ok,
       failed: failed - retired,
       excluded,
+      skipped,
       discovered: files.size,
       failures: [...new Set(failures.values())].map((reason) => {
         const group = [...failures.entries()].filter(
@@ -849,6 +1089,9 @@ ALTER TABLE source_migrated RENAME TO source;`,
     };
   }
   sessions(): Session[] {
+    // 命中缓存直接返回。契约：返回值为共享只读视图（顶层已冻结），调用方不得
+    // 增删会话或就地改写统计字段——需要变形时先浅拷贝（report() 即此做法）。
+    if (this.sessionCache) return this.sessionCache;
     const { sources, events, tokenRows } = this.transaction(() => ({
       sources: this.db
         .prepare("SELECT * FROM source ORDER BY id")
@@ -1100,7 +1343,10 @@ ALTER TABLE source_migrated RENAME TO source;`,
         s.subagents = sessionSubagents;
       }
     }
-    return [...sessions.values()];
+    // 运行时冻结顶层增删；类型系统仍按 Session[] 暴露（调用方浅拷贝后变形，
+    // 如 report()），只读契约由注释与本冻结共同约束。
+    this.sessionCache = Object.freeze([...sessions.values()]) as unknown as Session[];
+    return this.sessionCache;
   }
   /** On-demand per-turn transcript for the session detail drawer: re-reads the
    *  registered source file and extracts prompt/thinking text. Nothing is

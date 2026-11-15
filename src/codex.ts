@@ -113,7 +113,7 @@ class LineSplitter {
       if (i < 0) break;
       const lineEnd = i + 1;
       if (this.pendingBytes + (lineEnd - from) > LINE_CAP)
-        throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+        throw new ValidationError("单条记录超过 16 MiB；文件未导入", { permanent: true });
       out.push(
         this.pending.length === 0 && from === 0
           ? chunk.subarray(0, lineEnd)
@@ -133,7 +133,7 @@ class LineSplitter {
       this.pending.push(Buffer.from(chunk.subarray(from)));
       this.pendingBytes += chunk.length - from;
       if (this.pendingBytes > LINE_CAP)
-        throw new ValidationError("单条记录超过 16 MiB；文件未导入");
+        throw new ValidationError("单条记录超过 16 MiB；文件未导入", { permanent: true });
     }
     return out;
   }
@@ -515,10 +515,12 @@ export async function parse(path: string): Promise<ParseResult> {
       issues.add("存在无法解析的记录；只保留可验证的元数据，请检查源文件");
     }
   }
-  if (!meta) throw new ValidationError("未找到有效 Codex 会话元数据");
+  if (!meta)
+    throw new ValidationError("未找到有效 Codex 会话元数据", { permanent: true });
   if (unknownSource)
     throw new ValidationError(
       "来源未知或同一文件混合多个会话标识，无法安全解析；未导入",
+      { permanent: true },
     );
   if (excluded)
     throw new ExcludedSessionError(

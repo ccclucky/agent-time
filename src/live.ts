@@ -19,6 +19,8 @@ export type RefreshSummary = {
   updated: number;
   failed: number;
   excluded: number;
+  /** 增量同步跳过数：签名（size+mtimeNs）未变化的健康文件，未重新解析 */
+  skipped: number;
   discovered: number;
   notices: string[];
 };
@@ -136,6 +138,7 @@ export class LiveSync {
       updated: r.updated,
       failed: r.failed,
       excluded: r.excluded,
+      skipped: r.skipped,
       discovered: r.discovered,
       notices: r.notices,
     };
