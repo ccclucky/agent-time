@@ -197,13 +197,26 @@ export function groupSubagents(
  * （交互式短轮次），同样拆出来会把正常响应误判成停摆，故保持原三态口径。
  */
 const IDLE_GAP_MIN_MS = 120_000;
+// Claude/Codex 的长挂起阈值：交互式轮次的分钟级缝隙几乎都是真实模型生成
+// （2 分钟即拆会误伤），只有跨小时的无事件空洞才判定为停摆。
+const IDLE_GAP_MIN_MS_LONG_SUSPEND = 1_800_000;
+// 各适配器的停摆阈值（守恒口径覆盖全部来源）
+export const IDLE_GAP_MIN_BY_AGENT: Record<string, number> = {
+  Antigravity: IDLE_GAP_MIN_MS,
+  Pi: IDLE_GAP_MIN_MS,
+  "Oh-My-Pi": IDLE_GAP_MIN_MS,
+  "DeepSeek Harness": IDLE_GAP_MIN_MS,
+  OpenCode: IDLE_GAP_MIN_MS,
+  "Claude Code": IDLE_GAP_MIN_MS_LONG_SUSPEND,
+  Codex: IDLE_GAP_MIN_MS_LONG_SUSPEND,
+};
 
 export function calculateEventTiming(
   entries: Event[],
   start: number,
   end: number,
   elapsed: number,
-  opts?: { idleGap?: boolean },
+  opts?: { idleGapMinMs?: number },
 ): {
   work_ms: number;
   review_wait_ms: number;
@@ -294,13 +307,14 @@ export function calculateEventTiming(
   // 等待审阅后的并集。工具运行中的缝隙是「命令在跑」不是停摆，必须扣除。
   // 仅在启用方（Antigravity）生效；其余适配器 idleGapMs 恒 0，口径不变。
   let idleGapMs = 0;
-  if (opts?.idleGap) {
+  const idleMin = opts?.idleGapMinMs;
+  if (idleMin != null) {
     const eventTimes = entries
       .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
       .sort((a, b) => a - b);
     const rawGaps: [number, number][] = [];
     for (let i = 1; i < eventTimes.length; i++)
-      if (eventTimes[i] - eventTimes[i - 1] >= IDLE_GAP_MIN_MS)
+      if (eventTimes[i] - eventTimes[i - 1] >= idleMin)
         rawGaps.push([eventTimes[i - 1], eventTimes[i]]);
     idleGapMs = unionMs(
       subtractMs(subtractMs(rawGaps, toolIntervals), waitIntervals),
@@ -333,6 +347,7 @@ export function calculatePiTiming(
   start: number,
   end: number,
   elapsed: number,
+  opts?: { idleGapMinMs?: number },
 ): {
   work_ms: number;
   review_wait_ms: number | null;
@@ -342,12 +357,14 @@ export function calculatePiTiming(
   let toolMs = 0;
   const modelTotals = new Map<string, number>();
   const thinkingTotals = new Map<string, number>();
+  const modelSpans: [number, number][] = [];
   // Model events without end_ms (model_change / thinking_level_change
   // markers) carry no duration evidence and contribute zero.
   for (const e of entries) {
     if (e.kind !== "model" || e.end_ms == null || e.end_ms < e.at_ms) continue;
     const dur = e.end_ms - e.at_ms;
     modelApiMs += dur;
+    modelSpans.push([e.at_ms, e.end_ms]);
     // Response spans recorded without a model name (message.model absent)
     // still carry timing evidence; bucket them instead of dropping.
     const modelKey = e.model ?? "未知模型";
@@ -373,11 +390,14 @@ export function calculatePiTiming(
   );
   const usedUses = new Set<number>();
   const delayIntervals: [number, number][] = [];
+  const toolIv: [number, number][] = [];
   for (const r of entries) {
     if (r.kind !== "tool_result") continue;
     const dur =
       r.end_ms != null && r.end_ms >= r.at_ms ? r.end_ms - r.at_ms : 0;
     toolMs += dur;
+    if (r.end_ms != null && r.end_ms > r.at_ms)
+      toolIv.push([r.at_ms, r.end_ms]);
     const tname = r.tool_name || "tool";
     const agg = toolsMap.get(tname) ?? { name: tname, count: 0, duration_ms: 0 };
     agg.count += 1;
@@ -393,6 +413,24 @@ export function calculatePiTiming(
     }
   }
   const unclassifiedDelayMs = unionMs(delayIntervals);
+  // 中途停了（守恒口径）：轮内 ≥ idleGapMinMs 无任何事件的区间，扣除模型
+  // 响应跨度、工具执行与就绪延迟后单列。OMP 的 1250h 实证即此类空白。
+  let idleGapMs = 0;
+  if (opts?.idleGapMinMs != null) {
+    const times = entries
+      .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
+      .sort((a, b) => a - b);
+    const rawGaps: [number, number][] = [];
+    for (let i = 1; i < times.length; i++)
+      if (times[i] - times[i - 1] >= opts.idleGapMinMs)
+        rawGaps.push([times[i - 1], times[i]]);
+    idleGapMs = unionMs(
+      subtractMs(
+        subtractMs(subtractMs(rawGaps, toolIv), modelSpans),
+        delayIntervals,
+      ),
+    );
+  }
   return {
     work_ms: modelApiMs + toolMs,
     // Pi sources carry no approval evidence; review wait stays unknown.
@@ -401,6 +439,7 @@ export function calculatePiTiming(
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
       unclassified_delay_ms: unclassifiedDelayMs,
+      idle_gap_ms: idleGapMs,
       tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
       model_api_breakdown: [...modelTotals.entries()]
         .map(([model, duration_ms]) => ({ model, duration_ms }))
@@ -436,7 +475,10 @@ export function calculatePiTiming(
  *  evidence on the events; the turn's wall-clock start/end/elapsed play no
  *  role in the split and the parameters were dead weight.
  */
-export function calculateOpencodeTiming(entries: Event[]): {
+export function calculateOpencodeTiming(
+  entries: Event[],
+  opts?: { idleGapMinMs?: number },
+): {
   work_ms: number;
   review_wait_ms: number | null;
   breakdown: TurnBreakdown;
@@ -492,6 +534,24 @@ export function calculateOpencodeTiming(entries: Event[]): {
     toolsMap.set(tname, agg);
   }
   const modelApiMs = Math.max(0, modelSpanMs - toolMs);
+  // 中途停了（守恒口径）：跨消息的无事件空洞（扣除模型跨度、工具区间与
+  // 既有未分类步间延迟，避免同一时间被两个档位重复计入）
+  let idleGapMs = 0;
+  if (opts?.idleGapMinMs != null) {
+    const times = entries
+      .flatMap((e) => (e.end_ms != null ? [e.at_ms, e.end_ms] : [e.at_ms]))
+      .sort((a, b) => a - b);
+    const rawGaps: [number, number][] = [];
+    for (let i = 1; i < times.length; i++)
+      if (times[i] - times[i - 1] >= opts.idleGapMinMs)
+        rawGaps.push([times[i - 1], times[i]]);
+    idleGapMs = unionMs(
+      subtractMs(
+        subtractMs(subtractMs(rawGaps, toolIntervals), modelSpans),
+        delayIntervals,
+      ),
+    );
+  }
   return {
     work_ms: modelApiMs + toolMs,
     review_wait_ms: null,
@@ -499,6 +559,7 @@ export function calculateOpencodeTiming(entries: Event[]): {
       model_api_ms: modelApiMs,
       tool_execution_ms: toolMs,
       unclassified_delay_ms: unclassifiedDelayMs,
+      idle_gap_ms: idleGapMs,
       tools: [...toolsMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
       model_api_breakdown: [...modelTotals.entries()]
         .map(([model, duration_ms]) => ({ model, duration_ms }))
@@ -1297,9 +1358,7 @@ ALTER TABLE source_migrated RENAME TO source;`,
       ) {
         applyTiming(
           calculateEventTiming(entries, start, end, elapsed, {
-            // 停摆拆分仅对 Antigravity 启用（长会话空洞实证口径，见
-            // calculateEventTiming 文档注释）；Claude/Codex 维持原三态。
-            idleGap: sessionObj.agent === "Antigravity",
+            idleGapMinMs: IDLE_GAP_MIN_BY_AGENT[sessionObj.agent],
           }),
         );
       } else if (
@@ -1310,14 +1369,22 @@ ALTER TABLE source_migrated RENAME TO source;`,
           sessionObj.agent === "DeepSeek Harness" ||
           sessionObj.agent === "Oh-My-Pi")
       ) {
-        applyTiming(calculatePiTiming(entries, start, end, elapsed));
+        applyTiming(
+          calculatePiTiming(entries, start, end, elapsed, {
+            idleGapMinMs: IDLE_GAP_MIN_BY_AGENT[sessionObj.agent],
+          }),
+        );
       } else if (
         elapsed !== null &&
         start !== null &&
         end !== null &&
         sessionObj.agent === "OpenCode"
       ) {
-        applyTiming(calculateOpencodeTiming(entries));
+        applyTiming(
+          calculateOpencodeTiming(entries, {
+            idleGapMinMs: IDLE_GAP_MIN_BY_AGENT[sessionObj.agent],
+          }),
+        );
       }
 
       const turnSubagents = groupSubagents(entries);

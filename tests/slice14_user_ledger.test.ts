@@ -101,23 +101,28 @@ test("Antigravity：排队输入记录 queue_wait_ms，轮间待命保持 null�
   assert.equal(s.last_done_ms, b.end_ms, "末轮答复完毕时刻 = 收尾空档锚点");
 });
 
-test("Claude/Codex 不拆停摆：同样的缝隙维持原三态口径", () => {
+test("Claude/Codex：长挂起阈值分档——短缝隙归生成，跨小时空洞归停摆", () => {
   const entries: Event[] = [
     { key: "k1", turn_id: "t", kind: "start", at_ms: 0, model: null },
     { key: "k2", turn_id: "t", kind: "tool_use", at_ms: 60000, model: null, tool_id: "tool-1", tool_name: "bash" },
     { key: "k3", turn_id: "t", kind: "tool_result", at_ms: 180000, model: null, tool_id: "tool-1", tool_name: "bash" },
-    // 180000 → 420000 无事件（4 分钟）：Claude 上这是模型在慢生成
+    // 180000 → 420000 无事件（4 分钟）：Claude 交互式轮次里这是模型在慢生成
     { key: "k4", turn_id: "t", kind: "complete", at_ms: 420000, model: null },
   ];
-  const off = calculateEventTiming(entries, 0, 420000, 420000);
-  assert.equal(off.breakdown.idle_gap_ms, 0, "未启用停摆拆分");
-  assert.equal(off.breakdown.model_api_ms, 300000, "缝隙归模型响应");
-  assert.equal(off.work_ms, 420000);
+  const claude = calculateEventTiming(entries, 0, 420000, 420000, {
+    idleGapMinMs: 1800000,
+  });
+  assert.equal(claude.breakdown.idle_gap_ms, 0, "4 分钟 < 30 分钟长挂起阈值 → 归模型响应");
+  assert.equal(claude.breakdown.model_api_ms, 300000);
+  assert.equal(claude.work_ms, 420000);
 
-  const on = calculateEventTiming(entries, 0, 420000, 420000, { idleGap: true });
-  assert.equal(on.breakdown.idle_gap_ms, 240000, "启用后同一缝隙单列为停摆");
-  assert.equal(on.breakdown.model_api_ms, 60000);
-  assert.equal(on.work_ms, 180000);
+  // 同样的缝隙按 Antigravity 阈值（2 分钟）则单列为停摆
+  const ag = calculateEventTiming(entries, 0, 420000, 420000, {
+    idleGapMinMs: 120000,
+  });
+  assert.equal(ag.breakdown.idle_gap_ms, 240000, "Antigravity 阈值下同一缝隙为停摆");
+  assert.equal(ag.breakdown.model_api_ms, 60000);
+  assert.equal(ag.work_ms, 180000);
 });
 
 test("Antigravity：不到 2 分钟的缝隙不算中途停了（归模型响应）", async () => {
@@ -137,6 +142,58 @@ test("Antigravity：不到 2 分钟的缝隙不算中途停了（归模型响应
   const t = store.sessions()[0].turns[0];
   assert.equal(t.breakdown?.idle_gap_ms, 0);
   assert.equal(t.breakdown?.model_api_ms, t.elapsed_ms, "全部等待计入模型响应");
+});
+
+test("OMP/Pi 系：跨天无事件空洞单列为停摆（1250h 实证口径）", async () => {
+  const { dir, store } = setup();
+  const root = path.join(dir, "omp-root");
+  const slugDir = path.join(root, "sessions", "-work-omp");
+  mkdirSync(slugDir, { recursive: true });
+  const T0 = Date.parse("2026-08-13T11:45:00Z");
+  const APPEND = T0 + 52 * 24 * 3600 * 1000; // 52 天后结果才落盘
+  const file = path.join(slugDir, "0199bbbb-0000-4000-8000-0000000000a1.jsonl");
+  const iso = (ms: number) => new Date(ms).toISOString();
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: "session", version: 3, id: "omp-idle-1", timestamp: iso(T0 - 120000), cwd: "/work/omp" }),
+      JSON.stringify({
+        type: "message",
+        id: "u1",
+        parentId: "prev",
+        timestamp: iso(T0),
+        message: { role: "user", attribution: "user", timestamp: T0, content: [{ type: "text", text: "hi" }] },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "a1",
+        parentId: "u1",
+        // 外层 timestamp = 结果落盘时刻（52 天后），message.timestamp = 请求起点
+        timestamp: iso(APPEND),
+        message: {
+          role: "assistant",
+          attribution: "assistant",
+          timestamp: T0 + 60000,
+          duration: 74000,
+          model: "test-model",
+          provider: "new-api",
+          api: "openai-completions",
+          stopReason: "stop",
+          content: [{ type: "text", text: "done" }],
+        },
+      }),
+    ].join("\n") + "\n",
+  );
+  await store.importFile(file, root, "omp");
+  const s = store.sessions()[0];
+  const t = s.turns[0];
+  // 轮次墙钟 ≈ 52 天；work = 模型机时 74s（诚实计量）；52 天长空洞 → 停了
+  assert.equal(t.status, "completed");
+  assert.equal(t.breakdown?.model_api_ms, 74000, "模型机时按 span 诚实计量");
+  assert.ok(
+    (t.breakdown?.idle_gap_ms ?? 0) > 50 * 24 * 3600000,
+    "52 天无事件空洞单列为停摆",
+  );
 });
 
 test("report：停摆与排队进入汇总口径", async () => {

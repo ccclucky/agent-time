@@ -292,9 +292,11 @@ test("Slice 10 UI language: tooltips expose the glossary layer on stats, funnel,
     stats.includes('title="口径：累计工作时长 processing_ms'),
     "stats card must hint 累计工作时长 processing_ms",
   );
-  assert.ok(
-    stats.includes('title="口径：并行去重时长 processing_union_ms'),
-    "stats card must hint 并行去重时长 processing_union_ms",
+  // 并行去重时长卡已按用户主张移除（不去重合、不去并行）
+  assert.equal(
+    stats.includes("并行去重时长"),
+    false,
+    "并行去重时长 stat card must stay removed",
   );
 
   const funnel = sliceFunction(source, "function funnel()");
@@ -405,5 +407,5 @@ test("Slice 10 UI language: both assets share one cache-busting stamp (slice 12 
   const cssV = source.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = source.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261115-4", "copy convergence requires a new asset stamp");
+  assert.equal(cssV, "20261115-5", "copy convergence requires a new asset stamp");
 });

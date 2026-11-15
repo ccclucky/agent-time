@@ -415,11 +415,6 @@ function stats() {
       <div class="number">${fmt(s.processing_ms)}</div>
       <small>各轮可测量记录区间时间相加 ↗</small>
     </div>
-    <div class="stat" title="口径：并行去重时长 processing_union_ms = 重叠时间只计一次">
-      <label>并行去重时长</label>
-      <div class="number">${fmt(s.processing_union_ms)}</div>
-      <small>同时运行的时间仅计一次 ↗</small>
-    </div>
     <div class="stat">
       <label>已测量 / 已记录轮次</label>
       <div class="number">${s.measured_turns} / ${s.turns}</div>
@@ -612,32 +607,33 @@ function trendCard() {
       </div>
     </section>`;
 
-  // 柱高非线性缩放（平方根 + 8px 底高）：多数聚跨度大时常态数据不被压成细线
-  const totals = buckets.map((b) => b.work + b.wait + b.standby);
-  const maxTotal = Math.max(...totals, 1);
+  // 单指标：柱高 ∝ 当天 AI 干活（平方根 + 8px 底高），与「一眼看出哪天
+  // AI 真在干活」的改版意图一致；间隔/停了只在 hover 明细中体现
+  const maxWork = Math.max(...buckets.map((b) => b.work), 1);
   const n = buckets.length;
+  // 数值标注：只标干活最久的前 3 个桶（柱多时全标反而成噪音）
+  const topDayKeys = new Set(
+    [...buckets].sort((a, b) => b.work - a.work).slice(0, 3).map((b) => b.key),
+  );
   // 桶多时只标注两端与等距采样，避免 367 根柱挤成一排标签
   const labelEvery = n <= 16 ? 1 : Math.ceil(n / 16);
   const bars = buckets
     .map((b, i) => {
-      const total = totals[i];
-      const height = total > 0 ? 8 + 82 * Math.sqrt(total / maxTotal) : 2;
+      const height = b.work > 0 ? 8 + 82 * Math.sqrt(b.work / maxWork) : 2;
       const seg = (v, cls, name) =>
         v > 0
           ? `<i class="${cls}" style="height:${((v / total) * 100).toFixed(1)}%;" title="${name} ${fmt(v)}"></i>`
           : "";
-      const fill =
-        total > 0
-          ? seg(b.work, "trend-w", "AI 工作") +
-            seg(b.wait, "trend-h", h(dimensionTitle("wait"))) +
-            seg(b.idle || 0, "trend-i", h(dimensionTitle("idle"))) +
-            seg(b.standby, "trend-s", h(dimensionTitle("standby")))
-          : "";
+      // 单指标改版：柱 = 当天 AI 干活合计（一眼看出哪天 AI 真在干活）；
+      // 数值只标全局 TOP3 峰值日，日期标签按柱数自适应密度（最多约 12 个）。
+      const isTop3 = topDayKeys.has(b.key);
+      const valueLabel = isTop3 ? `<span class="trend-val">${(b.work / 3600000).toFixed(1)}h</span>` : "";
       const showLabel = i % labelEvery === 0 || i === n - 1;
       const label = gran === "week" ? weekLabel(b.key) : b.key.slice(5).replace("-", "/");
       return `
       <div class="trend-col">
-        <div class="trend-bar" style="height:${height.toFixed(1)}px;" title="${h(label)}：AI 工作 ${fmt(b.work)} · ${h(dimensionTitle("wait"))} ${fmt(b.wait)} · ${h(dimensionTitle("idle"))} ${fmt(b.idle || 0)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮">${fill}</div>
+        ${valueLabel}
+        <div class="trend-bar" style="height:${height.toFixed(1)}px;" title="${h(label)}：AI 干活 ${fmt(b.work)} · ${h(dimensionTitle("idle"))} ${fmt(b.idle || 0)} · ${h(dimensionTitle("standby"))} ${fmt(b.standby)} · ${b.turns} 轮"><div class="trend-w" style="height:100%;"></div></div>
         <span class="trend-day">${showLabel ? h(label) : ""}</span>
       </div>`;
     })
@@ -647,13 +643,11 @@ function trendCard() {
   <section class="funnel-card">
     ${header}
     <div class="trend-scroll">
-      <div class="trend-bars" role="img" aria-label="按${gran === "week" ? "周" : "日"}三态趋势柱状图，共 ${n} 个${gran === "week" ? "周" : "日"}桶">${bars}</div>
+      <div class="trend-bars" role="img" aria-label="按${gran === "week" ? "周" : "日"}的 AI 干活趋势柱状图，共 ${n} 个${gran === "week" ? "周" : "日"}桶">${bars}</div>
     </div>
     <div class="flow-legend">
-      <span class="flow-legend-item"><i style="background:var(--state-work);"></i>AI 工作</span>
-      <span class="flow-legend-item"><i style="background:var(--state-wait);"></i>${h(dimensionTitle("wait"))}</span>
-      ${buckets.some((x) => (x.idle || 0) > 0) ? `<span class="flow-legend-item"><i style="background:var(--state-idle-strong, #B3261E);"></i>${h(dimensionTitle("idle"))}</span>` : ""}
-      <span class="flow-legend-item"><i style="background:var(--state-standby);"></i>${h(dimensionTitle("standby"))}</span>
+      <span class="flow-legend-item"><i style="background:var(--state-work);"></i>AI 干活（当${gran === "week" ? "周" : "日"}全部轮次合计）</span>
+      <span class="flow-legend-item sub">hover 任意柱：停了 / 间隔 / 轮次明细</span>
     </div>
   </section>`;
 }
@@ -676,24 +670,6 @@ function aggregateToolTotals(sessions) {
   return [...toolMap.values()].sort((a, b) => b.durationMs - a.durationMs);
 }
 
-// 会话级三态测量和（与 summary/gross 完全同口径：period 等比缩放、
-// standby 不缩放、缺失态不计入）。会话占比必须用它做分子——挂钟时长
-// 含未分类延迟，与三态分母不同量纲，极端样本会算出超 100%（#57 评审 P2）。
-function sessionThreeStateMs(s) {
-  let total = 0;
-  for (const t of s.turns) {
-    const period = t.period_ms ?? null;
-    const scale = (v) =>
-      period !== null && t.elapsed_ms
-        ? Math.round((v * period) / t.elapsed_ms)
-        : v;
-    if (t.work_ms !== null) total += scale(t.work_ms);
-    if (t.review_wait_ms !== null) total += scale(t.review_wait_ms);
-    if (t.standby_ms !== null) total += t.standby_ms;
-  }
-  return total;
-}
-
 function adviceCards() {
   const sessions = state.report.sessions;
   const s = state.report.summary;
@@ -709,15 +685,18 @@ function adviceCards() {
     );
   }
 
-  // 2) 最耗时会话：分子分母同为三态测量和，占比恒不超 100%
+  // 2) 干活最久会话：与 TOP 榜同口径（Σ work_ms），搁置跨度不再冒充耗时
   const topSession = [...sessions]
-    .map((x) => ({ s: x, ms: sessionThreeStateMs(x) }))
+    .map((x) => ({
+      s: x,
+      ms: (x.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0),
+    }))
     .filter((x) => x.ms > 0)
     .sort((a, b) => b.ms - a.ms)[0];
-  const gross = (s.work_ms || 0) + (s.review_wait_ms || 0) + (s.standby_ms || 0);
-  if (topSession && gross > 0)
+  const workGross = s.work_ms || 0;
+  if (topSession && workGross > 0)
     cards.push(
-      `<b>${h(topSession.s.title || topSession.s.project || topSession.s.session_id)}</b> 是本时段最耗时会话：<b>${fmt(topSession.ms)}</b>（占记录总时长 ${((topSession.ms / gross) * 100).toFixed(1)}%）`,
+      `<b>${h(topSession.s.title || topSession.s.project || topSession.s.session_id)}</b> 是本时段干活最久的会话：<b>${fmt(topSession.ms)}</b>（占 AI 工作 ${((topSession.ms / workGross) * 100).toFixed(1)}%）`,
     );
 
   // 3) 等待确认集中日
@@ -730,7 +709,14 @@ function adviceCards() {
       );
   }
 
-  // 4) 待命占比（显著时才提示，中性陈述）
+  // 4) 轮间间隔占比（显著时才提示，中性陈述）。
+  // 守恒分母：工作 + 等待确认 + 中途停了 + 轮间间隔（gross 定义随
+  // topSession 块改写丢失过一次，现显式放在使用点之前）
+  const gross =
+    (s.work_ms || 0) +
+    (s.review_wait_ms || 0) +
+    (s.idle_gap_ms || 0) +
+    (s.standby_ms || 0);
   if (gross > 0 && (s.standby_ms || 0) / gross >= 0.3)
     cards.push(
       `${h(dimensionTitle("standby"))}占记录总时长 <b>${((s.standby_ms / gross) * 100).toFixed(1)}%</b>（${fmt(s.standby_ms)}）：主要是你自己的时间（阅读、离开、睡觉），AI 零消耗`,
@@ -772,12 +758,15 @@ function exportWeeklyReport() {
     lines.push("");
   }
   const top = [...sessions]
-    .map((x) => ({ s: x, ms: sessionThreeStateMs(x) }))
+    .map((x) => ({
+      s: x,
+      ms: (x.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0),
+    }))
     .filter((x) => x.ms > 0)
     .sort((a, b) => b.ms - a.ms)
     .slice(0, 3);
   if (top.length) {
-    lines.push("**耗时 TOP 3 会话**（AI 工作 + 等待确认 + 轮间间隔合计口径）");
+    lines.push("**干活 TOP 3 会话**（AI 工作 work_ms 合计口径）");
     top.forEach((x, i) =>
       lines.push(
         `${i + 1}. ${x.s.title || x.s.project || x.s.session_id} · ${x.s.agent} · ${fmt(x.ms)}`,
@@ -855,11 +844,7 @@ function computeTimelineModel() {
     : minTime + 1000;
   const totalTimelineSpan = Math.max(1, maxTime - minTime);
 
-  // 严格按选定物理时间范围过滤可视会话与轮次
-  const rangeStartMs = minTime + (state.zoomStartPct / 100) * totalTimelineSpan;
-  const rangeEndMs = minTime + (state.zoomEndPct / 100) * totalTimelineSpan;
-
-  // 方案 A：以会话为一级主体聚合
+  // 方案 A：以会话为一级主体聚合（按首次活动时间排序——全景柱按此序均匀排列）
   const sessionSummaries = sessions.map((s) => {
     let sWork = 0;
     let sWait = 0;
@@ -892,11 +877,11 @@ function computeTimelineModel() {
     };
   });
 
-  // 按物理时间范围过滤可见会话
-  const visibleSessions = sessionSummaries.filter((item) => {
-    if (state.zoomStartPct <= 0 && state.zoomEndPct >= 100) return true;
-    return item.maxTime >= rangeStartMs && item.minTime <= rangeEndMs;
-  });
+  // 排序后再按会话序号区间过滤（滑块拖动 % → 序号区间），柱序与时间序一致
+  sessionSummaries.sort((a, b) => a.minTime - b.minTime);
+  const startIdx = Math.floor((state.zoomStartPct / 100) * sessionSummaries.length);
+  const endIdx = Math.ceil((state.zoomEndPct / 100) * sessionSummaries.length);
+  const visibleSessions = sessionSummaries.slice(startIdx, endIdx);
 
   return {
     sessions,
@@ -907,107 +892,69 @@ function computeTimelineModel() {
     totalTimelineSpan,
     sessionSummaries,
     visibleSessions,
+    startIdx,
+    endIdx,
   };
 }
 
 function timeline(model) {
-  const { sessions, allTurns, totalTurns, minTime, maxTime, totalTimelineSpan } = model;
-  if (!sessions.length || !allTurns.length) return "";
+  const { sessionSummaries, visibleSessions, totalTurns } = model;
+  if (!sessionSummaries.length) return "";
 
-  // 140px 全景时间热力带：48 个等长聚合时间桶
-  const BUCKETS = 48;
-  const bucketDuration = Math.max(1, totalTimelineSpan / BUCKETS);
-  const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
-    start: minTime + i * bucketDuration,
-    end: minTime + (i + 1) * bucketDuration,
-    workMs: 0,
-    waitMs: 0,
-    standbyMs: 0,
-    turnsCount: 0,
-  }));
+  // 每会话一柱（与效果预览一致）：只画有干活数据的会话，均匀排列，
+  // 高度 ∝ √干活；hover 显示会话名 / 工具 / 干活 / 跨度 / 轮数。
+  const withWork = sessionSummaries.filter((item) => item.work > 0);
+  const maxWork = Math.max(1, ...withWork.map((x) => x.work));
+  const visibleSet = new Set(visibleSessions.map((item) => item.session.id));
 
-  for (const { turn } of allTurns) {
-    const tStart = turn.start_ms || minTime;
-    const tEnd = turn.end_ms || tStart + 1000;
-    const work = turn.work_ms || 0;
-    const wait = turn.review_wait_ms || 0;
-    const standby = turn.standby_ms || 0;
-
-    for (let i = 0; i < BUCKETS; i++) {
-      const b = buckets[i];
-      const overlapStart = Math.max(b.start, tStart);
-      const overlapEnd = Math.min(b.end, tEnd);
-      if (overlapEnd > overlapStart) {
-        const overlapRatio = (overlapEnd - overlapStart) / Math.max(1, tEnd - tStart);
-        b.workMs += work * overlapRatio;
-        b.waitMs += wait * overlapRatio;
-        b.standbyMs += standby * overlapRatio;
-        b.turnsCount += 1;
-      }
-    }
-  }
-
-  const maxBucketActivity = Math.max(1, ...buckets.map((b) => b.workMs + b.waitMs));
-
-  const stripBlocks = buckets
-    .map((b, idx) => {
-      const totalActivity = b.workMs + b.waitMs;
-      // 使用次方根非线性缩放 (power scale)，避免单个超长会话峰值把其余中短活跃期压成贴地平线
-      const activityRatio = totalActivity > 0 ? Math.pow(totalActivity / maxBucketActivity, 0.42) : 0;
-      const heightPct = totalActivity > 0 ? Math.max(18, Math.min(100, Math.round(activityRatio * 100))) : 4;
-      const workRatio = totalActivity > 0 ? Math.round((b.workMs / totalActivity) * 100) : 0;
-      const waitRatio = totalActivity > 0 ? 100 - workRatio : 0;
-      const isMuted = totalActivity === 0;
-
-      const bStartPct = (idx / BUCKETS) * 100;
-      const bEndPct = ((idx + 1) / BUCKETS) * 100;
-      const isInViewport = bEndPct >= state.zoomStartPct && bStartPct <= state.zoomEndPct;
-
+  const bars = withWork
+    .map((item) => {
+      const hPct = Math.max(4, Math.round(Math.pow(item.work / maxWork, 0.42) * 100));
+      const t = item.session;
+      const f = item.minTime ? stamp(item.minTime).slice(0, 11) : "";
+      const l = item.maxTime ? stamp(item.maxTime).slice(0, 11) : "";
+      const span = f && l && f !== l ? `${f} → ${l}` : f;
+      const inView = visibleSet.has(t.id);
       return `
-        <div class="brush-bucket-col" title="${stamp(b.start)}: AI 工作 ${fmt(b.workMs)}, 等待确认 ${fmt(b.waitMs)}, 包含 ${b.turnsCount} 轮交互">
-          <div class="brush-bucket-bar ${isInViewport ? "in-viewport" : "out-viewport"}" style="height:${heightPct}%; background:${isMuted ? "#DFD8CE" : "#FAF9F5"};">
-            ${!isMuted ? `
-              <div style="width:100%; height:${workRatio}%; background:var(--state-work);"></div>
-              <div style="width:100%; height:${waitRatio}%; background:var(--state-wait);"></div>
-            ` : ""}
-          </div>
+        <div class="brush-bucket-col" title="${h(t.title || t.project)} · ${h(t.agent)} · 干活 ${fmt(item.work)} · 跨度 ${h(span)} · ${item.turnsCount} 轮">
+          <div class="brush-bucket-bar ${inView ? "in-viewport" : "out-viewport"}" style="height:${hPct}%; background:var(--state-work);"></div>
         </div>
       `;
     })
     .join("");
 
-  // 方案 A：以会话为一级主体聚合 —— 模型已在 computeTimelineModel() 计算
-  const { visibleSessions } = model;
+  const first = withWork[0];
+  const last = withWork.at(-1);
+  const fLabel = first && first.minTime ? stamp(first.minTime) : "";
+  const lLabel = last && last.maxTime ? stamp(last.maxTime) : "";
 
   return `
   <section class="timeline-card">
     <div class="section-header">
       <div>
-        <span class="section-title">全景时间轴</span>
-        <span class="section-subtitle">140px 高度 · 非线性波峰 · 拖动滑块聚焦下方榜单与操作分布</span>
+        <span class="section-title">每个会话干了多久</span>
+        <span class="section-subtitle">柱 = 一个会话的干活合计 · 高度 ∝ √干活 · hover 看会话名与跨度</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         ${(state.zoomStartPct > 0 || state.zoomEndPct < 100) ? `
-          <button class="filter-chip js-reset-zoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置全时间段</button>
+          <button class="filter-chip js-reset-zoom" style="padding: 2px 8px; font-size: var(--text-xs);">重置查看全部</button>
         ` : ""}
-        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话（共 ${sessions.length} 个会话，${totalTurns} 轮交互）</span>
+        <span class="brush-scope-pill" id="brushScopeText">展示 ${visibleSessions.length} 个会话（共 ${sessionSummaries.length} 个，${totalTurns} 轮交互）</span>
       </div>
     </div>
 
-    <!-- 140px 全景热力画卷 -->
     <div class="brush-section">
       <div class="brush-strip-track" id="brushTrack">
-        ${stripBlocks}
-        <!-- 悬浮双向可拖拽温和半透明选区 -->
+        ${bars}
         <div class="brush-viewport" id="brushViewport" style="left: ${state.zoomStartPct}%; width: ${Math.max(6, state.zoomEndPct - state.zoomStartPct)}%;">
-          <div class="brush-handle-bar" data-handle="left" title="向左拖拽调整开始时间"></div>
-          <div class="brush-handle-bar" data-handle="right" title="向右拖拽调整结束时间"></div>
+          <div class="brush-handle-bar" data-handle="left" title="向左拖拽缩小会话范围"></div>
+          <div class="brush-handle-bar" data-handle="right" title="向右拖拽扩大会话范围"></div>
         </div>
       </div>
       <div class="brush-ticks">
-        <span>${h(stamp(minTime))}</span>
-        <span>${h(stamp(Math.round((minTime + maxTime) / 2)))}</span>
-        <span>${h(stamp(maxTime))}</span>
+        <span>${h(fLabel)}</span>
+        <span>${h(fLabel && lLabel && fLabel !== lLabel ? fLabel + " ~ " + lLabel : "")}</span>
+        <span>${h(lLabel)}</span>
       </div>
     </div>
   </section>`;
@@ -1030,26 +977,30 @@ function zoomedViewport() {
 }
 
 function topSessionsCard(model) {
-  // 口径对齐：榜值与详情页「总时长」KPI 同源 ——
-  // 均为会话首末轮次的首尾跨度（sessionWallSpan），
-  // 保证任一会话的首页 TOP 3 榜值恒等于其详情页总时长
+  // 主数字 = AI 干活（守恒口径）：跨天搁置跨度不再污染 TOP 榜；
+  // 墙钟跨度降级为副行（omp 那种 1250h 会显示「干活 74m · 跨度 52 天」）
   const top = model.visibleSessions
     .map((item) => item.session)
-    .map((s) => ({ s, duration: sessionWallSpan(s).wallMs || 0 }))
-    .filter((x) => x.duration > 0)
-    .sort((a, b) => b.duration - a.duration)
+    .map((s) => ({
+      s,
+      work: (s.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0),
+      span: sessionWallSpan(s).wallMs || 0,
+    }))
+    .filter((x) => x.work > 0)
+    .sort((a, b) => b.work - a.work)
     .slice(0, 3);
 
   const rows = top
-    .map(({ s, duration }, idx) => {
+    .map(({ s, work, span }, idx) => {
+      const spanDays = span >= 48 * 3600000 ? ` · 搁置 ${Math.round(span / 86400000)} 天` : "";
       return `
         <div class="rank-mini-item" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
           <span class="rank-num">${String(idx + 1).padStart(2, "0")}</span>
           <div class="rank-main">
             <span class="rank-title">${h(s.title || s.project)}</span>
-            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text">${h(s.project)} · ${h(s.id.slice(0, 16))}</span></span>
+            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text">${h(s.project)} · 干活 ${fmt(work)}${spanDays ? " · 跨度 " + fmt(span) + spanDays : ""}</span></span>
           </div>
-          <span class="rank-duration">${fmt(duration)}</span>
+          <span class="rank-duration">${fmt(work)}</span>
         </div>
       `;
     })
@@ -1057,7 +1008,7 @@ function topSessionsCard(model) {
 
   return `
     <div class="s1-box">
-      <div class="s1-title">会话耗时 TOP 3 榜（当前视口）</div>
+      <div class="s1-title">会话干活 TOP 3 榜（当前视口）</div>
       ${rows || `
         <div class="s1-empty">
           当前视口内没有已测量耗时的会话${zoomedViewport() ? "，可点击" : ""}
@@ -1370,7 +1321,7 @@ function sessionStream() {
           <span class="stream-turns-pill">${s.turns.length} 轮交互</span>
         </div>
         <div class="stream-right">
-          <span class="stream-duration">${fmt(sessionClippedPeriodMs(s) || null)}</span>
+          <span class="stream-duration" title="口径：AI 干活 = 全部轮次 work_ms 合计">${fmt((s.turns || []).reduce((acc, t) => acc + (t.work_ms || 0), 0) || null)}</span>
           <span class="stream-enter-chip">进入会话详情页 →</span>
         </div>
         ${streamMiniBarHtml(s, maxDuration)}
