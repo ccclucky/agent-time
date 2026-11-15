@@ -114,8 +114,10 @@ function restoreView() {
     state.start = start;
     state.end = end;
     // 趋势粒度是独立于日期区段的用户选择，单独校验、单独恢复
-    if (v.trendGran === "day" || v.trendGran === "week")
+    if (v.trendGran === "day" || v.trendGran === "week") {
       state.trendGran = v.trendGran;
+      state.trendGranManual = true;
+    }
   } catch {}
 }
 
@@ -580,18 +582,23 @@ function trendBuckets(sessions, gran) {
 }
 
 function trendCard() {
-  const gran = state.trendGran;
   const sessions = state.report.sessions;
+  // 自动粒度：日桶超过 60 根时整排小柱等高、失去信息量，自动切按周；
+  // 用户手动点过「按日/按周」（或恢复过持久化选择）后尊重手动选择
+  const autoWeek =
+    !state.trendGranManual &&
+    trendBuckets(sessions, "day").length > 60;
+  const gran = autoWeek ? "week" : state.trendGran;
   const buckets = trendBuckets(sessions, gran);
   const exportBtn = `<button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
   const header = `
       <div class="section-header">
         <div>
           <span class="section-title">跨日趋势</span>
-          <span class="section-subtitle">三态按轮次开始${gran === "week" ? "周" : "日"}归属 · 跨${gran === "week" ? "周" : "日"}轮整体计入起始${gran === "week" ? "周" : "日"} · 柱高按平方根缩放</span>
+          <span class="section-subtitle">按轮次开始${gran === "week" ? "周" : "日"}归属 · 跨${gran === "week" ? "周" : "日"}轮整体计入起始${gran === "week" ? "周" : "日"} · 柱 = 当${gran === "week" ? "周" : "日"} AI 干活合计 · 柱高按平方根缩放${autoWeek ? " · 已自动按周聚合" : ""}</span>
         </div>
         <div class="trend-toolbar">
-          <button class="textbtn${gran === "day" ? " active" : ""}" data-trend-gran="day" aria-pressed="${gran === "day"}">按日</button>
+          <button class="textbtn${state.trendGran === "day" ? " active" : ""}" data-trend-gran="day" aria-pressed="${state.trendGran === "day"}">按日</button>
           <button class="textbtn${gran === "week" ? " active" : ""}" data-trend-gran="week" aria-pressed="${gran === "week"}">按周</button>
           ${exportBtn}
         </div>
@@ -3366,6 +3373,7 @@ document.addEventListener("click", async (e) => {
     // 趋势粒度切换：纯视图状态，数据不变，重渲染即可；随视图持久化
     if (["day", "week"].includes(b.dataset.trendGran)) {
       state.trendGran = b.dataset.trendGran;
+      state.trendGranManual = true; // 用户手动选粒度后不再自动切换
       saveView();
       render();
     }
