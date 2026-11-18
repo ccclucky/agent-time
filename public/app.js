@@ -403,9 +403,30 @@ function render() {
 
   // 挂载时间轴拖拽与视口缩放手柄监听
   bindBrushEvents();
+  if (window.applyI18n) window.applyI18n();
 }
 
 function noData() {
+  const detected = (state.directories || []).filter(
+    (d) => d.status === "directory" && !d.enabled,
+  );
+  if (state.sources?.registered_files === 0 && detected.length > 0) {
+    const chips = detected
+      .map(
+        (d) =>
+          `<span class="agent-chip" style="cursor:default;">${agentMark(d.name)}<span>${h(d.name)}</span></span>`,
+      )
+      .join("");
+    return `<section class="panel empty" style="text-align:left; max-width:680px; margin:24px auto;">
+      <h2>发现本机已有 ${detected.length} 个编码工具的会话记录</h2>
+      <p>AgentTime 只读解析本机事件流，不读取凭据或上传数据。确认接入下方已检测到的工具后即可立即生成你的时间账本：</p>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 18px;">${chips}</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn primary" data-action="onboard-enable-all">一键接入并立即同步 (${detected.length})</button>
+        <button class="btn" data-page="sources">手动配置目录</button>
+      </div>
+    </section>`;
+  }
   return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness、OpenCode 或 Oh-My-Pi 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
 
@@ -590,7 +611,7 @@ function trendCard() {
     trendBuckets(sessions, "day").length > 60;
   const gran = autoWeek ? "week" : state.trendGran;
   const buckets = trendBuckets(sessions, gran);
-  const exportBtn = `<button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
+  const exportBtn = `<button class="textbtn" data-action="share-card">生成分享图</button><button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
   const header = `
       <div class="section-header">
         <div>
@@ -811,6 +832,203 @@ function exportWeeklyReport() {
   a.download = `agenttime-report-${state.start}-to-${state.end}.md`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let lastShareCardUrl = "";
+
+function renderShareCardDataUrl() {
+  const r = state.report;
+  const s = r.summary;
+  const sessions = r.sessions || [];
+  const L = window.getShareCardLabels?.() || {
+    brandSub: "本地 AI Coding 时间账本 · 零上传",
+    title: "本时段 Agent 时间账单",
+    work: "AI 工作",
+    wait: "等待确认",
+    idle: "中途停了",
+    standby: "轮间间隔",
+    autonomy: "自动完成度",
+    sessions: "统计会话",
+    turns: "已测轮次",
+    topAgents: "工具分布",
+    unknown: "暂无数据",
+    footer: "npx @ccclucky/agent-time",
+  };
+  const canvas = document.createElement("canvas");
+  canvas.width = 1200;
+  canvas.height = 675;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+
+  const work = s.work_ms || 0;
+  const wait = s.review_wait_ms || 0;
+  const idle = s.idle_gap_ms || 0;
+  const standby = s.standby_ms || 0;
+  const denom = work + wait + idle + standby || 1;
+  const autoDenom = work + wait;
+  const autonomyPct =
+    s.work_ms !== null && s.review_wait_ms !== null && autoDenom > 0
+      ? `${((work / autoDenom) * 100).toFixed(1)}%`
+      : L.unknown;
+
+  // Paper & Ink card canvas
+  ctx.fillStyle = "#FAF9F5";
+  ctx.fillRect(0, 0, 1200, 675);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.strokeStyle = "#E5E0D8";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(36, 36, 1128, 603, 18);
+  ctx.fill();
+  ctx.stroke();
+
+  // Accent left mark & header
+  ctx.fillStyle = "#CC785C";
+  ctx.fillRect(72, 74, 8, 42);
+  ctx.fillStyle = "#1F1E1D";
+  ctx.font = '800 28px Inter, "PingFang SC", sans-serif';
+  ctx.fillText("AgentTime", 94, 100);
+  ctx.fillStyle = "#827C75";
+  ctx.font = '500 15px Inter, "PingFang SC", sans-serif';
+  ctx.fillText(L.brandSub, 94, 122);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#494541";
+  ctx.font = '600 16px "JetBrains Mono", monospace';
+  ctx.fillText(`${r.range.start} — ${r.range.end}`, 1124, 96);
+  ctx.fillStyle = "#827C75";
+  ctx.font = '500 13px "JetBrains Mono", monospace';
+  ctx.fillText(r.range.timezone, 1124, 118);
+  ctx.textAlign = "left";
+
+  // Divider
+  ctx.strokeStyle = "#F0EAE1";
+  ctx.beginPath();
+  ctx.moveTo(72, 148);
+  ctx.lineTo(1128, 148);
+  ctx.stroke();
+
+  ctx.fillStyle = "#827C75";
+  ctx.font = '600 14px Inter, "PingFang SC", sans-serif';
+  ctx.fillText(L.title, 72, 182);
+
+  // 4 Hero KPIs
+  const kpis = [
+    [L.work, s.work_ms !== null ? fmt(s.work_ms) : L.unknown, "#CC785C"],
+    [L.wait, s.review_wait_ms !== null ? fmt(s.review_wait_ms) : L.unknown, "#C68A4C"],
+    [L.autonomy, autonomyPct, "#1F1E1D"],
+    [`${L.sessions} / ${L.turns}`, `${s.sessions} / ${s.measured_turns}`, "#5E7A8B"],
+  ];
+  kpis.forEach(([label, val, color], idx) => {
+    const x = 72 + idx * 268;
+    ctx.fillStyle = "#FAF9F5";
+    ctx.strokeStyle = "#E5E0D8";
+    ctx.beginPath();
+    ctx.roundRect(x, 202, 248, 116, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#827C75";
+    ctx.font = '600 13px Inter, "PingFang SC", sans-serif';
+    ctx.fillText(label, x + 18, 232);
+    ctx.fillStyle = color;
+    ctx.font = '800 30px "JetBrains Mono", monospace';
+    ctx.fillText(val, x + 18, 282);
+  });
+
+  // Conservation partitioned bar
+  const segs = [
+    [L.work, work, "#CC785C"],
+    [L.wait, wait, "#C68A4C"],
+    [L.idle, idle, "#5E7A8B"],
+    [L.standby, standby, "#7A7268"],
+  ];
+  let bx = 72;
+  const barW = 1056;
+  ctx.fillStyle = "#F5F2EB";
+  ctx.beginPath();
+  ctx.roundRect(72, 352, barW, 38, 8);
+  ctx.fill();
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(72, 352, barW, 38, 8);
+  ctx.clip();
+  segs.forEach(([, ms, color]) => {
+    if (ms <= 0) return;
+    const w = (ms / denom) * barW;
+    ctx.fillStyle = color;
+    ctx.fillRect(bx, 352, w, 38);
+    bx += w;
+  });
+  ctx.restore();
+
+  // Legend row
+  let lx = 72;
+  segs.forEach(([label, ms, color]) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, 412, 12, 12);
+    ctx.fillStyle = "#494541";
+    ctx.font = '600 14px Inter, "PingFang SC", sans-serif';
+    const pct = ((ms / denom) * 100).toFixed(0);
+    const txt = `${label} ${fmt(ms)} (${pct}%)`;
+    ctx.fillText(txt, lx + 20, 423);
+    lx += Math.max(220, ctx.measureText(txt).width + 54);
+  });
+
+  // Top agents (aggregate only — zero project names or prompts)
+  const byAgent = new Map();
+  for (const sess of sessions) {
+    const cur = byAgent.get(sess.agent) || { name: sess.agent, ms: 0, count: 0 };
+    cur.ms += sess.period_ms || 0;
+    cur.count += 1;
+    byAgent.set(sess.agent, cur);
+  }
+  const top = [...byAgent.values()].sort((a, b) => b.ms - a.ms).slice(0, 4);
+  ctx.fillStyle = "#827C75";
+  ctx.font = '600 13px Inter, "PingFang SC", sans-serif';
+  ctx.fillText(L.topAgents, 72, 476);
+  top.forEach((ag, i) => {
+    const x = 72 + i * 268;
+    ctx.fillStyle = "#F5F2EB";
+    ctx.beginPath();
+    ctx.roundRect(x, 492, 248, 66, 10);
+    ctx.fill();
+    ctx.fillStyle = "#1F1E1D";
+    ctx.font = '700 15px Inter, sans-serif';
+    ctx.fillText(ag.name, x + 16, 520);
+    ctx.fillStyle = "#827C75";
+    ctx.font = '500 13px "JetBrains Mono", monospace';
+    ctx.fillText(`${fmt(ag.ms)} · ${ag.count}`, x + 16, 543);
+  });
+
+  // Footer
+  ctx.fillStyle = "#827C75";
+  ctx.font = '600 14px "JetBrains Mono", monospace';
+  ctx.fillText(L.footer, 72, 608);
+  ctx.textAlign = "right";
+  ctx.fillText("github.com/ccclucky/agent-time", 1124, 608);
+  ctx.textAlign = "left";
+
+  return canvas.toDataURL("image/png");
+}
+
+function openShareCardModal() {
+  if (!state.report?.summary?.sessions) {
+    toast("当前时间范围暂无可生成分享图的记录。");
+    return;
+  }
+  lastShareCardUrl = renderShareCardDataUrl();
+  if (!lastShareCardUrl) return;
+  open(
+    `${head("分享时间账单卡片", "已自动隐藏项目名、提问原文与本地路径，仅包含汇总统计。")}
+     <div style="margin:14px 0; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg-card-muted);">
+       <img src="${lastShareCardUrl}" alt="AgentTime Summary Card" style="display:block; width:100%; height:auto;" />
+     </div>
+     <div style="display:flex; gap:10px; justify-content:flex-end;">
+       <button class="btn" data-action="copy-share-card">复制图片</button>
+       <button class="btn primary" data-action="download-share-card">下载 PNG</button>
+     </div>`,
+    true,
+  );
 }
 
 // ========================================================
@@ -2533,6 +2751,7 @@ function openDrawer(turn, session) {
   loadDrawerTranscript(session, turn);
 
   d.classList.remove("collapsed");
+  if (window.applyI18n) window.applyI18n();
 }
 
 // 五维下钻抽屉：点击会话详情的分布行 / 色段，弹出该维度全会话聚合视图
@@ -2606,6 +2825,7 @@ function openDimensionDrawer(key, session) {
     </div>
   `;
   d.classList.remove("collapsed");
+  if (window.applyI18n) window.applyI18n();
 
   // tool 维度：按需读取本机源文件，给每次调用回填输入/输出
   if (key === "tool") {
@@ -2762,6 +2982,7 @@ function renderDrawerTranscript(entry, session, turn) {
     // 工具调用明细行：transcript 中的 detail（命令 / 补丁内容）按 call_id 回填
     applyDrawerToolDetails(entry, turn);
   }
+  if (window.applyI18n) window.applyI18n();
 }
 
 // 用按需读取的 transcript tool_calls[].detail 回填抽屉工具栈的第二行：
@@ -3091,6 +3312,7 @@ function open(html, wide = false) {
     `<div class="overlay" data-overlay><section class="${wide ? "modal-wide" : "modal"}" role="dialog" aria-modal="true" aria-labelledby="dialogtitle" tabindex="-1">${html}</section></div>`;
   document.body.style.overflow = "hidden";
   $("#layer [role=dialog]").focus();
+  if (window.applyI18n) window.applyI18n();
 }
 
 function close() {
@@ -3428,6 +3650,59 @@ document.addEventListener("click", async (e) => {
       break;
     case "export-report":
       exportWeeklyReport();
+      break;
+    case "share-card":
+      openShareCardModal();
+      break;
+    case "download-share-card": {
+      if (!lastShareCardUrl) break;
+      const a = document.createElement("a");
+      a.href = lastShareCardUrl;
+      a.download = `agenttime-card-${state.start}-to-${state.end}.png`;
+      a.click();
+      break;
+    }
+    case "copy-share-card": {
+      if (!lastShareCardUrl || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        toast("当前环境不支持直接复制图片，请点击下载 PNG。");
+        break;
+      }
+      try {
+        const res = await fetch(lastShareCardUrl);
+        const blob = await res.blob();
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        toast("已复制分享图片到剪贴板。");
+      } catch {
+        toast("复制失败，请点击下载 PNG。");
+      }
+      break;
+    }
+    case "onboard-enable-all": {
+      if (state.busy) break;
+      const detected = (state.directories || []).filter(
+        (d) => d.status === "directory" && !d.enabled,
+      );
+      if (!detected.length) break;
+      try {
+        for (const d of detected) {
+          await persistDirectory(d.agent, {
+            path: d.path,
+            enabled: true,
+            reset: false,
+          });
+        }
+        await refresh();
+      } catch (err) {
+        error(err.message);
+      }
+      break;
+    }
+    case "toggle-lang":
+      if (window.toggleUiLang) {
+        window.toggleUiLang();
+        render();
+        if ($("#layer [role=dialog]")) close();
+      }
       break;
     case "dates":
       open(

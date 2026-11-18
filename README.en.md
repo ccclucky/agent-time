@@ -62,14 +62,21 @@ Accompanying drill-downs: six turn KPIs (total time / AI work / auto-completion 
 npx @ccclucky/agent-time
 ```
 
-It opens `http://127.0.0.1:8765` for you (bound to localhost only; `--no-open` disables that), enable your agents' data directories on the sources page, and hit "Sync records". While the server runs, syncing is automatic: source changes are re-imported and the page refreshes on its own (manual sync stays available). Or install globally:
+Want to preview the UI first without touching your local files?
+
+```sh
+npx @ccclucky/agent-time --demo
+```
+
+It opens `http://127.0.0.1:8765` (localhost only; `--no-open` disables auto-open), supports English / Chinese UI auto-detection, one-click onboarding for detected local agent directories, and local PNG summary card export. While running, source changes sync automatically. Or install globally / query from your terminal:
 
 ```sh
 npm install -g @ccclucky/agent-time
-agent-time        # dash-less alias: agenttime
+agent-time                  # dash-less alias: agenttime
+agent-time summary --days 7 # terminal digest (also supports --json)
 ```
 
-Requires **Node.js ≥ 22.15** (built-in SQLite and zstd; no native builds). The CLI also supports `--port`, `--db`, `--no-open`, and standalone `import --agent <adapter> <path>` — see `agent-time --help`.
+Requires **Node.js ≥ 22.15** (built-in SQLite and zstd; no native builds). The CLI also supports `--port`, `--db`, `--demo`, `--no-open`, and standalone `import --agent <adapter> <path>` — see `agent-time --help`. Project showcase: [ccclucky.github.io/agent-time](https://ccclucky.github.io/agent-time/).
 
 ## Supported harnesses
 

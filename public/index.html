@@ -7,6 +7,7 @@
     <title>AgentTime · 本地时间账本</title>
     <link rel="icon" href="/favicon.png" type="image/png" />
     <link rel="stylesheet" href="/style.css?v=20261115-7" />
+    <script src="/i18n-en.js?v=20261115-7" defer></script>
     <script src="/app.js?v=20261115-7" defer></script>
   </head>
   <body>
@@ -45,6 +46,7 @@
           <div class="toolbar">
             <div class="seg" id="ranges" aria-label="日期范围"></div>
             <button class="btn" data-action="dates">自选日期</button>
+            <button class="btn" id="langToggle" data-action="toggle-lang" title="Switch language / 切换语言">EN</button>
             <button class="btn primary" data-action="refresh" id="refresh">同步记录</button>
           </div>
         </header>

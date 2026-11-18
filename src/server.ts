@@ -17,6 +17,7 @@ const WEB = new URL("../public/", import.meta.url);
 const STATIC: Record<string, string> = {
   "/": "index.html",
   "/index.html": "index.html",
+  "/i18n-en.js": "i18n-en.js",
   "/app.js": "app.js",
   "/style.css": "style.css",
   "/logo.png": "logo.png",
