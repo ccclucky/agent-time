@@ -21,7 +21,7 @@
 
 时间花了，要花得明白。这一分钟里，AgentTime 怎么给 AI Coding Agent 记一本时间账：
 
-https://github.com/user-attachments/assets/08308453-caa0-4b1c-bb41-96cbcdec0dd6
+https://github.com/user-attachments/assets/d98be32d-01ea-4bd3-a464-10cad7104a8c
 
 ---
 

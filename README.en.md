@@ -21,7 +21,7 @@
 
 Time spent should be spent with clarity. In one minute, here is how AgentTime keeps a time ledger for AI coding agents:
 
-https://github.com/user-attachments/assets/08308453-caa0-4b1c-bb41-96cbcdec0dd6
+https://github.com/user-attachments/assets/d98be32d-01ea-4bd3-a464-10cad7104a8c
 
 ---
 
