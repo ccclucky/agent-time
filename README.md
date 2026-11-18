@@ -119,7 +119,7 @@ agent-time        # 或无连字符别名 agenttime
         │  事件流解析（每 harness 一个适配器）
         ▼
 归一化 Event 流（start/complete/abort · model · tool_use/tool_result …）
-        │  三态切分（calculateEventTiming / calculatePiTiming）
+        │  守恒切分（calculateEventTiming / calculatePiTiming）
         ▼
 本地 SQLite 统计库（元数据） ──▶ 本地 Web（127.0.0.1:8765，零依赖原生前端）
 ```

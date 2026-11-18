@@ -25,7 +25,7 @@ https://github.com/user-attachments/assets/08308453-caa0-4b1c-bb41-96cbcdec0dd6
 
 ---
 
-AgentTime is a **local-first** time ledger for AI coding agents. It imports sessions from Codex, Claude Code, Pi, Oh-My-Pi, DeepSeek Harness, Antigravity, and OpenCode, splits the recorded time into **pure work, review wait, and standby**, and drills every total down to a single session, turn, and tool call.
+AgentTime is a **local-first** time ledger for AI coding agents. It imports sessions from Codex, Claude Code, Pi, Oh-My-Pi, DeepSeek Harness, Antigravity, and OpenCode, splits the recorded time into **pure work, review wait, idle gap, and standby**, and drills every total down to a single session, turn, and tool call.
 
 How much did your agents actually work today — and how much went into waiting for your approval? Open the page and see.
 
@@ -75,15 +75,15 @@ Requires **Node.js ≥ 22.15** (built-in SQLite and zstd; no native builds). The
 
 All imports are read-only; formats keep adapting as upstreams evolve (design decisions in [docs/adr](docs/adr/)):
 
-| Harness | Three-state timing | Token drill-down | Turn Inspector drawer | Notes |
+| Harness | Conservation timing | Token drill-down | Turn Inspector drawer | Notes |
 | --- | --- | --- | --- | --- |
-| Codex | ✔ completion-anchor calibrated | ✔ cumulative snapshot diff | ✔ | Official reasoning is encrypted (ZDR); honestly labeled |
-| Claude Code | ✔ message-record spans | — | ✔ | Main transcript stream |
-| Pi | ✔ first-hand machine-time accumulation | — | ✔ | Branch topology; only the active path |
-| DeepSeek Harness | ✔ | ✔ per-request | ✔ | Multi-frame zstd event stream |
-| Antigravity | ✔ `ask_question` counted as review wait | — | ✔ | Background tasks counted on completion receipts |
-| OpenCode | ✔ | ✔ per-request | ✔ | SQLite session store, one DB many sessions |
-| Oh-My-Pi | ✔ history.db anchor fallback | ✔ per-request | ✔ | Legacy files get second-precision anchors, disclosed |
+| Codex | ✔ completion-anchor calibrated · long stall ≥30 min | ✔ cumulative snapshot diff | ✔ | Official reasoning is encrypted (ZDR); honestly labeled |
+| Claude Code | ✔ message-record spans · long stall ≥30 min | — | ✔ | Main transcript stream |
+| Pi | ✔ first-hand machine-time accumulation · stall ≥2 min | — | ✔ | Branch topology; only the active path |
+| DeepSeek Harness | ✔ · stall ≥2 min | ✔ per-request | ✔ | Multi-frame zstd event stream |
+| Antigravity | ✔ 5-state conservation · stall ≥2 min · `ask_question` counted as review wait | ✔ per-request I/O | ✔ | Background tasks counted on completion receipts; per-call tool I/O and start/end |
+| OpenCode | ✔ · stall ≥2 min | ✔ per-request | ✔ | SQLite session store, one DB many sessions |
+| Oh-My-Pi | ✔ history.db anchor fallback · stall ≥2 min | ✔ per-request | ✔ | Legacy files get second-precision anchors, disclosed |
 
 ## Privacy: local-first, zero telemetry
 
@@ -117,7 +117,7 @@ Local session sources (per-harness data dirs / SQLite stores, read-only)
         │  event stream parsing (one adapter per harness)
         ▼
 Normalized event stream (start/complete/abort · model · tool_use/tool_result …)
-        │  three-state split (calculateEventTiming / calculatePiTiming)
+        │  conservation split (calculateEventTiming / calculatePiTiming)
         ▼
 Local SQLite stats store (metadata) ──▶ local web UI (127.0.0.1:8765, zero-dependency frontend)
 ```
