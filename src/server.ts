@@ -17,16 +17,25 @@ const WEB = new URL("../public/", import.meta.url);
 const STATIC: Record<string, string> = {
   "/": "index.html",
   "/index.html": "index.html",
+  "/i18n-en.js": "i18n-en.js",
   "/app.js": "app.js",
   "/style.css": "style.css",
   "/logo.png": "logo.png",
   "/favicon.png": "favicon.png",
+  "/icons/claude.svg": "icons/claude.svg",
+  "/icons/codex.svg": "icons/codex.svg",
+  "/icons/antigravity.svg": "icons/antigravity.svg",
+  "/icons/opencode.svg": "icons/opencode.svg",
+  "/icons/pi.svg": "icons/pi.svg",
+  "/icons/omp.svg": "icons/omp.svg",
+  "/icons/deepseek.svg": "icons/deepseek.svg",
 };
 const MIME: Record<string, string> = {
   html: "text/html; charset=utf-8",
   js: "text/javascript; charset=utf-8",
   css: "text/css; charset=utf-8",
   png: "image/png",
+  svg: "image/svg+xml; charset=utf-8",
 };
 export function makeServer(
   store: Store,

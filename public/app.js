@@ -71,6 +71,7 @@ const state = {
   drafts: {},
   saving: new Set(),
   busy: false,
+  syncPhase: "",
   // 视口与下钻状态
   activeSessionId: null,
   selectedTurnId: null,
@@ -173,99 +174,69 @@ const statuses = {
 // Codex 内建工具的友好显示名与 toolLabel() 定义已并入下方 PURE HELPERS 纯函数块，
 // 与总账回填 / 维度聚合助手共用同一块零浏览器依赖代码（node:vm 整块提取做行为级单测）
 
-// 首页/抽屉统一使用的接入工具徽标（内联 SVG，见 agentMark 定义处）
-// 徽标内容为各接入工具的真实标志（反馈轮 3）：
-// - Codex：OpenAI 官方 mark（simple-icons 单 path，viewBox 0 0 24 24），
-//   沿用单色 currentColor 底 + paper 反白，不再使用拼错的 "Cx" 字母
-// - Claude Code：日光纹 sunburst（用户已接受，保持不动）
-// - Pi：Pi-agent 新版像素标（4×4 像素网格，crispEdges，三色像素），
-//   不再使用旧版 π 字母（pi.dev favicon 是旧 logo，勿引用）
-// - Antigravity：Google Antigravity 官方 mark 单色剪影（lobe-icons 收录的
-//   官方 path，viewBox 0 0 24 24；simple-icons 尚未收录，勿自绘臆造。
-//   官方 svg 带 fill-rule="evenodd"，漏写会把镂空填成实心色块）
-// - Oh-My-Pi：官方主视觉 π 标（can1357/oh-my-pi assets/hero.png 几何实测：
-//   横梁 178×37、左腿 x25 宽 37 高 125、右腿 x121 宽 37 全高 169，右腿更长；
-//   粉→紫→蓝垂直渐变采样自 hero 原像素。仓库 assets/icon.svg 的细腿 π+插件头
-//   是另一版图形，12px 下不可辨，品牌认知以 hero 为准）
-const OMP_PI_GRADIENT =
-  '<defs><linearGradient id="omp-g" x1="0" y1="0" x2="0" y2="1">' +
-  '<stop offset="0" stop-color="#C758D9"/><stop offset="0.5" stop-color="#B364E5"/>' +
-  '<stop offset="1" stop-color="#859CE8"/></linearGradient></defs>';
-const OMP_PI_SHAPES =
-  '<rect x="25" y="0" width="37" height="125" rx="10" fill="url(#omp-g)"/>' +
-  '<rect x="121" y="0" width="37" height="169" rx="10" fill="url(#omp-g)"/>' +
-  '<rect x="0" y="0" width="178" height="37" rx="8" fill="url(#omp-g)"/>';
-const OPENAI_MARK_PATH =
-  "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
-
-// Pi 新版像素标：4×4 网格（viewBox 0 0 4 4），每个非空像素一个 1×1 rect
-const PI_PIXEL_RECTS = [
-  ["#E48A7A", 0, 0],
-  ["#E48A7A", 1, 0],
-  ["#E48A7A", 2, 0],
-  ["#E48A7A", 2, 1],
-  ["#4F8EB3", 0, 1],
-  ["#4F8EB3", 0, 2],
-  ["#4F8EB3", 1, 2],
-  ["#4F8EB3", 0, 3],
-  ["#EAB65D", 3, 2],
-  ["#EAB65D", 3, 3],
-]
-  .map(([fill, x, y]) => `<rect x="${x}" y="${y}" width="1" height="1" fill="${fill}"/>`)
-  .join("");
-
-// Antigravity 官方 mark 单色剪影（lobe-icons antigravity.svg，官方 path）
-const ANTIGRAVITY_MARK_PATH =
-  "M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z";
-// OpenCode 官方方环标（simple-icons 单 path，viewBox 0 0 24 24，evenodd 镂空，勿自绘）
-const OPENCODE_MARK_PATH = "M22 24H2V0h20zM17 4.8H7v14.4h10z";
-// DeepSeek 官方鲸鱼标（simple-icons 单 path，viewBox 0 0 24 24，勿自绘）
-const DEEPSEEK_MARK_PATH =
-  "M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45";
+// 首页/抽屉统一使用的接入工具徽标（独立官方 SVG 图标文件，避免内联 filter/mask ID 冲突）
+const AGENT_MARK_META = {
+  Codex: { icon: "codex.svg", cls: "codex", label: "Codex" },
+  "Claude Code": { icon: "claude.svg", cls: "claude", label: "Claude Code" },
+  Pi: { icon: "pi.svg", cls: "pi", label: "Pi" },
+  Antigravity: { icon: "antigravity.svg", cls: "antigravity", label: "Antigravity" },
+  "DeepSeek Harness": { icon: "deepseek.svg", cls: "dsh", label: "DeepSeek Harness" },
+  "Oh-My-Pi": { icon: "omp.svg", cls: "omp", label: "Oh-My-Pi" },
+  OpenCode: { icon: "opencode.svg", cls: "opencode", label: "OpenCode" },
+};
 
 function agentMark(agent) {
-  const marks = {
-    Codex: {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${OPENAI_MARK_PATH}" fill="#FAF9F5"/></svg>`,
-      cls: "codex",
-      label: "Codex",
-    },
-    "Claude Code": {
-      glyph:
-        '<path d="M8 2.2v11.6M2.2 8h11.6M3.9 3.9l8.2 8.2M12.1 3.9l-8.2 8.2" stroke="#FAF9F5" stroke-width="1.9" stroke-linecap="round" fill="none"/>',
-      cls: "claude",
-      label: "Claude Code",
-    },
-    Pi: {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 4 4" shape-rendering="crispEdges" aria-hidden="true">${PI_PIXEL_RECTS}</svg>`,
-      cls: "pi",
-      label: "Pi",
-    },
-    Antigravity: {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${ANTIGRAVITY_MARK_PATH}" fill-rule="evenodd" fill="#FAF9F5"/></svg>`,
-      cls: "antigravity",
-      label: "Antigravity",
-    },
-    "DeepSeek Harness": {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${DEEPSEEK_MARK_PATH}" fill="#FAF9F5"/></svg>`,
-      cls: "dsh",
-      label: "DeepSeek Harness",
-    },
-    "Oh-My-Pi": {
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 178 169" aria-hidden="true">${OMP_PI_GRADIENT}${OMP_PI_SHAPES}</svg>`,
-      cls: "omp",
-      label: "Oh-My-Pi",
-    },
-    OpenCode: {
-      // simple-icons 已收录官方方环标（evenodd 镂空），不再用自绘尖括号
-      glyph: `<svg x="2" y="2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="${OPENCODE_MARK_PATH}" fill-rule="evenodd" fill="#FAF9F5"/></svg>`,
-      cls: "opencode",
-      label: "OpenCode",
-    },
-  };
-  const m = marks[agent];
+  const m = AGENT_MARK_META[agent];
   if (!m) return "";
-  return `<span class="agent-mark agent-mark-${m.cls}" title="${h(m.label)}" aria-label="${h(m.label)}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="0" y="0" width="16" height="16" rx="4.5" fill="currentColor"/>${m.glyph}</svg></span>`;
+  return `<span class="agent-mark agent-mark-${m.cls}" title="${h(m.label)}" aria-label="${h(m.label)}"><img class="agent-mark-img" src="/icons/${m.icon}?v=20261119-1" alt="${h(m.label)}" width="16" height="16"/></span>`;
+}
+
+const UNKNOWN_PROJECT_HINT =
+  "该会话在来源工具中未绑定代码目录（如全局对话或启动于根目录 /），并非解析缺失";
+
+function isUnboundProject(project) {
+  return !project || project === "未知项目";
+}
+
+function projectLabel(project) {
+  return isUnboundProject(project) ? "未绑定工作区" : project;
+}
+
+function projectHint(project) {
+  return isUnboundProject(project) ? UNKNOWN_PROJECT_HINT : project;
+}
+
+function spinnerIcon(cls = "btn-spinner") {
+  return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
+}
+
+function setSyncState(busy, phase = "") {
+  state.busy = busy;
+  state.syncPhase = busy ? phase || "正在扫描并解析本地会话记录…" : "";
+  const btn = $("#refresh");
+  if (btn) {
+    btn.disabled = busy;
+    btn.innerHTML = busy ? `${spinnerIcon()}同步中…` : "同步记录";
+  }
+  const bar = $("#syncBar");
+  if (bar) bar.classList.toggle("active", busy);
+  const banner = $("#syncBanner");
+  if (banner) {
+    if (busy) {
+      banner.hidden = false;
+      banner.innerHTML = `
+        <div class="sync-banner-left">
+          ${spinnerIcon("sync-banner-spinner")}
+          <span class="sync-banner-text">${h(state.syncPhase)}</span>
+        </div>
+        <span class="sync-banner-sub">大体积日志首次解析可能需要数秒，请勿关闭页面</span>
+      `;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = "";
+    }
+  }
+  if (window.applyI18n) window.applyI18n();
 }
 
 async function api(url, options) {
@@ -403,9 +374,39 @@ function render() {
 
   // 挂载时间轴拖拽与视口缩放手柄监听
   bindBrushEvents();
+  if (window.applyI18n) window.applyI18n();
 }
 
 function noData() {
+  if (state.busy && state.syncPhase) {
+    return `<section class="panel empty" style="max-width:560px; margin:24px auto;">
+      <div style="display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:8px;">
+        ${spinnerIcon("sync-banner-spinner")}
+        <h2 style="margin:0;">${h(state.syncPhase)}</h2>
+      </div>
+      <p>正在只读扫描并解析本机历史事件流，首次导入大体积日志可能需要数秒…</p>
+    </section>`;
+  }
+  const detected = (state.directories || []).filter(
+    (d) => d.status === "directory" && !d.enabled,
+  );
+  if (state.sources?.registered_files === 0 && detected.length > 0) {
+    const chips = detected
+      .map(
+        (d) =>
+          `<span class="agent-chip" style="cursor:default;">${agentMark(d.name)}<span>${h(d.name)}</span></span>`,
+      )
+      .join("");
+    return `<section class="panel empty" style="text-align:left; max-width:680px; margin:24px auto;">
+      <h2>发现本机已有 ${detected.length} 个编码工具的会话记录</h2>
+      <p>AgentTime 只读解析本机事件流，不读取凭据或上传数据。确认接入下方已检测到的工具后即可立即生成你的时间账本：</p>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 18px;">${chips}</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn primary" data-action="onboard-enable-all">一键接入并立即同步 (${detected.length})</button>
+        <button class="btn" data-page="sources">手动配置目录</button>
+      </div>
+    </section>`;
+  }
   return `<section class="panel empty"><h2>这个时间范围还没有会话记录</h2><p>已登记 ${state.sources.registered_files} 个本地文件。请在配置页启用 Codex、Claude Code、Pi、Antigravity、DeepSeek Harness、OpenCode 或 Oh-My-Pi 数据目录并保存，或调整日期范围。</p><button class="btn primary" data-page="sources">配置数据目录</button></section>`;
 }
 
@@ -590,7 +591,7 @@ function trendCard() {
     trendBuckets(sessions, "day").length > 60;
   const gran = autoWeek ? "week" : state.trendGran;
   const buckets = trendBuckets(sessions, gran);
-  const exportBtn = `<button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
+  const exportBtn = `<button class="textbtn" data-action="share-card">生成分享图</button><button class="textbtn" data-action="export-report">导出报告 Markdown</button>`;
   const header = `
       <div class="section-header">
         <div>
@@ -706,7 +707,7 @@ function adviceCards() {
   const workGross = s.work_ms || 0;
   if (topSession && workGross > 0)
     cards.push(
-      `<b>${h(topSession.s.title || topSession.s.project || topSession.s.session_id)}</b> 是本时段干活最久的会话：<b>${fmt(topSession.ms)}</b>（占 AI 工作 ${((topSession.ms / workGross) * 100).toFixed(1)}%）`,
+      `<b>${h(topSession.s.title || projectLabel(topSession.s.project) || topSession.s.session_id)}</b> 是本时段干活最久的会话：<b>${fmt(topSession.ms)}</b>（占 AI 工作 ${((topSession.ms / workGross) * 100).toFixed(1)}%）`,
     );
 
   // 3) 等待确认集中日
@@ -811,6 +812,203 @@ function exportWeeklyReport() {
   a.download = `agenttime-report-${state.start}-to-${state.end}.md`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let lastShareCardUrl = "";
+
+function renderShareCardDataUrl() {
+  const r = state.report;
+  const s = r.summary;
+  const sessions = r.sessions || [];
+  const L = window.getShareCardLabels?.() || {
+    brandSub: "本地 AI Coding 时间账本 · 零上传",
+    title: "本时段 Agent 时间账单",
+    work: "AI 工作",
+    wait: "等待确认",
+    idle: "中途停了",
+    standby: "轮间间隔",
+    autonomy: "自动完成度",
+    sessions: "统计会话",
+    turns: "已测轮次",
+    topAgents: "工具分布",
+    unknown: "暂无数据",
+    footer: "npx @ccclucky/agent-time",
+  };
+  const canvas = document.createElement("canvas");
+  canvas.width = 1200;
+  canvas.height = 675;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+
+  const work = s.work_ms || 0;
+  const wait = s.review_wait_ms || 0;
+  const idle = s.idle_gap_ms || 0;
+  const standby = s.standby_ms || 0;
+  const denom = work + wait + idle + standby || 1;
+  const autoDenom = work + wait;
+  const autonomyPct =
+    s.work_ms !== null && s.review_wait_ms !== null && autoDenom > 0
+      ? `${((work / autoDenom) * 100).toFixed(1)}%`
+      : L.unknown;
+
+  // Paper & Ink card canvas
+  ctx.fillStyle = "#FAF9F5";
+  ctx.fillRect(0, 0, 1200, 675);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.strokeStyle = "#E5E0D8";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(36, 36, 1128, 603, 18);
+  ctx.fill();
+  ctx.stroke();
+
+  // Accent left mark & header
+  ctx.fillStyle = "#CC785C";
+  ctx.fillRect(72, 74, 8, 42);
+  ctx.fillStyle = "#1F1E1D";
+  ctx.font = '800 28px Inter, "PingFang SC", sans-serif';
+  ctx.fillText("AgentTime", 94, 100);
+  ctx.fillStyle = "#827C75";
+  ctx.font = '500 15px Inter, "PingFang SC", sans-serif';
+  ctx.fillText(L.brandSub, 94, 122);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#494541";
+  ctx.font = '600 16px "JetBrains Mono", monospace';
+  ctx.fillText(`${r.range.start} — ${r.range.end}`, 1124, 96);
+  ctx.fillStyle = "#827C75";
+  ctx.font = '500 13px "JetBrains Mono", monospace';
+  ctx.fillText(r.range.timezone, 1124, 118);
+  ctx.textAlign = "left";
+
+  // Divider
+  ctx.strokeStyle = "#F0EAE1";
+  ctx.beginPath();
+  ctx.moveTo(72, 148);
+  ctx.lineTo(1128, 148);
+  ctx.stroke();
+
+  ctx.fillStyle = "#827C75";
+  ctx.font = '600 14px Inter, "PingFang SC", sans-serif';
+  ctx.fillText(L.title, 72, 182);
+
+  // 4 Hero KPIs
+  const kpis = [
+    [L.work, s.work_ms !== null ? fmt(s.work_ms) : L.unknown, "#CC785C"],
+    [L.wait, s.review_wait_ms !== null ? fmt(s.review_wait_ms) : L.unknown, "#C68A4C"],
+    [L.autonomy, autonomyPct, "#1F1E1D"],
+    [`${L.sessions} / ${L.turns}`, `${s.sessions} / ${s.measured_turns}`, "#5E7A8B"],
+  ];
+  kpis.forEach(([label, val, color], idx) => {
+    const x = 72 + idx * 268;
+    ctx.fillStyle = "#FAF9F5";
+    ctx.strokeStyle = "#E5E0D8";
+    ctx.beginPath();
+    ctx.roundRect(x, 202, 248, 116, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#827C75";
+    ctx.font = '600 13px Inter, "PingFang SC", sans-serif';
+    ctx.fillText(label, x + 18, 232);
+    ctx.fillStyle = color;
+    ctx.font = '800 30px "JetBrains Mono", monospace';
+    ctx.fillText(val, x + 18, 282);
+  });
+
+  // Conservation partitioned bar
+  const segs = [
+    [L.work, work, "#CC785C"],
+    [L.wait, wait, "#C68A4C"],
+    [L.idle, idle, "#5E7A8B"],
+    [L.standby, standby, "#7A7268"],
+  ];
+  let bx = 72;
+  const barW = 1056;
+  ctx.fillStyle = "#F5F2EB";
+  ctx.beginPath();
+  ctx.roundRect(72, 352, barW, 38, 8);
+  ctx.fill();
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(72, 352, barW, 38, 8);
+  ctx.clip();
+  segs.forEach(([, ms, color]) => {
+    if (ms <= 0) return;
+    const w = (ms / denom) * barW;
+    ctx.fillStyle = color;
+    ctx.fillRect(bx, 352, w, 38);
+    bx += w;
+  });
+  ctx.restore();
+
+  // Legend row
+  let lx = 72;
+  segs.forEach(([label, ms, color]) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, 412, 12, 12);
+    ctx.fillStyle = "#494541";
+    ctx.font = '600 14px Inter, "PingFang SC", sans-serif';
+    const pct = ((ms / denom) * 100).toFixed(0);
+    const txt = `${label} ${fmt(ms)} (${pct}%)`;
+    ctx.fillText(txt, lx + 20, 423);
+    lx += Math.max(220, ctx.measureText(txt).width + 54);
+  });
+
+  // Top agents (aggregate only — zero project names or prompts)
+  const byAgent = new Map();
+  for (const sess of sessions) {
+    const cur = byAgent.get(sess.agent) || { name: sess.agent, ms: 0, count: 0 };
+    cur.ms += sess.period_ms || 0;
+    cur.count += 1;
+    byAgent.set(sess.agent, cur);
+  }
+  const top = [...byAgent.values()].sort((a, b) => b.ms - a.ms).slice(0, 4);
+  ctx.fillStyle = "#827C75";
+  ctx.font = '600 13px Inter, "PingFang SC", sans-serif';
+  ctx.fillText(L.topAgents, 72, 476);
+  top.forEach((ag, i) => {
+    const x = 72 + i * 268;
+    ctx.fillStyle = "#F5F2EB";
+    ctx.beginPath();
+    ctx.roundRect(x, 492, 248, 66, 10);
+    ctx.fill();
+    ctx.fillStyle = "#1F1E1D";
+    ctx.font = '700 15px Inter, sans-serif';
+    ctx.fillText(ag.name, x + 16, 520);
+    ctx.fillStyle = "#827C75";
+    ctx.font = '500 13px "JetBrains Mono", monospace';
+    ctx.fillText(`${fmt(ag.ms)} · ${ag.count}`, x + 16, 543);
+  });
+
+  // Footer
+  ctx.fillStyle = "#827C75";
+  ctx.font = '600 14px "JetBrains Mono", monospace';
+  ctx.fillText(L.footer, 72, 608);
+  ctx.textAlign = "right";
+  ctx.fillText("github.com/ccclucky/agent-time", 1124, 608);
+  ctx.textAlign = "left";
+
+  return canvas.toDataURL("image/png");
+}
+
+function openShareCardModal() {
+  if (!state.report?.summary?.sessions) {
+    toast("当前时间范围暂无可生成分享图的记录。");
+    return;
+  }
+  lastShareCardUrl = renderShareCardDataUrl();
+  if (!lastShareCardUrl) return;
+  open(
+    `${head("分享时间账单卡片", "已自动隐藏项目名、提问原文与本地路径，仅包含汇总统计。")}
+     <div style="margin:14px 0; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg-card-muted);">
+       <img src="${lastShareCardUrl}" alt="AgentTime Summary Card" style="display:block; width:100%; height:auto;" />
+     </div>
+     <div style="display:flex; gap:10px; justify-content:flex-end;">
+       <button class="btn" data-action="copy-share-card">复制图片</button>
+       <button class="btn primary" data-action="download-share-card">下载 PNG</button>
+     </div>`,
+    true,
+  );
 }
 
 // ========================================================
@@ -926,7 +1124,7 @@ function timeline(model) {
       const span = f && l && f !== l ? `${f} → ${l}` : f;
       const inView = visibleSet.has(t.id);
       return `
-        <div class="brush-bucket-col" title="${h(t.title || t.project)} · ${h(t.agent)} · 干活 ${fmt(item.work)} · 跨度 ${h(span)} · ${item.turnsCount} 轮">
+        <div class="brush-bucket-col" title="${h(t.title || projectLabel(t.project))} · ${h(t.agent)} · 干活 ${fmt(item.work)} · 跨度 ${h(span)} · ${item.turnsCount} 轮">
           <div class="brush-bucket-bar ${inView ? "in-viewport" : "out-viewport"}" style="height:${hPct}%; background:var(--state-work);"></div>
         </div>
       `;
@@ -1003,12 +1201,13 @@ function topSessionsCard(model) {
   const rows = top
     .map(({ s, work, span }, idx) => {
       const spanDays = span >= 48 * 3600000 ? ` · 搁置 ${Math.round(span / 86400000)} 天` : "";
+      const pName = projectLabel(s.project);
       return `
-        <div class="rank-mini-item" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
+        <div class="rank-mini-item" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || pName)}">
           <span class="rank-num">${String(idx + 1).padStart(2, "0")}</span>
           <div class="rank-main">
-            <span class="rank-title">${h(s.title || s.project)}</span>
-            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text">${h(s.project)} · 干活 ${fmt(work)}${spanDays ? " · 跨度 " + fmt(span) + spanDays : ""}</span></span>
+            <span class="rank-title">${h(s.title || pName)}</span>
+            <span class="rank-subline">${agentMark(s.agent)}<span class="rank-subline-text" title="${h(projectHint(s.project))}">${h(pName)} · 干活 ${fmt(work)}${spanDays ? " · 跨度 " + fmt(span) + spanDays : ""}</span></span>
           </div>
           <span class="rank-duration">${fmt(work)}</span>
         </div>
@@ -1189,13 +1388,14 @@ function viewportAggregationCard(model) {
       .map((r) => {
         const pct =
           byProject.totalWallMs > 0 ? (r.wallMs / byProject.totalWallMs) * 100 : 0;
+        const pName = projectLabel(r.project);
         return `
       <div class="agg-row">
         <div class="agg-row-top">
-          <span class="agg-agent"><span class="agg-agent-name" title="${h(r.project)}">${h(r.project)}</span></span>
+          <span class="agg-agent"><span class="agg-agent-name" title="${h(projectHint(r.project))}">${h(pName)}</span></span>
           <span class="agg-nums">${r.sessions} 会话 · <strong>${fmt(r.wallMs)}</strong></span>
         </div>
-        ${aggShareBar(pct, "var(--state-work)", `${r.project} 的总时长占比`)}
+        ${aggShareBar(pct, "var(--state-work)", `${pName} 的总时长占比`)}
       </div>
     `;
       })
@@ -1321,13 +1521,14 @@ function sessionStream() {
       <span class="sub">共 ${rows.length} 个会话${agent !== "all" ? ` · ${h(agent)}` : ""}</span>
     </div>
     ${rows
-      .map(
-        (s) => `
-      <div class="session-stream-card" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || s.project)}">
+      .map((s) => {
+        const pName = projectLabel(s.project);
+        return `
+      <div class="session-stream-card" data-open-session="${h(s.id)}" role="button" tabindex="0" aria-label="进入会话详情页：${h(s.title || pName)}">
         <div class="stream-left">
           ${agentMark(s.agent)}
-          <span class="stream-project-pill" title="${h(s.project)}">${h(s.project)}</span>
-          <strong class="stream-title">${h(s.title || s.project)}</strong>
+          <span class="stream-project-pill" title="${h(projectHint(s.project))}">${h(pName)}</span>
+          <strong class="stream-title">${h(s.title || pName)}</strong>
           <span class="stream-turns-pill">${s.turns.length} 轮交互</span>
         </div>
         <div class="stream-right">
@@ -1336,8 +1537,8 @@ function sessionStream() {
         </div>
         ${streamMiniBarHtml(s, maxDuration)}
       </div>
-    `,
-      )
+    `;
+      })
       .join("")}
     ${
       rows.length
@@ -2018,7 +2219,7 @@ function sessionDetail() {
       <span class="detail-id-mono">${agentMark(s.agent)}<span>${h(s.agent)} · ${h(s.id)}</span></span>
       <span class="detail-status-pill ${status.cls}">${h(status.label)}</span>
     </div>
-    <h2 class="detail-title">${h(s.title || s.project)}</h2>
+    <h2 class="detail-title">${h(s.title || projectLabel(s.project))}</h2>
 
     <section class="session-breakdown-full">
       <div class="breakdown-head">
@@ -2264,8 +2465,8 @@ function openDrawer(turn, session) {
       turnIndex === -1
         ? session.title
           ? `${session.title} · 轮次详情`
-          : `会话 ${session.project} · 轮次详情`
-        : `轮次 #${turnIndex + 1} 深度检视 · ${session.title || session.project}`;
+          : `会话 ${projectLabel(session.project)} · 轮次详情`
+        : `轮次 #${turnIndex + 1} 深度检视 · ${session.title || projectLabel(session.project)}`;
     titleEl.title = titleEl.textContent;
   }
 
@@ -2533,6 +2734,7 @@ function openDrawer(turn, session) {
   loadDrawerTranscript(session, turn);
 
   d.classList.remove("collapsed");
+  if (window.applyI18n) window.applyI18n();
 }
 
 // 五维下钻抽屉：点击会话详情的分布行 / 色段，弹出该维度全会话聚合视图
@@ -2544,7 +2746,7 @@ function openDimensionDrawer(key, session) {
   if (markEl) markEl.innerHTML = agentMark(session.agent);
   const titleEl = $("#drawerTurnTitle");
   if (titleEl) {
-    titleEl.textContent = `${dimensionTitle(key)} · 会话下钻 · ${session.title || session.project}`;
+    titleEl.textContent = `${dimensionTitle(key)} · 会话下钻 · ${session.title || projectLabel(session.project)}`;
     titleEl.title = titleEl.textContent;
   }
   const prevBtn = $("#drawerPrevTurn");
@@ -2606,6 +2808,7 @@ function openDimensionDrawer(key, session) {
     </div>
   `;
   d.classList.remove("collapsed");
+  if (window.applyI18n) window.applyI18n();
 
   // tool 维度：按需读取本机源文件，给每次调用回填输入/输出
   if (key === "tool") {
@@ -2762,6 +2965,7 @@ function renderDrawerTranscript(entry, session, turn) {
     // 工具调用明细行：transcript 中的 detail（命令 / 补丁内容）按 call_id 回填
     applyDrawerToolDetails(entry, turn);
   }
+  if (window.applyI18n) window.applyI18n();
 }
 
 // 用按需读取的 transcript tool_calls[].detail 回填抽屉工具栈的第二行：
@@ -2838,8 +3042,9 @@ function table(rows) {
         ${rows
           .map((s) => {
             const lastAt = Math.max(...s.turns.map((t) => t.start_ms || t.end_ms || 0));
-            const displayTitle = s.title ? h(s.title) : h(s.project);
-            const subTitle = `${h(s.project)} · ${h(s.id.slice(0, 16))}`;
+            const pName = projectLabel(s.project);
+            const displayTitle = s.title ? h(s.title) : h(pName);
+            const subTitle = `${h(pName)} · ${h(s.id.slice(0, 16))}`;
             return `
               <tr>
                 <td>
@@ -2867,7 +3072,7 @@ function table(rows) {
 function filtered() {
   const needle = state.query.trim().toLowerCase();
   const rows = state.report.sessions.filter((s) =>
-    (s.project + " " + s.id + " " + s.agent + " " + (s.title || "")).toLowerCase().includes(needle),  );
+    (s.project + " " + projectLabel(s.project) + " " + s.id + " " + s.agent + " " + (s.title || "")).toLowerCase().includes(needle),  );
   return state.sort === "duration"
     ? rows.sort((a, b) => (b.period_ms || 0) - (a.period_ms || 0))
     : rows;
@@ -2989,7 +3194,7 @@ function directoryCards() {
                 从此目录读取会话
               </label>
               <button class="btn ${item.supported ? "primary" : ""}" data-save-directory="${h(item.agent)}" ${saving ? "disabled" : ""}>
-                ${saving ? "保存中…" : draft.enabled ? "保存并同步" : "保存设置"}
+                ${saving ? `${spinnerIcon()}保存中…` : draft.enabled ? "保存并同步" : "保存设置"}
               </button>
             </div>
           </section>
@@ -3061,13 +3266,20 @@ async function saveDirectory(agent) {
   const item = state.directories.find((x) => x.agent === agent);
   const draft = directoryDraft(item);
   state.saving.add(agent);
+  if (draft.enabled) setSyncState(true, `正在保存并同步 ${item?.name || agent}…`);
   render();
   try {
     await persistDirectory(agent, draft);
     await load();
-    if (draft.enabled) await refresh();
-    else toast("目录设置已保存。");
+    if (draft.enabled) {
+      // 交由 refresh() 接管同步状态与 finally 清理
+      state.busy = false;
+      await refresh();
+    } else {
+      toast("目录设置已保存。");
+    }
   } catch (e) {
+    setSyncState(false);
     error(e.message);
   } finally {
     state.saving.delete(agent);
@@ -3091,6 +3303,7 @@ function open(html, wide = false) {
     `<div class="overlay" data-overlay><section class="${wide ? "modal-wide" : "modal"}" role="dialog" aria-modal="true" aria-labelledby="dialogtitle" tabindex="-1">${html}</section></div>`;
   document.body.style.overflow = "hidden";
   $("#layer [role=dialog]").focus();
+  if (window.applyI18n) window.applyI18n();
 }
 
 function close() {
@@ -3143,7 +3356,7 @@ function details(id) {
   }).join("");
 
   open(
-    `${head(s.title || s.project, `${s.project} · ${s.agent} · ${s.id}`)}     <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
+    `${head(s.title || projectLabel(s.project), `${projectLabel(s.project)} · ${s.agent} · ${s.id}`)}     <p class="sub" style="margin-bottom:16px;">仅显示当前日期范围涉及的轮次。完整轮次时长与本期分摊分别列出。</p>
      <div style="max-height:60vh; overflow-y:auto;">
        ${turnsHtml}
      </div>`,
@@ -3237,12 +3450,11 @@ function exportCSV() {
 
 async function refresh() {
   if (state.busy) return;
-  state.busy = true;
-  $("#refresh").disabled = true;
-  $("#refresh").textContent = "同步中…";
+  setSyncState(true, state.syncPhase || "正在扫描并解析本地会话记录…");
   try {
     // 先落盘所有未保存的接入改动，再按服务端配置同步（反馈轮 4 #2/#5）
     const savedCount = await persistDrafts();
+    setSyncState(true, "正在扫描并解析本地会话记录…");
     const r = await api("/api/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-AgentTime": "1" },
@@ -3282,9 +3494,7 @@ async function refresh() {
   } catch (e) {
     error(e.message);
   } finally {
-    state.busy = false;
-    $("#refresh").disabled = false;
-    $("#refresh").textContent = "同步记录";
+    setSyncState(false);
     // 手动同步已在 load() 里拿到最新数据：重置基线，避免下一轮 pulse 把
     // 这次 revision 误判为「有新变化」再刷一遍
     lastPulse = null;
@@ -3428,6 +3638,68 @@ document.addEventListener("click", async (e) => {
       break;
     case "export-report":
       exportWeeklyReport();
+      break;
+    case "share-card":
+      openShareCardModal();
+      break;
+    case "download-share-card": {
+      if (!lastShareCardUrl) break;
+      const a = document.createElement("a");
+      a.href = lastShareCardUrl;
+      a.download = `agenttime-card-${state.start}-to-${state.end}.png`;
+      a.click();
+      break;
+    }
+    case "copy-share-card": {
+      if (!lastShareCardUrl || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        toast("当前环境不支持直接复制图片，请点击下载 PNG。");
+        break;
+      }
+      try {
+        const res = await fetch(lastShareCardUrl);
+        const blob = await res.blob();
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        toast("已复制分享图片到剪贴板。");
+      } catch {
+        toast("复制失败，请点击下载 PNG。");
+      }
+      break;
+    }
+    case "onboard-enable-all": {
+      if (state.busy) break;
+      const detected = (state.directories || []).filter(
+        (d) => d.status === "directory" && !d.enabled,
+      );
+      if (!detected.length) break;
+      setSyncState(true, `正在接入已检测到的 ${detected.length} 个工具…`);
+      render();
+      try {
+        for (let i = 0; i < detected.length; i++) {
+          const d = detected[i];
+          setSyncState(true, `正在启用第 ${i + 1}/${detected.length} 个工具（${d.name}）…`);
+          await persistDirectory(d.agent, {
+            path: d.path,
+            enabled: true,
+            reset: false,
+          });
+        }
+        // 交由 refresh() 触发全量扫描并统一在 finally 中清理同步态
+        state.busy = false;
+        state.syncPhase = "正在扫描并解析已接入工具的会话记录…";
+        await refresh();
+      } catch (err) {
+        setSyncState(false);
+        render();
+        error(err.message);
+      }
+      break;
+    }
+    case "toggle-lang":
+      if (window.toggleUiLang) {
+        window.toggleUiLang();
+        render();
+        if ($("#layer [role=dialog]")) close();
+      }
       break;
     case "dates":
       open(

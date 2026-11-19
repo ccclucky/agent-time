@@ -41,12 +41,24 @@ function openBrowser(url: string) {
   }
 }
 
+function fmtSummaryDuration(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m ${s ? `${s}s` : ""}`;
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
     options: {
       db: { type: "string" },
       port: { type: "string" },
       agent: { type: "string" },
+      days: { type: "string" },
+      demo: { type: "boolean" },
+      json: { type: "boolean" },
       open: { type: "boolean" },
       "no-open": { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -56,10 +68,11 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH] [--no-open]\nagent-time import --agent " +
+      "AgentTime — 本地 Agent 时间账本\n\nagent-time [serve] [--port 8765] [--db PATH] [--demo] [--no-open]\nagent-time summary [--days 7] [--json] [--db PATH]\nagent-time import --agent " +
         ADAPTERS.join("|") +
         " FILE_OR_DIRECTORY [--db PATH]\nagent-time refresh [--db PATH]\n\n" +
         "serve 在终端可交互且非 CI 环境下会自动打开浏览器；--no-open 关闭，--open 强制打开。\n" +
+        "--demo 使用全合成的多 harness 示例数据启动临时看板，不读取本机任何会话目录。\n" +
         "（兼容别名：亦可直接使用 agenttime 命令；codex 支持 .jsonl 与 .jsonl.zst，dsh 支持 .jsonl 与 .jsonl.zstd，claude、pi 与 omp（<uuid>.jsonl）支持 .jsonl，antigravity 支持 transcript.jsonl，opencode 支持会话数据库 .db）\n默认启动本地网页；在配置页启用接入后再同步。",
     );
     return;
@@ -69,7 +82,7 @@ async function main() {
     return;
   }
   const command = positionals[0] ?? "serve";
-  if (!["serve", "import", "refresh"].includes(command))
+  if (!["serve", "import", "refresh", "summary"].includes(command))
     throw new ValidationError("未知命令；使用 --help 查看用法");
   const port = Number(values.port ?? 8765);
   if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -83,22 +96,32 @@ async function main() {
     );
   if (command !== "import" && positionals.length > 1)
     throw new ValidationError("参数过多；使用 --help 查看用法");
-  const store = new Store(values.db ?? defaultDb());
+  if (values.demo && command !== "serve")
+    throw new ValidationError("--demo 仅支持 serve 启动模式");
+
   if (command === "serve") {
     // serve 与实时账本共用同一份 directories：监听面与同步面同源，避免漂移
     const { Directories } = await import("./directories.js");
     const { LiveSync } = await import("./live.js");
+    const demoHandle = values.demo
+      ? await (await import("./demo.js")).createDemoStore()
+      : null;
+    const store = demoHandle ? demoHandle.store : new Store(values.db ?? defaultDb());
     const directories = new Directories(store);
-    const live = new LiveSync(directories, store);
+    const live = demoHandle ? null : new LiveSync(directories, store);
     const server = makeServer(store, directories, live);
+    const closeAll = () => {
+      live?.stop();
+      if (demoHandle) demoHandle.cleanup();
+      else store.close();
+    };
     server.on("error", () => {
       console.error("无法启动本地网页，请检查端口及权限。");
-      live.stop();
-      store.close();
+      closeAll();
       process.exitCode = 1;
     });
     server.listen(port, "127.0.0.1", () => {
-      live.start();
+      live?.start();
       const addr = server.address();
       const url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : port}`;
       // 自动打开仅限「人在终端前」：CI 与管道输出环境（如冒烟脚本）一律跳过，
@@ -109,23 +132,67 @@ async function main() {
           ? false
           : Boolean(process.stdout.isTTY) && !process.env.CI;
       console.log(
-        `AgentTime 已启动：${url}\n仅绑定本机地址，无遥测。已启用自动同步：源记录变化将自动重新导入。Ctrl+C 停止。`,
+        demoHandle
+          ? `AgentTime 演示模式已启动：${url}\n使用全合成 5-Harness 示例数据，未读取本机任何记录。Ctrl+C 停止并自动清理临时库。`
+          : `AgentTime 已启动：${url}\n仅绑定本机地址，无遥测。已启用自动同步：源记录变化将自动重新导入。Ctrl+C 停止。`,
       );
       if (shouldOpen) {
         openBrowser(url);
         console.log("已尝试在默认浏览器打开；未弹出请手动访问上面的地址。");
       }
     });
-    const stop = () =>
-      server.close(() => {
-        live.stop();
-        store.close();
-      });
+    const stop = () => server.close(closeAll);
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     return;
   }
+
+  const store = new Store(values.db ?? defaultDb());
   try {
+    if (command === "summary") {
+      const days = Number(values.days ?? 7);
+      if (!Number.isInteger(days) || days < 1 || days > 366)
+        throw new ValidationError("--days 应在 1–366 之间");
+      const { Temporal } = await import("@js-temporal/polyfill");
+      const { report } = await import("./metrics.js");
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const end = Temporal.Now.plainDateISO(tz);
+      const start = end.subtract({ days: days - 1 });
+      const data = report(
+        store.sessions(),
+        start.toString(),
+        end.toString(),
+        tz,
+        values.agent || "all",
+      );
+      const byAgent: Record<string, { sessions: number; turns: number; work_ms: number }> = {};
+      for (const s of data.sessions) {
+        const entry = (byAgent[s.agent] ??= { sessions: 0, turns: 0, work_ms: 0 });
+        entry.sessions += 1;
+        entry.turns += s.turns.length;
+        for (const t of s.turns) entry.work_ms += t.work_ms ?? 0;
+      }
+      if (values.json) {
+        console.log(
+          JSON.stringify({
+            range: data.range,
+            summary: data.summary,
+            by_agent: byAgent,
+          }),
+        );
+      } else {
+        const s = data.summary;
+        console.log(`AgentTime Summary · ${data.range.start} — ${data.range.end} (${data.range.timezone})`);
+        console.log(
+          `Sessions: ${s.sessions}  Turns: ${s.measured_turns}/${s.turns}  Pure Work: ${fmtSummaryDuration(s.work_ms)}  Review Wait: ${fmtSummaryDuration(s.review_wait_ms)}  Idle Gap: ${fmtSummaryDuration(s.idle_gap_ms)}  Standby: ${fmtSummaryDuration(s.standby_ms)}`,
+        );
+        const rows = Object.entries(byAgent).sort((a, b) => b[1].work_ms - a[1].work_ms);
+        for (const [ag, info] of rows) {
+          console.log(`  - ${ag.padEnd(12)} ${String(info.sessions).padStart(3)} sessions  ${String(info.turns).padStart(4)} turns  work ${fmtSummaryDuration(info.work_ms)}`);
+        }
+      }
+      return;
+    }
     if (command === "refresh") {
       const result = await store.refresh();
       console.log(JSON.stringify(result));
