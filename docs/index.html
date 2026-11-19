@@ -197,14 +197,93 @@
     }
     .harness-pill span { display: block; font-size: 11px; font-weight: 500; color: var(--muted); margin-top: 2px; }
 
-    /* Screenshots */
-    .shot-main {
-      width: 100%;
+    /* Screenshots & Hero Video Slot */
+    [hidden] { display: none !important; }
+    .media-stage {
+      position: relative;
       border-radius: 12px;
       border: 1px solid var(--border);
-      display: block;
+      overflow: hidden;
+      background: var(--card);
       box-shadow: 0 12px 32px rgba(31, 30, 29, 0.06);
     }
+    .shot-main {
+      width: 100%;
+      display: block;
+    }
+    .media-stage video {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16 / 9;
+      background: #1F1E1D;
+    }
+    .play-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(31, 30, 29, 0.08);
+      border: none;
+      cursor: pointer;
+      transition: background 0.18s ease;
+    }
+    .play-overlay:hover { background: rgba(31, 30, 29, 0.18); }
+    .play-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 22px;
+      border-radius: 999px;
+      background: rgba(250, 249, 245, 0.96);
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 30px rgba(31, 30, 29, 0.18);
+      color: var(--ink);
+      font-family: var(--sans);
+      transition: transform 0.16s ease, border-color 0.16s ease;
+    }
+    .play-overlay:hover .play-pill {
+      transform: translateY(-2px);
+      border-color: var(--work);
+    }
+    .play-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      background: var(--work);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      padding-left: 2px;
+      flex-shrink: 0;
+    }
+    .play-meta { text-align: left; line-height: 1.25; }
+    .play-title { display: block; font-size: 14px; font-weight: 800; color: var(--ink); }
+    .play-sub { display: block; font-size: 11px; font-weight: 600; color: var(--muted); font-family: var(--mono); }
+    .media-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .media-bar-actions { display: flex; align-items: center; gap: 10px; }
+    .link-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--work);
+      cursor: pointer;
+      font-family: var(--sans);
+    }
+    .link-btn:hover { text-decoration: underline; }
     .shot-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -271,7 +350,30 @@
     </section>
 
     <section class="section">
-      <img class="shot-main" src="assets/hero-overview.png" alt="AgentTime Overview" />
+      <div class="media-stage" id="mediaStage">
+        <img class="shot-main" id="heroPoster" src="assets/hero-overview.png" alt="AgentTime Overview" />
+        <button class="play-overlay" id="playOverlay" type="button" onclick="openTourVideo()" aria-label="Watch 60s Product Tour">
+          <span class="play-pill">
+            <span class="play-icon" aria-hidden="true">▶</span>
+            <span class="play-meta">
+              <span class="play-title" data-i18n="tourBtn">Watch 60s Product Tour</span>
+              <span class="play-sub" data-i18n="tourSub">EN voiceover + VTT captions · click to load</span>
+            </span>
+          </span>
+        </button>
+        <video id="tourVideo" controls playsinline preload="none" poster="assets/hero-overview.png" hidden>
+          <track id="trackEn" kind="subtitles" srclang="en" label="English" src="assets/captions-en.vtt" />
+          <track id="trackZh" kind="subtitles" srclang="zh" label="中文" src="assets/captions-zh.vtt" />
+        </video>
+      </div>
+      <div class="media-bar">
+        <span id="mediaStatus" data-i18n="mediaHint">Static preview loaded · 8 MB video loads only when you click play</span>
+        <div class="media-bar-actions">
+          <button class="link-btn" id="mediaToggleBtn" type="button" onclick="toggleTourMedia()" data-i18n="watchTourLink">▶ Play 60s Video</button>
+          <span>·</span>
+          <a id="videoDownloadLink" href="https://github.com/ccclucky/agent-time/releases/download/v0.6.0/agenttime-promo-en.mp4" target="_blank" rel="noopener" data-i18n="directMp4">Direct MP4</a>
+        </div>
+      </div>
     </section>
 
     <section class="section">
@@ -363,7 +465,14 @@
         naiveLabel: "Typical Timer (Start → End)",
         atLabel: "AgentTime Conservation Ledger",
         harnessTitle: "7 Harnesses, One Read-Only Local Ledger",
-        harnessSub: "Zero hooks, zero agent slowdown. Reads existing session files or SQLite databases directly."
+        harnessSub: "Zero hooks, zero agent slowdown. Reads existing session files or SQLite databases directly.",
+        tourBtn: "Watch 60s Product Tour",
+        tourSub: "EN voiceover + VTT captions · click to load",
+        mediaHint: "Static preview loaded · 8 MB video loads only when you click play",
+        watchTourLink: "▶ Play 60s Video",
+        backShotLink: "← Back to Screenshot",
+        playingHint: "Playing English product tour (switch top-right EN/中文 for Chinese audio)",
+        directMp4: "Direct MP4"
       },
       zh: {
         btn: "EN",
@@ -378,9 +487,82 @@
         naiveLabel: "常见计时器（开始 → 结束）",
         atLabel: "AgentTime 守恒时间账本",
         harnessTitle: "七个 Harness，一个只读本地账本",
-        harnessSub: "无钩子、零侵入，不拖慢你的 Agent，直接读取本地历史会话与 SQLite。"
+        harnessSub: "无钩子、零侵入，不拖慢你的 Agent，直接读取本地历史会话与 SQLite。",
+        tourBtn: "观看 60s 产品演示",
+        tourSub: "中文配音 + VTT 字幕 · 点击按需加载",
+        mediaHint: "默认展示轻量静态图 · 点击播放才加载约 8 MB 宣传片",
+        watchTourLink: "▶ 播放 60s 宣传片",
+        backShotLink: "← 切回静态主图",
+        playingHint: "正在播放中文版宣传片（右上角切换 EN / 中文可切换英文配音）",
+        directMp4: "MP4 直链"
       }
     };
+    const VIDEO_URLS = {
+      en: "https://github.com/ccclucky/agent-time/releases/download/v0.6.0/agenttime-promo-en.mp4",
+      zh: "https://github.com/ccclucky/agent-time/releases/download/v0.6.0/agenttime-promo.mp4"
+    };
+    let videoOpen = false;
+    function syncVideoLang(preservePlay) {
+      const video = document.getElementById("tourVideo");
+      const dl = document.getElementById("videoDownloadLink");
+      const targetUrl = VIDEO_URLS[lang];
+      if (dl) dl.href = targetUrl;
+      if (!video) return;
+      const tracks = video.textTracks;
+      if (tracks) {
+        for (let i = 0; i < tracks.length; i++) {
+          tracks[i].mode = tracks[i].language === lang ? "showing" : "disabled";
+        }
+      }
+      if (!videoOpen) return;
+      const wasPlaying = !video.paused && !video.ended;
+      const prevTime = video.currentTime || 0;
+      if (video.getAttribute("src") !== targetUrl) {
+        video.setAttribute("src", targetUrl);
+        video.load();
+        if (prevTime > 0) {
+          video.addEventListener("loadedmetadata", () => {
+            if (prevTime < (video.duration || Infinity)) video.currentTime = prevTime;
+            if (preservePlay && wasPlaying) video.play().catch(() => {});
+          }, { once: true });
+        } else if (preservePlay && wasPlaying) {
+          video.play().catch(() => {});
+        }
+      }
+    }
+    function openTourVideo() {
+      videoOpen = true;
+      const poster = document.getElementById("heroPoster");
+      const overlay = document.getElementById("playOverlay");
+      const video = document.getElementById("tourVideo");
+      if (poster) poster.hidden = true;
+      if (overlay) overlay.hidden = true;
+      if (video) {
+        video.hidden = false;
+        video.setAttribute("src", VIDEO_URLS[lang]);
+        video.load();
+        syncVideoLang(false);
+        video.play().catch(() => {});
+      }
+      apply();
+    }
+    function closeTourVideo() {
+      videoOpen = false;
+      const poster = document.getElementById("heroPoster");
+      const overlay = document.getElementById("playOverlay");
+      const video = document.getElementById("tourVideo");
+      if (video) {
+        video.pause();
+        video.hidden = true;
+      }
+      if (poster) poster.hidden = false;
+      if (overlay) overlay.hidden = false;
+      apply();
+    }
+    function toggleTourMedia() {
+      if (videoOpen) closeTourVideo();
+      else openTourVideo();
+    }
     function apply() {
       const c = COPY[lang];
       document.getElementById("langBtn").textContent = c.btn;
@@ -388,6 +570,11 @@
         const k = el.getAttribute("data-i18n");
         if (c[k]) el.textContent = c[k];
       });
+      const toggleBtn = document.getElementById("mediaToggleBtn");
+      const statusEl = document.getElementById("mediaStatus");
+      if (toggleBtn) toggleBtn.textContent = videoOpen ? c.backShotLink : c.watchTourLink;
+      if (statusEl) statusEl.textContent = videoOpen ? c.playingHint : c.mediaHint;
+      syncVideoLang(true);
     }
     function toggleLang() { lang = lang === "en" ? "zh" : "en"; apply(); }
     function copyCmd(text, btn) {
