@@ -64,6 +64,12 @@ test("CLI --demo serves live HTTP report and summary --json prints valid digest"
     assert.equal(i18nRes.status, 200);
     assert.match(await i18nRes.text(), /window\.applyI18n/);
 
+    for (const icon of ["claude.svg", "codex.svg", "antigravity.svg", "opencode.svg", "pi.svg", "omp.svg", "deepseek.svg"]) {
+      const res = await fetch(`${url}/icons/${icon}`);
+      assert.equal(res.status, 200, `/icons/${icon} must return 200`);
+      assert.match(res.headers.get("content-type") ?? "", /image\/svg\+xml/);
+    }
+
     const end = Temporal.Now.plainDateISO("UTC");
     const start = end.subtract({ days: 6 });
     const repRes = await fetch(
@@ -93,15 +99,20 @@ test("CLI --demo serves live HTTP report and summary --json prints valid digest"
   }
 });
 
-test("Frontend assets include onboarding CTA, share card modal, and i18n toggle", () => {
+test("Frontend assets include onboarding CTA, sync indicators, projectLabel, share card modal, and i18n toggle", () => {
   const html = readFileSync(path.join(root, "public", "index.html"), "utf8");
   const js = readFileSync(path.join(root, "public", "app.js"), "utf8");
   const i18n = readFileSync(path.join(root, "public", "i18n-en.js"), "utf8");
 
-  assert.ok(html.includes('src="/i18n-en.js?v=20261115-7"'));
+  assert.ok(html.includes('src="/i18n-en.js?v=20261119-1"'));
+  assert.ok(html.includes('id="syncBar"'));
+  assert.ok(html.includes('id="syncBanner"'));
   assert.ok(html.includes('data-action="toggle-lang"'));
   assert.ok(js.includes('data-action="onboard-enable-all"'));
+  assert.ok(js.includes("function setSyncState("));
+  assert.ok(js.includes("function projectLabel("));
   assert.ok(js.includes('data-action="share-card"'));
   assert.ok(js.includes("function openShareCardModal()"));
   assert.ok(i18n.includes("window.getShareCardLabels"));
+  assert.ok(i18n.includes("未绑定工作区"));
 });

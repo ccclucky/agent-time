@@ -43,7 +43,7 @@ test("Feedback: homepage exposes an agent (harness) filter chip row wired to sta
   );
 });
 
-test("Feedback: agentMark badges render inline SVG across stream, TOP3, detail nav, capsules and table", () => {
+test("Feedback: agentMark badges render official SVG icon images across stream, TOP3, detail nav, capsules and table", () => {
   const js = read("../public/app.js");
   assert.match(
     js,
@@ -52,8 +52,8 @@ test("Feedback: agentMark badges render inline SVG across stream, TOP3, detail n
   );
   assert.match(
     js,
-    /<svg viewBox="0 0 16 16"/,
-    "badges must be inline SVG (CSP allows inline SVG; no static image files)",
+    /<img class="agent-mark-img" src="\/icons\/\$\{m\.icon\}/,
+    "badges must render local /icons/*.svg official marks",
   );
   for (const anchor of [
     "rank-subline",

@@ -312,25 +312,29 @@ test("Fix 3 markup: overview hosts the aggregation module between s1-grid and th
   }
 });
 
-test("Fix 4: badges carry the real OpenAI mark for Codex and the new Pi pixel mark", () => {
+test("Fix 4: badges carry standalone official SVG icon files registered in server.ts", () => {
   const js = read("../public/app.js");
-  assert.ok(
-    js.includes("M22.2819 9.8211"),
-    "Codex badge must embed the official OpenAI mark path (simple-icons, viewBox 0 0 24 24)",
-  );
+  const server = read("../src/server.ts");
   assert.doesNotMatch(js, /glyph:\s*"Cx"/, "the fake Cx monogram must be gone");
   assert.doesNotMatch(js, /glyph:\s*"π"/, "the fake π monogram must be gone");
-  assert.ok(
-    js.includes('shape-rendering="crispEdges"'),
-    "the Pi pixel mark must render crisp",
-  );
-  for (const color of ["#E48A7A", "#4F8EB3", "#EAB65D"]) {
-    assert.ok(js.includes(color), `Pi pixel mark must contain ${color}`);
+  assert.ok(js.includes("/icons/${m.icon}"), "agentMark must reference /icons/*.svg");
+
+  const expectedIcons: [string, string[]][] = [
+    ["claude.svg", ["#D97757", "M4.709 15.955"]],
+    ["codex.svg", ["M9.064 3.344", "#B1A7FF", "#3941FF"]],
+    ["antigravity.svg", ["M21.751 22.607", "#FFE432", "#FC413D", "#00B95C", "#3186FF"]],
+    ["opencode.svg", ["M180 240H60V120H180V240Z", "#EEEEEE"]],
+    ["pi.svg", ["#F09082", "#4D9ABF", "#F1BE58"]],
+    ["omp.svg", ["viewBox=\"0 0 120 90\"", "#f97316"]],
+    ["deepseek.svg", ["M23.748 4.482", "#4D6BFE"]],
+  ];
+  for (const [file, tokens] of expectedIcons) {
+    assert.ok(server.includes(`"/icons/${file}"`), `server.ts STATIC must whitelist /icons/${file}`);
+    const svg = read(`../public/icons/${file}`);
+    for (const tok of tokens) {
+      assert.ok(svg.includes(tok), `${file} must contain official mark token ${tok}`);
+    }
   }
-  // Claude sunburst untouched (user accepted it)
-  assert.match(js, /M8 2\.2v11\.6M2\.2 8h11\.6/);
-  // Outer badge chrome unchanged (rounded square, currentColor, 16x16)
-  assert.match(js, /<svg viewBox="0 0 16 16"[^>]*><rect x="0" y="0" width="16" height="16" rx="4\.5" fill="currentColor"\/>/);
 });
 
 test("Version stamp: both assets share one stamped version", () => {

@@ -6,9 +6,9 @@
     <meta name="color-scheme" content="light" />
     <title>AgentTime · 本地时间账本</title>
     <link rel="icon" href="/favicon.png" type="image/png" />
-    <link rel="stylesheet" href="/style.css?v=20261115-7" />
-    <script src="/i18n-en.js?v=20261115-7" defer></script>
-    <script src="/app.js?v=20261115-7" defer></script>
+    <link rel="stylesheet" href="/style.css?v=20261119-1" />
+    <script src="/i18n-en.js?v=20261119-1" defer></script>
+    <script src="/app.js?v=20261119-1" defer></script>
   </head>
   <body>
     <div class="app">
@@ -50,12 +50,14 @@
             <button class="btn primary" data-action="refresh" id="refresh">同步记录</button>
           </div>
         </header>
+        <div class="sync-progress-bar" id="syncBar" aria-hidden="true"></div>
 
         <main class="workspace">
           <div class="demo">
             <strong>本地数据</strong><span id="rangetext"></span>
             <button class="textbtn" data-action="definitions">这些时间怎么算？</button>
           </div>
+          <div id="syncBanner" class="sync-banner" role="status" aria-live="polite" hidden></div>
           <div id="error" role="alert"></div>
           <div id="content"><div class="empty">正在读取本地统计记录…</div></div>
           <footer class="footer">

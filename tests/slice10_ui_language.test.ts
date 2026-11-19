@@ -407,5 +407,5 @@ test("Slice 10 UI language: both assets share one cache-busting stamp (slice 12 
   const cssV = source.match(/style\.css\?v=([0-9-]+)/)![1];
   const jsV = source.match(/app\.js\?v=([0-9-]+)/)![1];
   assert.equal(cssV, jsV, "both assets must share one version stamp");
-  assert.equal(cssV, "20261115-7", "copy convergence requires a new asset stamp");
+  assert.equal(cssV, "20261119-1", "copy convergence requires a new asset stamp");
 });

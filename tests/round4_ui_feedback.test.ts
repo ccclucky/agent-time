@@ -19,24 +19,30 @@ const html = readFileSync(
   "utf8",
 );
 
-test("Round4 #1: Antigravity 官方 path 必须带 evenodd 镂空（漏写渲染成实心色块）", () => {
-  const glyph = js.match(/Antigravity: \{[\s\S]{0,200}?<svg[\s\S]{0,300}?<\/svg>/)?.[0] ?? "";
-  assert.ok(glyph.includes("fill-rule=\"evenodd\""), glyph);
+const iconSvg = (name: string) =>
+  readFileSync(
+    new URL(`../public/icons/${name}`, import.meta.url).pathname,
+    "utf8",
+  );
+
+test("Round4 #1: Antigravity 官方彩色拱门图标包含四色渐变遮罩", () => {
+  const svg = iconSvg("antigravity.svg");
+  assert.ok(svg.includes("M21.751 22.607"), "official Antigravity arch path");
+  assert.ok(svg.includes("<mask") && svg.includes("#3186FF"), "official 4-color gradient mask");
 });
 
-test("Round4 #1: OpenCode 使用 simple-icons 官方方环标，不再自绘尖括号", () => {
-  assert.ok(js.includes('OPENCODE_MARK_PATH = "M22 24H2V0h20zM17 4.8H7v14.4h10z"'));
-  assert.ok(!js.includes("终端尖括号"));
-  const glyph = js.match(/OpenCode: \{[\s\S]{0,200}?<svg[\s\S]{0,300}?<\/svg>/)?.[0] ?? "";
-  assert.ok(glyph.includes("fill-rule=\"evenodd\""), glyph);
+test("Round4 #1: OpenCode 使用官方方块几何标志", () => {
+  const svg = iconSvg("opencode.svg");
+  assert.ok(svg.includes("M180 240H60V120H180V240Z"), "official OpenCode inner block");
+  assert.ok(svg.includes("#EEEEEE"), "official OpenCode light frame");
 });
 
-test("Round4 #1: OMP 使用 hero 主视觉渐变 π（几何实测），弃用细腿 icon.svg 版", () => {
-  assert.ok(js.includes('viewBox="0 0 178 169"'), "hero 实测几何");
-  assert.ok(js.includes('id="omp-g"'), "品牌渐变");
-  assert.ok(!js.includes("OMP_MARK_SHAPES"), "旧 icon.svg 版已移除");
+test("Round4 #1: OMP 使用官方 icon.svg 白色 π + 橙色插件接口", () => {
+  const svg = iconSvg("omp.svg");
+  assert.ok(svg.includes('viewBox="0 0 120 90"'), "official OMP icon viewBox");
+  assert.ok(svg.includes("#f97316"), "official OMP orange plugin connector");
   assert.ok(css.includes(".agent-mark-omp"), "徽标底色类存在");
-  assert.ok(css.includes("#1D1226"), "深紫底色承托渐变 π");
+  assert.ok(css.includes("#1D1226"), "深紫底色令牌存在");
 });
 
 test("Round4 #2/#5: 全局同步先批量落盘接入草稿，并回报保存数量", () => {

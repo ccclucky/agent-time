@@ -137,10 +137,19 @@
     "本机记录未包含该轮的提问文本。": "Prompt text was not recorded in the local file for this turn.",
     "Codex 官方记录对模型思考链加密，本机无法解密展示。": "Codex encrypts reasoning traces (ZDR); cannot be decrypted locally.",
     "该来源未记录该轮的模型思考文本。": "Reasoning trace was not recorded by this source.",
+    "未绑定工作区": "No Workspace",
+    "该会话在来源工具中未绑定代码目录（如全局对话或启动于根目录 /），并非解析缺失": "This session has no workspace bound in the source tool (e.g., global chat or started at /), not a parser error",
+    "正在扫描并解析本地会话记录…": "Scanning and parsing local session logs…",
+    "正在扫描并解析已接入工具的会话记录…": "Scanning and parsing enabled agent logs…",
+    "大体积日志首次解析可能需要数秒，请勿关闭页面": "Initial import of large logs may take a few seconds — keep this page open",
+    "正在只读扫描并解析本机历史事件流，首次导入大体积日志可能需要数秒…": "Reading and parsing local session streams (read-only); initial import may take a few seconds…",
   };
 
   const PATTERNS = [
     [/^统计快照 (.+)$/, (_, t) => `Snapshot ${t}`],
+    [/^正在接入已检测到的 (\d+) 个工具…$/, (_, n) => `Connecting ${n} detected local agents…`],
+    [/^正在启用第 (\d+)\/(\d+) 个工具（(.+)）…$/, (_, i, n, name) => `Enabling agent ${i}/${n} (${name})…`],
+    [/^正在保存并同步 (.+)…$/, (_, name) => `Saving & syncing ${name}…`],
     [/^自选 (\d{2}-\d{2}) ~ (\d{2}-\d{2})$/, (_, a, b) => `${a} ~ ${b}`],
     [/^发现本机已有 (\d+) 个编码工具的会话记录$/, (_, n) => `Detected ${n} local coding agents on this machine`],
     [/^一键接入并立即同步 \((\d+)\)$/, (_, n) => `Connect All ${n} & Sync Now`],
@@ -168,6 +177,8 @@
 
   // Ordered composite phrase replacements for multi-clause analytical copy
   const PHRASES = [
+    ["正在读取本机源文件…", "Reading local source file…"],
+    ["未绑定工作区", "No Workspace"],
     ["（AI 工作 + 等待确认 + 中途停了 + 轮间间隔）", " (AI Work + Review Wait + Idle Gap + Standby)"],
     ["（AI 工作 + 等待确认 + 轮间间隔）", " (AI Work + Review Wait + Standby)"],
     ["0.0%（本时段无发生）", "0.0% (none in range)"],
