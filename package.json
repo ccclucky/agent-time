@@ -1,6 +1,6 @@
 {
   "name": "@ccclucky/agent-time",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Local-first AI coding agent time analytics",
   "type": "module",
   "bin": {
